@@ -1,0 +1,2165 @@
+When User A likes User B’s post:
+Frontend
+
+await http.post(
+  Uri.parse("http://yourserver.com/api/like"),
+  body: {
+    "user_id": currentUserId,
+    "post_id": postId
+  },
+);
+
+Backend (Go)
+
+    Save like record in post_likes
+
+    Get the post’s owner (targetUserID)
+
+    Create notification (type: "like")
+
+    Publish to Redis (notifications channel)
+
+    WebSocket server pushes it instantly if target is online
+
+🔄 SUMMARY — Entire Chain of Events
+Step	Component	What Happens
+1	Flutter UI	User taps “Follow” or “Like”
+2	Go API	Receives request, validates user
+3	Go API	Saves action (follow/like) in DB
+4	Go API	Creates notification record (MongoDB)
+5	Go API	Publishes event to Redis
+6	Go WebSocket	Subscribed to Redis, receives event
+7	WebSocket Server	Sends to target user instantly if online
+8	MongoDB	Persists all notifications
+9	Flutter App	Listens to WebSocket or fetches via REST
+10	User B sees notification	Real-time or next time they open app
+📬 Real-world Analogy
+
+It’s like a postal + live chat combo system:
+
+    You (User A) send a “Follow letter”.
+
+    The backend (post office) logs it and stores it in the target’s mailbox (DB).
+
+    If the target (User B) is online (door open via WebSocket), the postman delivers immediately.
+
+    If they’re offline, the letter just stays in their mailbox.
+
+    When they open the app, they “check their mailbox” (GET /notifications).
+
+Would you like me to show this flow as a diagram (visual) — arrows from Flutter → Go API → Redis → WebSocket → Flutter — so it’s easier to visualize the data movement?
+
+So when multiple user send notification to simultaneously what happens 
+
+Excellent — this is the right next question 👏
+
+You’re now thinking about concurrency and scalability, which are exactly what make social apps reliable when thousands (or millions) of users generate notifications at the same time.
+
+Let’s go step-by-step through what happens when many users trigger notifications simultaneously (e.g. 10 people follow or like someone at once) — and how your Go + Redis + MongoDB setup handles that safely and efficiently.
+⚙️ 1. Multiple Users Trigger Actions at Once
+
+Let’s say 10 different users (UserA1 → UserA10) all like posts belonging to UserB within the same second.
+
+So, from the frontend:
+
+    10 separate HTTP POST requests hit your /api/like endpoint almost simultaneously.
+
+In Go, each request runs in its own goroutine — Go’s built-in concurrency system.
+
+func LikePostHandler(w http.ResponseWriter, r *http.Request) {
+    go processLike(r) // handled concurrently
+}
+
+Each goroutine does:
+
+    Saves the like in DB
+
+    Creates a notification record
+
+    Publishes an event to Redis
+
+Go’s goroutines are lightweight — they can handle thousands of concurrent events easily.
+🧩 2. Redis Pub/Sub Handles Many Messages in Parallel
+
+Each of those goroutines calls:
+
+redisClient.Publish(ctx, "notifications", eventJSON)
+
+Redis queues all these messages and delivers them (in order) to every subscriber — like your WebSocket service.
+
+Redis is extremely fast (handles millions of messages per second), so even if 10,000 notifications arrive in one second, they’re processed sequentially but instantly.
+⚡ 3. WebSocket Service (Subscriber) Receives a Stream of Events
+
+Your WebSocket service is subscribed to Redis and has a single listener loop:
+
+sub := redisClient.Subscribe(ctx, "notifications")
+ch := sub.Channel()
+
+for msg := range ch {
+    go handleNotification(msg.Payload) // each message handled in its own goroutine
+}
+
+Each handleNotification() runs in its own goroutine — again, fully concurrent — so 10+ messages can be processed simultaneously.
+
+This function:
+
+    Parses the message
+
+    Saves it in MongoDB (if not already stored)
+
+    Checks if the user is online (activeConnections)
+
+    If yes → sends via conn.WriteJSON()
+
+💾 4. MongoDB Stores Them Separately
+
+Each incoming event is inserted as a new document in the notifications collection.
+
+Example (10 notifications for UserB):
+
+[
+  {"from_user": "A1", "to_user": "B", "type": "like"},
+  {"from_user": "A2", "to_user": "B", "type": "like"},
+  ...
+  {"from_user": "A10", "to_user": "B", "type": "like"}
+]
+
+MongoDB can handle multiple writes in parallel — especially if you’re using one shared connection pool.
+Each write is atomic, so no two notifications overwrite each other.
+🔌 5. WebSocket Pushes Them Out — Instantly and Safely
+
+If UserB is online and has a WebSocket connection open:
+
+if conn, ok := activeConnections[userID]; ok {
+    conn.WriteJSON(event)
+}
+
+Multiple goroutines might call WriteJSON to the same connection nearly at the same time — so you usually wrap this in a mutex lock to avoid race conditions:
+
+var connMutex sync.Mutex
+
+connMutex.Lock()
+conn.WriteJSON(event)
+connMutex.Unlock()
+
+That ensures each notification is sent one after another safely.
+📨 6. Flutter App Receives Notifications in Sequence
+
+The Flutter app’s WebSocket listener gets multiple messages back-to-back:
+
+channel.stream.listen((message) {
+  final data = jsonDecode(message);
+  print("New notification: ${data['from_user_id']} ${data['type']}");
+});
+
+If 10 likes happen, it receives 10 separate messages — near real-time (milliseconds apart).
+
+You can choose to:
+
+    Show each individually (“@userA liked your post”)
+
+    Or group them later (“10 people liked your post”)
+
+🧠 7. Key Takeaways (Concurrency Safety)
+Step	How it Handles Simultaneous Events
+Go API	Goroutines allow thousands of concurrent actions
+Redis Pub/Sub	Buffers + broadcasts all messages quickly
+WebSocket Service	Handles messages concurrently (via goroutines)
+MongoDB	Each insert is atomic and concurrent-safe
+WebSocket Delivery	Mutex around connection write avoids collision
+Flutter App	Processes incoming events as a stream (sequentially)
+🔒 8. Optional Scaling Techniques (for Future Growth)
+
+If your app grows big:
+
+    Use a Redis Stream (instead of Pub/Sub) → guaranteed delivery, replayable messages
+
+    Add a notification microservice that only handles notification creation
+
+    Use message batching (“5 new likes”) to reduce spam
+
+    Add a rate limiter to prevent abuse
+
+    Use load balancer + multiple WebSocket servers (with Redis for shared state)
+
+In short:
+
+    Even when 1,000 people like or follow someone at once, Go handles each action in parallel, Redis queues the events, MongoDB saves them individually, and WebSocket delivers them instantly or later when the user is online — all safely and efficiently.
+
+Would you like me to show you a visual flow diagram of this “multi-user simultaneous notification” process (from frontend clicks → concurrent Go handlers → Redis → WebSocket → Flutter)? It’ll make this whole flow super clear.
+
+So what is websocket or what is http api call how it connects. Does it with websocket or rest api
+
+Excellent question 👏 — this is a key concept in how social media apps handle real-time notifications and user interactions.
+Let’s break it down step-by-step, especially in your case (Flutter frontend + Go backend).
+🧩 1. What’s the difference between HTTP API and WebSocket?
+Concept	HTTP API (REST)	WebSocket
+Connection Type	One request → one response. Then connection closes.	Persistent, continuous two-way connection.
+Direction	Client → Server only (server replies once).	Both Client ↔ Server (real-time).
+Use Case	Signup, login, like button, follow button, fetching feed, etc.	Notifications, messages, live updates, typing indicators, etc.
+Analogy	Like making a phone call, saying one sentence, and hanging up.	Like staying on a call continuously to talk both ways.
+⚙️ 2. What happens when you click “Follow” or “Like” (with Go + Flutter)
+
+Let’s go step-by-step:
+Step 1 – Flutter sends REST API call
+
+When user clicks the Follow button:
+
+await http.post(
+  Uri.parse("https://api.yourapp.com/follow"),
+  body: {
+    "follower_id": currentUserId,
+    "following_id": targetUserId,
+  },
+);
+
+So Flutter → sends a POST request to Go backend (via HTTP API).
+Step 2 – Go Backend handles the request
+
+Your Go server has a REST endpoint, for example:
+
+func FollowHandler(w http.ResponseWriter, r *http.Request) {
+    // Parse data
+    followerID := r.FormValue("follower_id")
+    followingID := r.FormValue("following_id")
+
+    // Store in database
+    _, err := db.Exec(`INSERT INTO follows (follower_id, following_id) VALUES ($1, $2)`, followerID, followingID)
+    if err != nil {
+        http.Error(w, err.Error(), 500)
+        return
+    }
+
+    // Create a notification
+    _, err = db.Exec(`INSERT INTO notifications (user_id, type, from_user, created_at) VALUES ($1, $2, $3, NOW())`,
+        followingID, "follow", followerID)
+}
+
+✅ It does two things:
+
+    Stores the follow in the follows table.
+
+    Creates a notification entry in notifications table.
+
+Step 3 – Notify target user (via WebSocket)
+
+If the target user (the one being followed) is online — i.e., they have a WebSocket connection open — then you can instantly send them a real-time notification.
+
+You’ll maintain a map of online users in your Go WebSocket server:
+
+var clients = make(map[string]*websocket.Conn)
+
+When you create the notification:
+
+if conn, ok := clients[followingID]; ok {
+    // user is online
+    message := map[string]string{
+        "type": "notification",
+        "event": "follow",
+        "from_user": followerID,
+    }
+    conn.WriteJSON(message)
+}
+
+✅ This pushes a live notification to the Flutter app instantly.
+Step 4 – Flutter receives real-time message
+
+In Flutter, your WebSocket listener will receive:
+
+channel.stream.listen((message) {
+  var data = jsonDecode(message);
+  if (data['type'] == 'notification') {
+    // show snackbar, update bell icon count, etc.
+  }
+});
+
+Now the user instantly sees:
+
+    “@alex followed you”
+
+without reloading or refreshing anything.
+⚡ When multiple users send notifications simultaneously
+
+Each notification is:
+
+    Stored separately in the notifications table.
+
+    Sent to the user’s WebSocket connection (if active).
+
+    If not online → stays in DB → delivered when user reconnects.
+
+So if 100 users like your photo at once:
+
+    100 API calls are made to the backend.
+
+    Each creates 1 DB entry.
+
+    Each triggers conn.WriteJSON() to you (if you’re online).
+
+    If you’re offline, you’ll see all 100 when you open the app next (via /api/get-notifications).
+
+🧠 Summary
+Step	Technology	Role
+1️⃣	REST API (HTTP)	Send user action to backend (like/follow/comment)
+2️⃣	Database	Save action + create notification record
+3️⃣	WebSocket	Instantly deliver live update to target user
+4️⃣	REST API (backup)	Fetch missed notifications when offline
+
+If you want, I can also show you a Go WebSocket + REST API combined example, where you can plug it directly into your backend to handle both live and stored notifications.
+Would you like that?
+
+So why don't we use websocket if it constantly created connection rather than rest api. How does it connect with database does it do with rest api or websocket or is there any other method. And tell me if there is any other method for communication like restapi or websocket or etc.
+
+Excellent — that’s a very deep backend engineering question 👍
+Let’s go step-by-step and really clear this up properly.
+🧠 Why we don’t use only WebSockets for everything
+
+At first glance, it seems logical:
+
+    “If WebSocket can send and receive continuously, why not use it for all communication?”
+
+Here’s why we don’t 👇
+Reason	Explanation
+1. WebSocket is persistent	Every open WebSocket keeps a connection alive between client ↔ server. If you have 1 million users, that’s 1 million open sockets consuming memory and CPU. We don’t need that for signup/login/fetch feed — those are one-time operations.
+2. REST API is simpler and cheaper for one-shot actions	Things like “login”, “create post”, “get profile” happen rarely and don’t need a continuous stream. A single HTTP request is lighter.
+3. Security & scalability	Load balancers, caches (Cloudflare, Nginx, etc.), and proxies handle HTTP easily; WebSockets need special routing and are harder to scale.
+4. Reliability	If the user loses connection, the WebSocket must reconnect, re-authenticate, and resync — more complexity. REST is stateless and simpler.
+
+So the usual pattern:
+
+    ✅ REST API → for regular actions (CRUD, authentication, uploading, etc.)
+
+    ⚡ WebSocket → for real-time updates (notifications, chat, live likes)
+
+    🗃️ Database → stores all state changes permanently
+
+🔄 How database fits into this
+
+Both REST and WebSocket routes talk to the same backend logic and database — the difference is how data is delivered.
+REST API → Database flow
+
+Flutter → HTTP POST → Go API → SQL (insert/update/select)
+
+Example:
+
+func CreatePost(w http.ResponseWriter, r *http.Request) {
+    db.Exec("INSERT INTO posts (user_id, caption) VALUES ($1, $2)", userID, caption)
+}
+
+WebSocket → Database flow
+
+If the data comes via a WebSocket message (for example, in-app chat):
+
+Flutter → WS message → Go WebSocket server → SQL (insert) + broadcast to others
+
+Example:
+
+func handleMessage(conn *websocket.Conn, message []byte) {
+    var msg ChatMessage
+    json.Unmarshal(message, &msg)
+    db.Exec("INSERT INTO messages (sender_id, receiver_id, text) VALUES ($1,$2,$3)",
+        msg.SenderID, msg.ReceiverID, msg.Text)
+
+    // Then broadcast via WebSocket
+    if targetConn, ok := clients[msg.ReceiverID]; ok {
+        targetConn.WriteJSON(msg)
+    }
+}
+
+So, both REST and WebSocket ultimately connect to the same database — just via different handlers.
+🛰️ Other communication methods used in social apps
+
+There are a few more you should know about 👇
+Method	Direction	Real-time?	Typical Use
+HTTP REST API	Client → Server	❌ No	Normal requests (login, fetch feed, post upload)
+WebSocket	Client ↔ Server	✅ Yes	Chat, notifications, live events
+gRPC (over HTTP/2)	Client ↔ Server	✅ Yes	High-performance internal service communication (microservices)
+Server-Sent Events (SSE)	Server → Client (one-way)	✅ Yes	Real-time data stream (e.g., live feed updates)
+MQTT	Client ↔ Broker	✅ Yes	Lightweight IoT or messaging apps (Telegram, WhatsApp use it)
+GraphQL (over HTTP or WS)	Client ↔ Server	Optional	Flexible API queries
+WebRTC	Peer ↔ Peer	✅ Yes	Voice/video calls, live streams
+Push Notifications (FCM/APNs)	Server → Device OS	✅ Yes (but external)	Notify offline users via phone OS
+⚙️ In your case (Go + Flutter)
+
+Here’s how you’ll likely combine them:
+Action	Communication	Description
+Signup/Login	REST API	One-time HTTP call to authenticate user.
+Follow / Like / Comment	REST API	Store in DB + trigger WebSocket notification to receiver.
+Notifications / Chat	WebSocket	Live delivery to online users.
+Offline users	REST API	Fetch notifications missed while offline.
+Future (optional)	FCM Push	Send “You got a new follower” even when app closed.
+🔑 In summary
+
+    REST API → stateless, short, simple.
+
+    WebSocket → continuous, bi-directional, real-time.
+
+    Database → the single source of truth.
+
+    Push / Queues / Events → make it scalable when many actions happen.
+
+If you want, I can show you an architecture diagram that visually connects all this — from Flutter button click → Go REST → DB → WebSocket push → Flutter notification.
+Would you like me to draw that out?
+
+Where fcm push is used 
+
+Perfect question 🔥 — because FCM (Firebase Cloud Messaging) is the piece that connects your backend to the user’s device when the app isn’t running or the user is offline.
+
+Let’s go step-by-step and tie it to your Go + Flutter social app 👇
+📱 What is FCM?
+
+Firebase Cloud Messaging (FCM) is a push notification service by Google.
+It lets your backend server send notifications directly to users’ phones — even if:
+
+    the app is closed,
+
+    the phone is locked, or
+
+    the user has no active WebSocket connection.
+
+⚙️ How it fits into your social app flow
+
+Let’s see the full lifecycle — from the moment someone performs an action.
+🔹 1. User performs an action (e.g., “follow”)
+
+Frontend (Flutter):
+
+await http.post(
+  Uri.parse("https://api.yourapp.com/follow"),
+  body: {
+    "follower_id": currentUserId,
+    "following_id": targetUserId,
+  },
+);
+
+🔹 2. Go backend handles it
+
+Your Go backend receives the request:
+
+func FollowHandler(w http.ResponseWriter, r *http.Request) {
+    followerID := r.FormValue("follower_id")
+    followingID := r.FormValue("following_id")
+
+    // Save follow in DB
+    db.Exec(`INSERT INTO follows (follower_id, following_id) VALUES ($1,$2)`, followerID, followingID)
+
+    // Create notification in DB
+    db.Exec(`INSERT INTO notifications (user_id, type, from_user, created_at) VALUES ($1,$2,$3,NOW())`,
+        followingID, "follow", followerID)
+
+    // Trigger FCM Push (for offline users)
+    go sendFCMNotification(followingID, fmt.Sprintf("%s started following you", followerID))
+}
+
+🔹 3. Backend calls FCM
+
+In your Go backend, you’ll use the Firebase Admin SDK or an HTTP POST to the FCM API:
+
+func sendFCMNotification(targetUserID, message string) {
+    token := getFCMTokenFromDB(targetUserID) // stored when user logged in
+
+    fcmMessage := map[string]interface{}{
+        "to": token,
+        "notification": map[string]string{
+            "title": "New Follower",
+            "body":  message,
+        },
+    }
+
+    // Send POST to FCM server
+    http.Post("https://fcm.googleapis.com/fcm/send", "application/json", bytes.NewBuffer(jsonData))
+}
+
+✅ This will cause Google’s FCM servers to deliver the message to the user’s phone.
+🔹 4. Flutter receives push notification (via OS)
+
+Even if the app is closed, Android/iOS shows a push banner:
+
+    🔔 “@alex started following you”
+
+When the user taps it → Flutter app opens → you fetch all notifications via REST or WebSocket.
+🧩 When FCM is used vs when WebSocket is used
+Case	WebSocket	FCM
+App is open & connected	✅ Real-time message via WebSocket	❌ Not used
+App is backgrounded (running but not visible)	⚠️ Sometimes active	✅ Used to wake app / show banner
+App is closed or phone locked	❌ WebSocket disconnected	✅ Used
+Internet is off	❌ Can’t deliver	⚠️ FCM retries later
+🧠 Where FCM fits in your architecture
+
+[Flutter app]
+     ↑
+  WebSocket (real-time when open)
+     ↑
+[Go backend] —> Database
+     │
+     └──> FCM Push (via Google servers)
+               ↓
+           [User’s phone OS]
+
+So FCM isn’t an alternative to WebSocket or REST —
+👉 it’s a backup channel for offline or background notification delivery.
+🗃️ How you manage it
+
+Every user’s fcm_token is stored in your DB:
+
+ALTER TABLE users ADD COLUMN fcm_token TEXT;
+
+When they log in, Flutter registers it:
+
+String? token = await FirebaseMessaging.instance.getToken();
+await http.post(
+  Uri.parse("https://api.yourapp.com/update-token"),
+  body: {"user_id": userId, "fcm_token": token},
+);
+
+Then your Go backend can look it up anytime to push notifications.
+✅ Summary
+Component	Role
+REST API	For one-time actions like follow/like/comment
+WebSocket	Real-time updates when users are online
+FCM Push	Notify offline users via Android/iOS
+Database	Stores all notifications permanently
+
+If you want, I can show you how to integrate FCM push with your Go backend (with Firebase Admin SDK setup and example code).
+Would you like that next?
+
+What fcm token represent and how user get notification when he is offline 
+
+Perfect question again 💡 — this shows you’re thinking like a backend architect now.
+Let’s break this down in simple but complete terms — so you fully understand what an FCM token is, how it works, and how offline notifications reach users.
+🔑 What is an FCM token?
+
+Think of the FCM token as your app’s unique address on the Firebase Cloud Messaging network.
+
+    Every installation of your Flutter app on a phone has its own unique FCM token.
+
+    It’s like a temporary ID that Google/Firebase assigns to that specific device + app instance.
+
+    When you (the backend) want to send a notification to a user, you don’t talk to the phone directly — you tell Firebase:
+
+        “Hey Firebase, deliver this message to the device with this token.”
+
+Then Firebase finds that device and delivers the push.
+📱 Analogy: Think of FCM tokens like WhatsApp phone numbers
+Concept	Analogy
+FCM token	Your WhatsApp phone number
+FCM server	WhatsApp’s central server
+Backend (your Go app)	Someone sending you a message
+Device	Your phone
+
+So if your backend says:
+
+    Send a message to token f02a93b5:APA91b...
+
+Firebase knows exactly which device and which app instance to deliver that notification to.
+⚙️ How the FCM token is created (in Flutter)
+
+When your app first starts, the Firebase SDK automatically generates it:
+
+import 'package:firebase_messaging/firebase_messaging.dart';
+
+void initFCM() async {
+  String? token = await FirebaseMessaging.instance.getToken();
+  print("User FCM Token: $token");
+}
+
+Then you send it to your backend:
+
+await http.post(
+  Uri.parse("https://api.yourapp.com/update-fcm-token"),
+  body: {
+    "user_id": userId,
+    "fcm_token": token,
+  },
+);
+
+🗄️ How you store it in your backend (Go + PostgreSQL)
+
+You add a column:
+
+ALTER TABLE users ADD COLUMN fcm_token TEXT;
+
+When a user logs in:
+
+func UpdateFCMToken(w http.ResponseWriter, r *http.Request) {
+    userID := r.FormValue("user_id")
+    token := r.FormValue("fcm_token")
+
+    _, err := db.Exec(`UPDATE users SET fcm_token=$1 WHERE id=$2`, token, userID)
+    if err != nil {
+        http.Error(w, err.Error(), 500)
+        return
+    }
+
+    fmt.Fprint(w, "Token updated successfully")
+}
+
+Now your backend knows exactly which device belongs to which user.
+🌐 What happens when the user is offline
+
+Let’s walk through it clearly 👇
+🧩 Step 1 – Backend triggers FCM
+
+Someone performs an action — say Alex follows John.
+
+Your backend inserts the “follow” in the database, and then looks up John’s FCM token:
+
+token := getUserFCMToken("john_id")
+sendFCMNotification(token, "Alex started following you!")
+
+🧩 Step 2 – Your Go backend sends the notification to Firebase
+
+fcmMessage := map[string]interface{}{
+    "to": token,
+    "notification": map[string]string{
+        "title": "New Follower",
+        "body":  "Alex started following you!",
+    },
+}
+
+Firebase receives this message and queues it in its system.
+🧩 Step 3 – Firebase delivers it to the OS (Android/iOS)
+
+Even though John’s app is closed or offline, the Firebase background service (built into Android or iOS) is always running in the OS level.
+
+Firebase keeps a secure connection with the device and holds the notification until:
+
+    the phone reconnects to the internet,
+
+    and the device’s FCM service receives the message.
+
+Then it shows it as a push banner (like WhatsApp or Instagram do).
+🧩 Step 4 – User taps the notification
+
+When the user taps it:
+
+    The app opens (even if it was closed)
+
+    You can fetch new notifications via your /api/get-notifications endpoint
+
+    You can clear the badge or show an in-app alert
+
+🧠 Summary
+Concept	Description
+FCM Token	Unique ID for your app instance on that device.
+Who issues it	Firebase SDK automatically.
+Where it’s stored	Your database (users.fcm_token).
+When used	When backend sends push via Firebase to that user.
+Offline behavior	Firebase holds message → delivers when user reconnects.
+When refreshed	Token may change (reinstall, clear data, logout) — so update backend.
+⚡ Typical flow in your social app
+
+(1) User installs app → gets FCM token
+(2) Flutter → sends token to Go backend
+(3) Go backend stores it in DB
+(4) When another user likes/follows/comments
+      → backend sends push via FCM
+(5) Firebase delivers to user’s phone (even if app closed)
+
+🔐 One last key thing
+
+    FCM tokens can expire or rotate. So your Flutter app should refresh token periodically:
+
+FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+  updateTokenToBackend(newToken);
+});
+
+Would you like me to show you a complete Go function that sends an FCM push to a user (using Firebase Admin SDK), so you can plug it into your backend directly?
+
+What else i can use for push notification like apn 
+
+Fantastic follow-up 💡 — yes, FCM (Firebase Cloud Messaging) isn’t the only way to deliver push notifications. It’s just the most convenient cross-platform one.
+
+Let’s break down what other options exist — and when you’d use each — especially for a Go + Flutter social app like yours.
+🚀 1. FCM (Firebase Cloud Messaging)
+
+✅ You already know this one.
+
+    Platform: Android, iOS, Web
+
+    Who owns it: Google
+
+    How it works: You send a message → Google’s FCM servers → user’s device.
+
+    Pros:
+
+        Free
+
+        Works on both Android & iOS (through Apple APNs internally)
+
+        Easy Flutter SDK
+
+    Cons:
+
+        Requires Google services (not ideal for China)
+
+        Slight latency in delivery at times
+
+🍎 2. APNs (Apple Push Notification service)
+
+    Platform: iOS, macOS, watchOS
+
+    Who owns it: Apple
+
+    How it works:
+    Your server connects directly to Apple’s APNs endpoint via HTTP/2 with a JWT or certificate, and Apple delivers it to iPhones.
+
+    Pros:
+
+        Official Apple service → best reliability on iOS
+
+        Fine-grained control (mutable content, rich notifications, etc.)
+
+    Cons:
+
+        iOS only
+
+        Requires Apple developer credentials
+
+        More setup (certificates or tokens)
+
+    Note: FCM on iOS actually uses APNs behind the scenes.
+    When you send a message through FCM, Google routes it to APNs for delivery.
+
+So if you already use FCM → you’re indirectly using APNs too for iPhones.
+☁️ 3. OneSignal
+
+    Type: Third-party push notification service
+
+    Platforms: Android, iOS, Web, Flutter
+
+    How it works: You integrate OneSignal SDK → OneSignal uses FCM/APNs internally.
+
+    Pros:
+
+        Simple integration
+
+        Analytics, targeting, segments, A/B testing
+
+    Cons:
+
+        Vendor-lock (you rely on their dashboard)
+
+        Paid for large volumes
+
+Good for small to mid-size apps where you want dashboards & analytics easily.
+📨 4. Amazon SNS (Simple Notification Service)
+
+    Platform: Cross-platform (uses FCM, APNs, ADM, etc.)
+
+    How it works: Unified interface for multiple push providers.
+
+    Pros:
+
+        Enterprise-grade, scalable
+
+        Works with FCM, APNs, Amazon Device Messaging, and email/SMS
+
+    Cons:
+
+        More setup and cost
+
+        Complex IAM permissions
+
+🧩 5. Web Push / VAPID
+
+    Platform: Web browsers (Chrome, Firefox, Safari)
+
+    Use case: Progressive Web Apps (PWA)
+
+    Pros: Doesn’t need mobile SDKs
+
+    Cons: Only for browsers, not native Flutter apps
+
+💬 6. Self-hosted brokers (for advanced setups)
+
+If you want to run everything yourself, you can use:
+
+    MQTT brokers (like Mosquitto, EMQX, or HiveMQ)
+    → Used in WhatsApp-like architectures.
+
+    Web Push Gateways (self-built over WebSockets)
+    → Real-time in-app messaging, not OS-level notifications.
+
+But:
+
+    MQTT/WebSocket notifications only work while app is open.
+    They can’t wake a closed app like FCM/APNs.
+
+🧠 Summary table
+Service	Platform	Real-time (when app open)	Offline Delivery	Best For
+FCM	Android + iOS + Web	✅	✅	General use (your app)
+APNs	iOS only	✅	✅	Native iOS apps
+OneSignal	All	✅	✅	Easy setup, analytics
+Amazon SNS	All	✅	✅	Enterprise apps
+Web Push	Browser only	✅	✅	PWAs / websites
+MQTT / WebSocket	All	✅	❌	In-app live messages only
+⚙️ For your Go + Flutter app
+
+You can choose between two main options:
+Option A – FCM only (Recommended)
+
+    Flutter SDK ready.
+
+    Works for both Android and iOS.
+
+    Your Go backend just sends one type of push.
+
+Option B – Dual stack (for more control)
+
+    Send directly to APNs for iOS users.
+
+    Send to FCM for Android users.
+
+    Your database stores which platform each user uses:
+
+    users(id, platform, fcm_token, apns_token)
+
+    Then your Go backend chooses the right service per user.
+
+If you want, I can show you a Go example of sending push notifications via APNs directly (without FCM) so you can see how that works under the hood.
+Would you like me to show that next?
+
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"sort"
+	"strings"
+)
+
+// scoredUser is a helper struct just for sorting users with their search score.
+// It is not exported and only used within this file.
+type scoredUser struct {
+	User  User
+	Score float64
+}
+
+// SearchHandler handles requests to the /search endpoint.
+func SearchHandler(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("q")
+
+	if query == "" {
+		http.Error(w, "Missing search query parameter 'q'", http.StatusBadRequest)
+		return
+	}
+
+	var scoredUsers []scoredUser
+
+	// Use the global 'users' slice from database.go
+	for _, user := range users {
+		score := calculateScore(user, query)
+		if score > 0 {
+			scoredUsers = append(scoredUsers, scoredUser{User: user, Score: score})
+		}
+	}
+
+	// Sort users based on their score in descending order.
+	sort.Slice(scoredUsers, func(i, j int) bool {
+		return scoredUsers[i].Score > scoredUsers[j].Score
+	})
+
+	// Extract the User objects from the sorted list for the response.
+	resultUsers := make([]User, len(scoredUsers))
+	for i, su := range scoredUsers {
+		resultUsers[i] = su.User
+	}
+
+	// The SearchResponse struct is defined in models.go
+	response := SearchResponse{
+		Results: resultUsers,
+		Total:   len(resultUsers),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// calculateScore calculates a relevance score for a user based on a search query.
+// It now uses the FullName field and no longer considers location.
+func calculateScore(user User, query string) float64 {
+	var score float64
+	query = strings.ToLower(query)
+
+	// Strong match for username
+	if strings.Contains(strings.ToLower(user.Username), query) {
+		score += 10.0
+	}
+	
+	// Weaker match for full name
+	if strings.Contains(strings.ToLower(user.FullName), query) {
+		score += 5.0
+	}
+
+	// Add a small bonus for having more followers
+	score += float64(user.Followers) * 0.01 // Reduced follower bonus to avoid dominating score
+
+	return score
+}
+search.go
+
+
+package main
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+
+	"github.com/gorilla/mux"
+)
+
+// LoginHandler validates credentials and returns the user's data and all other users.
+func LoginHandler(w http.ResponseWriter, r *http.Request) {
+	var creds struct {
+		Username string json:"username"
+		Password string json:"password"
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// First, validate the user's credentials.
+	if !IsValidUser(creds.Username, creds.Password) {
+		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
+		log.Printf("Failed login attempt for user %s.", creds.Username)
+		return
+	}
+
+	// If valid, fetch the logged-in user's full profile.
+	user, exists := GetUserByUsername(creds.Username)
+	if !exists {
+		// This should not happen if IsValidUser passed, but it's good practice to check.
+		http.Error(w, "Could not find user data after successful login", http.StatusInternalServerError)
+		return
+	}
+
+	// Fetch all users for the search/discovery feature.
+	allUsers := GetAllUsers()
+
+	// Create the response payload that the Flutter client expects.
+	response := map[string]interface{}{
+		"user":     user,
+		"allUsers": allUsers,
+	}
+
+	// Send the successful response.
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+	log.Printf("User %s logged in successfully. Sent user profile and all users list.", creds.Username)
+}
+
+// GetAllUsersHandler returns a list of all users.
+func GetAllUsersHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	allUsers := GetAllUsers()
+	if err := json.NewEncoder(w).Encode(allUsers); err != nil {
+		http.Error(w, "Failed to encode users", http.StatusInternalServerError)
+	}
+}
+
+// GetUserHandler returns the data for a single user.
+func GetUserHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	username := vars["username"]
+
+	user, exists := GetUserByUsername(username)
+	if !exists {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(user); err != nil {
+		http.Error(w, "Failed to encode user data", http.StatusInternalServerError)
+	}
+}
+
+// main is the entry point for the application.
+func main() {
+	InitDatabase()
+
+	r := mux.NewRouter()
+
+	api := r.PathPrefix("/api/v1").Subrouter()
+	api.HandleFunc("/users", GetAllUsersHandler).Methods("GET")
+	api.HandleFunc("/users/{username}", GetUserHandler).Methods("GET")
+
+	r.HandleFunc("/login", LoginHandler).Methods("POST")
+	r.HandleFunc("/ws/{username}", WebsocketHandler).Methods("GET")
+
+	log.Println("Starting server on :8081...")
+	if err := http.ListenAndServe(":8081", r); err != nil {
+		log.Fatalf("Could not start server: %s\n", err)
+	}
+}
+
+main.go
+
+Poor Scalability (This is the biggest issue): The algorithm checks every single user in your database for every single search. If you have 100,000 users, it has to perform 100,000 checks every time someone types a letter in the search bar. This will become very slow and expensive as your user base grows.
+No Partial Word Matching: It searches for the exact text you type. If you search for "player one", it will not find a user named "The First Player". It doesn't understand that "player" and "one" are separate words.
+Basic Relevance: The scoring is quite rigid. It doesn't handle typos or recognize that a shorter username that is a perfect match (e.g., searching "player1" and finding user "player1") is more relevant than a longer username that just contains the query (e.g., finding "anotherplayer123").
+
+what approach should i use to overcome these cons.
+
+Great question — you’ve reached the exact point where real social apps and search systems evolve.
+I’ll explain this step-by-step, tied directly to your Go + Flutter backend, and then give you practical approaches you can implement gradually (not theoretical).
+First: Why your current search has those problems (short recap)
+
+Your current approach:
+
+for _, user := range users {
+    score := calculateScore(user, query)
+}
+
+Problems:
+
+    O(N) scan → checks every user → bad at scale
+
+    String contains only → no tokenization, no fuzzy match
+
+    Static scoring → no typo tolerance, no intent understanding
+
+This is fine for learning, but no real app stops here.
+How REAL social apps solve this (progressive layers)
+
+Social apps don’t jump directly to Elasticsearch. They evolve in phases.
+
+I’ll give you 4 levels, from simplest → production-grade.
+LEVEL 1 — Database-side filtering (Immediate improvement)
+Key idea
+
+👉 Move filtering from Go loop → database query
+
+Instead of:
+
+GetAllUsers() → loop in Go
+
+Do:
+
+SELECT * FROM users
+WHERE username ILIKE '%query%'
+   OR full_name ILIKE '%query%'
+LIMIT 50;
+
+Why this helps
+
+    Database uses indexes
+
+    Reduces scanned rows massively
+
+    Faster than Go memory scan
+
+PostgreSQL index (IMPORTANT)
+
+CREATE INDEX idx_users_username ON users USING gin (username gin_trgm_ops);
+CREATE INDEX idx_users_fullname ON users USING gin (full_name gin_trgm_ops);
+
+Enable extension:
+
+CREATE EXTENSION pg_trgm;
+
+What this solves
+
+✅ Scalability (big win)
+❌ Still weak typo handling
+❌ Still basic relevance
+LEVEL 2 — Tokenization + weighted scoring (Still no search engine)
+
+Instead of searching full query as one string:
+Break query into words
+
+tokens := strings.Fields(strings.ToLower(query))
+
+Example:
+
+"player one" → ["player", "one"]
+
+Score per token
+
+for _, token := range tokens {
+    if strings.Contains(username, token) {
+        score += 10
+    }
+    if strings.Contains(fullname, token) {
+        score += 5
+    }
+}
+
+Bonus logic
+
+if username == query {
+    score += 50 // exact match
+}
+
+Result
+
+    "player one" matches "The First Player"
+
+    Short usernames rank higher
+
+    Still simple, but MUCH better UX
+
+✅ Partial word matching
+✅ Better relevance
+❌ Still no typo tolerance
+LEVEL 3 — Fuzzy matching (Typos) WITHOUT external engines
+Use Levenshtein Distance
+
+Example:
+
+func similarity(a, b string) int {
+    return levenshtein.Distance(a, b)
+}
+
+Then:
+
+distance := levenshtein.Distance(username, query)
+if distance <= 2 {
+    score += 8
+}
+
+What this enables
+
+    "plyaer1" → finds "player1"
+
+    "jon" → finds "john"
+
+⚠️ Use carefully:
+
+    Only for top 50–100 DB results
+
+    NOT on full user table
+
+✅ Typo tolerance
+❌ Still not web-scale
+LEVEL 4 — Real-world scalable solution (Used by Instagram, Twitter)
+
+At scale, search ≠ database
+Architecture
+
+Flutter
+  ↓
+Search API (Go)
+  ↓
+Search Engine (Elasticsearch / OpenSearch / Meilisearch)
+  ↓
+Postgres (source of truth)
+
+Why?
+
+Because search engines provide:
+
+    Inverted indexes
+
+    Fuzzy matching
+
+    Ranking models
+
+    Prefix search
+
+    Fast autocomplete
+
+Recommended search engines (Pick ONE)
+🔹 Meilisearch (BEST for you)
+
+    Very easy
+
+    REST API
+
+    Typo-tolerant by default
+
+    Ranking rules configurable
+
+🔹 OpenSearch / Elasticsearch
+
+    Powerful
+
+    More complex
+
+    Heavy ops
+
+How real apps sync data
+When user updates profile
+
+1. Save to PostgreSQL
+2. Update search index
+
+Example:
+
+func UpdateUser(user User) {
+    SaveToDB(user)
+    SearchIndex.Upsert(user)
+}
+
+Search ranking formula (Production-style)
+
+Final Score =
+  Text relevance (username > fullname > bio)
++ Popularity (followers, wins)
++ Interaction signals (search clicks, profile opens)
++ Social proximity (mutual follows)
+
+This is exactly what Instagram does.
+Your BEST path forward (Very important)
+Step-by-step roadmap for YOU
+
+Now
+✅ DB-side search + trigram index
+✅ Tokenized scoring
+✅ Limit results
+
+Next
+✅ Fuzzy match on top results
+
+Later
+✅ Meilisearch integration
+Example: Final recommended Go search flow
+
+1. Flutter sends query
+2. Go API:
+   - Query DB with ILIKE + LIMIT 100
+   - Tokenize + score
+   - Apply fuzzy matching
+   - Sort + return top 20
+
+Why this matches your current app
+
+    Works with Go
+
+    Works with Flutter
+
+    No Node.js
+
+    No Redis required
+
+    Scales gradually
+
+If you want next
+
+I can:
+
+    Rewrite your SearchHandler with DB-backed + tokenized + fuzzy scoring
+
+    Design search microservice
+
+    Add Meilisearch with Go SDK
+
+    Add search analytics (click tracking)
+
+Just tell me what level you want to implement next 🚀
+
+── ASSISTANT @ 2026-03-29T10:23:35.168Z ──
+No response requested.
+
+
+── USER @ 2026-03-29T10:23:58.563Z ──
+I want to create a algorithm for suggesting shorts.
+
+Great question 👍
+Since you’re building a social app with challenges, leagues, followers, likes, views, comments, and fraud prevention, I’ll design this Shorts (Reels) suggestion algorithm specifically for your architecture and goals, not a generic YouTube copy.
+Shorts Suggestion Algorithm (Designed for Your Social App)
+
+Think of this as a scoring + ranking system that runs every time a user opens the Shorts feed or scrolls.
+1️⃣ Core Idea (Simple First)
+
+Every short gets a final score for a given user.
+
+Final Score = Engagement Score
+            + Personalization Score
+            + Social Graph Score
+            + Freshness Score
+            + Challenge/League Boost
+            − Spam/Fraud Penalty
+
+You sort shorts by this score and show the top ones.
+2️⃣ Data You Already Have (or Should Have)
+Shorts table
+
+shorts (
+  id,
+  user_id,
+  video_url,
+  created_at,
+  views,
+  likes,
+  comments,
+  shares,
+  league,
+  challenge_id
+)
+
+User interaction table
+
+short_interactions (
+  user_id,
+  short_id,
+  action,       -- view, like, comment, share, skip
+  watch_time,   -- seconds watched
+  created_at
+)
+
+Follows
+
+follows (follower_id, following_id)
+
+3️⃣ Engagement Score (MOST IMPORTANT)
+
+Shorts live or die by watch time.
+
+Engagement Score =
+  (watch_time_ratio × 40)
++ (likes × 10)
++ (comments × 15)
++ (shares × 20)
+- (skips × 30)
+
+watch_time_ratio
+
+watch_time / video_duration
+
+    A short watched 95% is FAR better than one with many likes but low retention.
+
+4️⃣ Personalization Score (User Taste)
+
+Based on what THIS user likes, not global trends.
+Signals
+
+    Shorts user watched fully
+
+    Shorts user liked/commented
+
+    Topics (gaming, dance, tech, comedy)
+
+    Creators user interacts with
+
+Example:
+
+If user likes gaming shorts → +20
+If same creator as before → +15
+If user skipped similar shorts → -25
+
+This can be stored in Redis:
+
+user_interest:user_id → {gaming: 0.7, comedy: 0.2}
+
+5️⃣ Social Graph Score (Friends & Influence)
+
+People like content from people they know.
+
+If short.creator is followed → +30
+If mutual follower → +15
+If creator followed by many of user's follows → +10
+
+This makes your app feel alive & social, not random.
+6️⃣ Freshness Score (New > Old)
+
+Shorts die fast.
+
+Age < 1 hour      → +40
+Age < 6 hours     → +25
+Age < 24 hours    → +10
+Older than 3 days → -20
+
+This ensures new creators get a chance.
+7️⃣ Challenge & League Boost (YOUR UNIQUE EDGE 🔥)
+
+Since your app is gamified, this is powerful.
+
+If short is part of active challenge → +30
+If creator league ≥ viewer league → +10
+If league battle ongoing → +20
+
+This makes Shorts connected to your core game mechanics, unlike Instagram.
+8️⃣ Fraud & Spam Penalty (Very Important)
+
+You already care about fraud 👇
+
+Penalize if:
+
+    Likes from same IP
+
+    Views with 1–2 sec watch time
+
+    Sudden spike with no comments
+
+    Bot-like behavior
+
+If suspicious activity detected → Score × 0.3
+If confirmed spam → remove from feed
+
+9️⃣ Final Ranking Flow (Backend)
+Step-by-step
+
+    Fetch candidate shorts:
+
+        Recent (last 48h)
+
+        Trending
+
+        Followed creators
+
+    Compute score for each short
+
+    Sort by score
+
+    Paginate (infinite scroll)
+
+    Cache top results in Redis
+
+10️⃣ Simple Go Pseudocode
+
+func CalculateShortScore(short Short, user User) float64 {
+    score := 0.0
+
+    score += EngagementScore(short)
+    score += PersonalizationScore(short, user)
+    score += SocialScore(short, user)
+    score += FreshnessScore(short.CreatedAt)
+    score += ChallengeBoost(short)
+    score -= FraudPenalty(short)
+
+    return score
+}
+
+11️⃣ First Version (MVP Recommendation)
+
+For v1, keep it SIMPLE:
+
+    Watch time
+
+    Likes/comments
+
+    Followed users
+
+    Freshness
+
+Then add:
+
+    Personalization
+
+    League/challenge boosts
+
+    Fraud detection
+
+12️⃣ Why This Will Work for Your App
+
+✅ Personalized
+✅ Competitive (league-based)
+✅ Fair to new creators
+✅ Resistant to bots
+✅ Easy to scale with Redis + Go
+
+If you want, next I can:
+
+    Design DB schema optimized for Shorts
+
+    Write exact Go API endpoint (/api/shorts/feed)
+
+    Design Redis caching strategy
+
+    Explain how Instagram/TikTok differs
+
+    Add ML later without rewriting everything
+
+Just tell me what you want next 🚀
+
+Explain how Instagram/TikTok differs
+
+Add ML later without rewriting everything
+
+Perfect follow-up. I’ll explain this in two clear parts, and I’ll map everything back to your current non-ML algorithm so you can upgrade later without rewriting your backend.
+PART 1 — How Instagram vs TikTok Shorts Algorithms Differ
+
+They look similar on the surface, but their goals are very different.
+🔵 Instagram Reels Algorithm (Social-First)
+
+Instagram is a social graph company.
+What Instagram prioritizes
+
+    Who you follow
+
+    Mutual connections
+
+    Creator relationship
+
+    Engagement, but only after social signals
+
+Typical Instagram weighting (simplified)
+
+Social Graph        ~40%
+Engagement          ~30%
+Personal Interest   ~20%
+Freshness           ~10%
+
+What this means
+
+    You see friends & mutuals first
+
+    New creators grow slowly
+
+    Viral reach is limited without social proof
+
+    Works best for people with existing followers
+
+Example
+
+If you follow Creator A, their average Reel can beat a viral Reel from a stranger.
+🔴 TikTok Algorithm (Content-First)
+
+TikTok is a recommendation company, not social.
+What TikTok prioritizes
+
+    Watch time (completion rate)
+
+    Rewatches
+
+    Instant feedback loops
+
+    User behavior over follower count
+
+Typical TikTok weighting
+
+Watch Time / Retention  ~50%
+Interest Similarity     ~30%
+Freshness               ~10%
+Social Graph             ~5–10%
+
+What this means
+
+    Zero followers can go viral
+
+    One great video beats a big account
+
+    Very aggressive testing of new videos
+
+    Feels addictive because feed is “perfect”
+
+Example
+
+A creator with 0 followers but 95% watch-through → pushed to millions.
+🧠 Key Difference Summary
+Aspect	Instagram	TikTok
+Core focus	Social relationships	Content quality
+Followers matter	Yes	Almost no
+Virality speed	Slow	Fast
+New creators	Hard	Easy
+Addiction factor	Medium	Very high
+🟣 What YOUR App Should Do (Hybrid Model)
+
+Because you have:
+
+    Followers
+
+    Leagues
+
+    Challenges
+
+    Gamification
+
+Your best model is TikTok content logic + Instagram social logic + your game mechanics.
+
+That’s actually a huge advantage.
+PART 2 — Add ML Later WITHOUT Rewriting Everything
+
+This is critical. Most apps fail here.
+1️⃣ The Golden Rule (IMPORTANT)
+
+    Never let ML decide the feed directly.
+
+Instead:
+
+    ML outputs scores
+
+    Your existing algorithm combines them
+
+This keeps your system:
+
+    Debuggable
+
+    Controllable
+
+    Cheap
+
+2️⃣ Your Current Algorithm (Rule-Based)
+
+You already have:
+
+Final Score =
+  Engagement
++ Personalization
++ Social
++ Freshness
++ League/Challenge
+- Fraud
+
+KEEP THIS STRUCTURE FOREVER.
+3️⃣ Where ML Fits (Drop-In Modules)
+
+You replace individual score calculators, not the whole pipeline.
+Before (rule-based)
+
+func EngagementScore(short Short) float64 {
+    return watchTime*40 + likes*10
+}
+
+After (ML-powered)
+
+func EngagementScore(short Short, user User) float64 {
+    return ml.PredictEngagement(short, user)
+}
+
+Same function signature.
+No feed rewrite. 🔥
+4️⃣ ML Models You Add Gradually
+Model 1: Watch-Time Prediction (MOST IMPORTANT)
+
+Predict:
+
+P(user watches > 80%)
+
+Input:
+
+    video length
+
+    past retention
+
+    creator history
+
+    user watch behavior
+
+Output:
+
+0.0 – 1.0
+
+Used as:
+
+EngagementScore = prediction * 100
+
+Model 2: Like / Comment Probability
+
+Predict:
+
+P(user likes | user comments)
+
+Used to rank similar-score videos.
+Model 3: Creator Quality Score
+
+Predict:
+
+Creator Consistency Score
+
+Helps:
+
+    Reduce spam
+
+    Promote reliable creators
+
+    Stabilize feed quality
+
+5️⃣ ML Does NOT Replace These ❌
+
+ML should NOT handle:
+
+    League logic
+
+    Challenge rules
+
+    Fraud detection
+
+    Hard limits
+
+    Policy enforcement
+
+These stay rule-based.
+6️⃣ Training Data (You Already Have It)
+
+Every scroll = training data.
+
+{
+  "user_id": "u1",
+  "short_id": "s9",
+  "watched": true,
+  "watch_time": 14,
+  "liked": false,
+  "skipped": false
+}
+
+You can train offline:
+
+    Nightly batch jobs
+
+    Python + PyTorch / TensorFlow
+
+    Store model in S3 / GCS
+
+7️⃣ ML Serving Architecture (Simple & Scalable)
+
+Flutter App
+   ↓
+API Gateway (Node)
+   ↓
+Feed Service (Go)
+   ↓
+ML Service (Python, HTTP/gRPC)
+   ↓
+Score Returned
+
+ML service is optional:
+
+    If down → fallback to rule-based
+
+    Zero downtime risk
+
+8️⃣ Cold Start Strategy (VERY IMPORTANT)
+
+TikTok secret sauce 👇
+
+For new shorts:
+
+    Show to small random group
+
+    Measure watch time
+
+    If good → expand audience
+
+    If bad → stop
+
+ML makes this faster, but rules can do it too.
+9️⃣ Why This Design Is Future-Proof
+
+✅ No rewrites
+✅ ML optional
+✅ Easy A/B testing
+✅ Cheap at start
+✅ Powerful at scale
+
+Most companies fail because they:
+
+    Go ML too early
+
+    Or hardcode logic everywhere
+
+You’re avoiding both.
+10️⃣ TL;DR (Short Version)
+
+    Instagram = social-first
+
+    TikTok = content-first
+
+    Your app = hybrid + gamified
+
+    Keep scoring pipeline stable
+
+    Swap scoring internals with ML later
+
+    ML suggests, rules decide
+
+If you want next, I can:
+
+    Design exact ML feature vectors
+
+    Show cold-start rollout logic
+
+    Design A/B testing framework
+
+    Write Go + Python integration code
+
+    Simulate TikTok-style viral test loop
+
+Just tell me 🔥
+
+Your best model is TikTok content logic + Instagram social logic + your game mechanics.
+explain how to do it or how can i achieve it.
+also Show cold-start rollout logic
+
+Excellent — this is the core design problem of your app, and you’re thinking about it the right way.
+I’ll explain exactly how to achieve:
+
+    TikTok content logic + Instagram social logic + your game mechanics
+    and then show clear cold-start rollout logic you can implement immediately.
+
+I’ll keep it practical, backend-oriented, and incremental so you can build this without ML first.
+PART 1 — How to Build the Hybrid Algorithm (Step-by-Step)
+
+Think in layers, not one giant algorithm.
+LAYER 1 — Candidate Generation (Who is even eligible?)
+
+Instead of ranking all shorts, you first generate candidates from different sources.
+
+This is how TikTok + Instagram both scale.
+Candidate Buckets
+Bucket	Purpose	Source
+🔥 Trending	Discover viral content	Global stats
+👥 Social	Friends & mutuals	Follows table
+🎯 Interest	User taste	Past watch history
+🆕 Fresh	New creators	Recent uploads
+🏆 Game	Challenges & leagues	Your unique edge
+Example: Candidate Fetch (Go)
+
+candidates := []Short{}
+
+candidates += FetchTrendingShorts()
+candidates += FetchFollowedShorts(userID)
+candidates += FetchInterestShorts(userID)
+candidates += FetchFreshShorts()
+candidates += FetchChallengeShorts(userID)
+
+    This is Instagram-style social filtering + TikTok-style discovery + your game logic.
+
+LAYER 2 — TikTok Content Logic (Content Quality First)
+
+Now evaluate content performance, ignoring followers.
+Core TikTok Signals
+
+    Watch time %
+
+    Completion rate
+
+    Rewatches
+
+    Skip rate
+
+    Early engagement velocity
+
+Rule-Based Score (v1)
+
+ContentScore =
+  completion_rate × 50
++ avg_watch_time × 30
+- skip_rate × 40
++ rewatch_rate × 20
+
+    This ensures great videos win, even from small creators.
+
+LAYER 3 — Instagram Social Logic (Relationship Boost)
+
+After content quality, apply social bonuses.
+
+If followed creator → +30
+If mutual follow → +20
+If friend liked it → +10
+
+This ensures:
+
+    Friends don’t disappear
+
+    Feed feels personal
+
+    Social trust is preserved
+
+LAYER 4 — Game Mechanics Boost (Your Secret Weapon 🏆)
+
+This is what Instagram & TikTok don’t have.
+League-Based Boost
+
+If creator league > viewer league → +15
+If same league → +10
+
+Challenge-Based Boost
+
+If short is in active challenge → +30
+If challenge nearing deadline → +10 urgency boost
+
+This creates:
+
+    Competitive tension
+
+    Time pressure
+
+    Repeat engagement
+
+LAYER 5 — Controlled Randomness (Anti-Bubble)
+
+TikTok ALWAYS injects randomness.
+
+5–10% of feed = random high-quality shorts
+
+Purpose:
+
+    Prevent echo chambers
+
+    Discover new interests
+
+    Test new creators
+
+LAYER 6 — Final Score Formula
+
+FinalScore =
+  ContentScore        (TikTok)
++ SocialScore         (Instagram)
++ GameScore           (Your App)
++ FreshnessScore
+- FraudPenalty
+
+Sorted DESC → feed.
+PART 2 — Cold-Start Rollout Logic (VERY IMPORTANT)
+
+Cold start applies to:
+
+    New shorts
+
+    New creators
+
+    New users
+
+A) Cold Start for NEW SHORTS (TikTok-style rollout)
+Phase-Based Distribution
+PHASE 1 — Micro Test (50–100 users)
+
+Conditions:
+
+    Random users
+
+    Similar interest group
+
+    Mixed leagues
+
+Metrics collected:
+
+    Completion rate
+
+    Skip rate
+
+    Likes per view
+
+    Watch time
+
+If completion_rate ≥ 70%
+→ Phase 2
+Else → Kill or slow
+
+PHASE 2 — Expanded Test (1k–5k users)
+
+Now include:
+
+    Interest-matched users
+
+    League-based users
+
+    Some followers
+
+Thresholds:
+
+completion_rate ≥ 60%
+engagement_rate ≥ X
+
+PHASE 3 — Scale or Freeze
+Result	Action
+Excellent	Trending bucket
+Average	Normal distribution
+Poor	Demoted
+Go Pseudocode
+
+func RolloutStage(short Short) int {
+    views := short.Views
+    cr := short.CompletionRate
+
+    if views < 100 {
+        return 1
+    }
+    if views < 5000 && cr > 0.7 {
+        return 2
+    }
+    if cr > 0.6 {
+        return 3
+    }
+    return 0
+}
+
+B) Cold Start for NEW CREATORS
+
+Instagram problem → TikTok solution.
+Rule
+
+    Creator follower count NEVER blocks reach
+
+Instead:
+
+    First 5–10 shorts get boosted testing
+
+    Compare creator to peers (same league)
+
+NewCreatorBoost = +20 for first N shorts
+
+C) Cold Start for NEW USERS
+First 20 shorts feed mix:
+
+40% trending
+30% random high-quality
+20% challenge content
+10% social
+
+After 20 shorts → personalization kicks in.
+PART 3 — Why This Actually Works
+
+✔ TikTok logic → viral growth
+✔ Instagram logic → retention & trust
+✔ Game logic → addiction & competition
+✔ Cold-start → fair to new users
+✔ Rule-based → debuggable
+✔ ML-ready → future-proof
+PART 4 — Visual Mental Model
+
+Fetch Candidates
+   ↓
+Content Quality Filter (TikTok)
+   ↓
+Social Boost (Instagram)
+   ↓
+Game Boost (Leagues/Challenges)
+   ↓
+Random Injection
+   ↓
+Sorted Feed
+
+PART 5 — What I Recommend You Build First (Order)
+
+1️⃣ Candidate buckets
+2️⃣ ContentScore (watch time based)
+3️⃣ Cold-start rollout
+4️⃣ Social boosts
+5️⃣ Challenge boosts
+6️⃣ ML later (plug-in)
+
+If you want next, I can:
+
+    Write exact Go code for feed API
+
+    Design Redis keys for rollout tracking
+
+    Simulate one short going viral step-by-step
+
+    Show A/B testing logic
+
+    Map this to Flutter infinite scroll
+
+Just tell me 🔥
+
+So if a user upload short do we make a score for each short and how can we update it again and again like if someone watches it. Like what
+
+This is a very important question, and you’re thinking exactly like someone building a real Shorts system 👍
+I’ll explain this very clearly and practically, without ML first, and in a way that fits your Go + Redis + DB architecture.
+Short Answer (Big Picture)
+
+YES
+👉 Every short has a score
+👉 The score is NOT static
+👉 The score is continuously updated as users interact
+👉 You do NOT recalculate everything from scratch
+
+Instead:
+
+    You store metrics
+
+    You update aggregates
+
+    You recompute score incrementally
+
+Mental Model (IMPORTANT)
+
+Think of a short like a live stock price 📈
+
+    Upload → initial price
+
+    Every watch/like → price moves
+
+    Viral → price explodes
+
+    Skipped → price drops
+
+You don’t recalc the whole market every second.
+STEP 1 — What You Store for EACH SHORT
+In Database (Postgres / Mongo)
+
+short {
+  id,
+  user_id,
+  created_at,
+  duration,
+
+  views,
+  likes,
+  comments,
+  shares,
+
+  total_watch_time,
+  completion_count,
+  skip_count,
+
+  rollout_stage,    // 1, 2, 3
+  fraud_score
+}
+
+STEP 2 — Initial Score at Upload
+
+When a user uploads a short:
+
+BaseScore = FreshnessBoost + NewCreatorBoost
+
+Example:
+
+BaseScore = 30
+
+Store it:
+
+short.score = 30
+
+STEP 3 — When Someone Watches a Short (MOST IMPORTANT)
+
+You DO NOT recalculate full score.
+
+You update counters, then adjust score.
+Event: User watches short
+1️⃣ Update counters
+
+views += 1
+total_watch_time += watch_time
+
+If watched > 80%:
+
+completion_count += 1
+
+If watched < 20%:
+
+skip_count += 1
+
+2️⃣ Compute delta (score change)
+
+completion_rate = completion_count / views
+avg_watch_time = total_watch_time / views
+skip_rate = skip_count / views
+
+3️⃣ Incrementally adjust score
+
+score += (watch_time_ratio × 2)
+
+if completed:
+  score += 5
+
+if skipped:
+  score -= 8
+
+⚠️ Notice:
+
+    Small increments
+
+    Smooth changes
+
+    No heavy computation
+
+STEP 4 — When Someone Likes / Comments / Shares
+
+These are strong signals, so bigger boosts.
+
+Like     → +6
+Comment  → +10
+Share    → +15
+
+But apply diminishing returns:
+
+boost = base_boost / log(likes + 2)

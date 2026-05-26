@@ -1,0 +1,1814 @@
+It’s like a postal + live chat combo system:
+
+    You (User A) send a “Follow letter”.
+
+    The backend (post office) logs it and stores it in the target’s mailbox (DB).
+
+    If the target (User B) is online (door open via WebSocket), the postman delivers immediately.
+
+    If they’re offline, the letter just stays in their mailbox.
+
+    When they open the app, they “check their mailbox” (GET /notifications).
+
+Would you like me to show this flow as a diagram (visual) — arrows from Flutter → Go API → Redis → WebSocket → Flutter — so it’s easier to visualize the data movement?
+
+So when multiple user send notification to simultaneously what happens 
+
+Excellent — this is the right next question 👏
+
+You’re now thinking about concurrency and scalability, which are exactly what make social apps reliable when thousands (or millions) of users generate notifications at the same time.
+
+Let’s go step-by-step through what happens when many users trigger notifications simultaneously (e.g. 10 people follow or like someone at once) — and how your Go + Redis + MongoDB setup handles that safely and efficiently.
+⚙️ 1. Multiple Users Trigger Actions at Once
+
+Let’s say 10 different users (UserA1 → UserA10) all like posts belonging to UserB within the same second.
+
+So, from the frontend:
+
+    10 separate HTTP POST requests hit your /api/like endpoint almost simultaneously.
+
+In Go, each request runs in its own goroutine — Go’s built-in concurrency system.
+
+func LikePostHandler(w http.ResponseWriter, r *http.Request) {
+    go processLike(r) // handled concurrently
+}
+
+Each goroutine does:
+
+    Saves the like in DB
+
+    Creates a notification record
+
+    Publishes an event to Redis
+
+Go’s goroutines are lightweight — they can handle thousands of concurrent events easily.
+🧩 2. Redis Pub/Sub Handles Many Messages in Parallel
+
+Each of those goroutines calls:
+
+redisClient.Publish(ctx, "notifications", eventJSON)
+
+Redis queues all these messages and delivers them (in order) to every subscriber — like your WebSocket service.
+
+Redis is extremely fast (handles millions of messages per second), so even if 10,000 notifications arrive in one second, they’re processed sequentially but instantly.
+⚡ 3. WebSocket Service (Subscriber) Receives a Stream of Events
+
+Your WebSocket service is subscribed to Redis and has a single listener loop:
+
+sub := redisClient.Subscribe(ctx, "notifications")
+ch := sub.Channel()
+
+for msg := range ch {
+    go handleNotification(msg.Payload) // each message handled in its own goroutine
+}
+
+Each handleNotification() runs in its own goroutine — again, fully concurrent — so 10+ messages can be processed simultaneously.
+
+This function:
+
+    Parses the message
+
+    Saves it in MongoDB (if not already stored)
+
+    Checks if the user is online (activeConnections)
+
+    If yes → sends via conn.WriteJSON()
+
+💾 4. MongoDB Stores Them Separately
+
+Each incoming event is inserted as a new document in the notifications collection.
+
+Example (10 notifications for UserB):
+
+[
+  {"from_user": "A1", "to_user": "B", "type": "like"},
+  {"from_user": "A2", "to_user": "B", "type": "like"},
+  ...
+  {"from_user": "A10", "to_user": "B", "type": "like"}
+]
+
+MongoDB can handle multiple writes in parallel — especially if you’re using one shared connection pool.
+Each write is atomic, so no two notifications overwrite each other.
+🔌 5. WebSocket Pushes Them Out — Instantly and Safely
+
+If UserB is online and has a WebSocket connection open:
+
+if conn, ok := activeConnections[userID]; ok {
+    conn.WriteJSON(event)
+}
+
+Multiple goroutines might call WriteJSON to the same connection nearly at the same time — so you usually wrap this in a mutex lock to avoid race conditions:
+
+var connMutex sync.Mutex
+
+connMutex.Lock()
+conn.WriteJSON(event)
+connMutex.Unlock()
+
+That ensures each notification is sent one after another safely.
+📨 6. Flutter App Receives Notifications in Sequence
+
+The Flutter app’s WebSocket listener gets multiple messages back-to-back:
+
+channel.stream.listen((message) {
+  final data = jsonDecode(message);
+  print("New notification: ${data['from_user_id']} ${data['type']}");
+});
+
+If 10 likes happen, it receives 10 separate messages — near real-time (milliseconds apart).
+
+You can choose to:
+
+    Show each individually (“@userA liked your post”)
+
+    Or group them later (“10 people liked your post”)
+
+🧠 7. Key Takeaways (Concurrency Safety)
+Step	How it Handles Simultaneous Events
+Go API	Goroutines allow thousands of concurrent actions
+Redis Pub/Sub	Buffers + broadcasts all messages quickly
+WebSocket Service	Handles messages concurrently (via goroutines)
+MongoDB	Each insert is atomic and concurrent-safe
+WebSocket Delivery	Mutex around connection write avoids collision
+Flutter App	Processes incoming events as a stream (sequentially)
+🔒 8. Optional Scaling Techniques (for Future Growth)
+
+If your app grows big:
+
+    Use a Redis Stream (instead of Pub/Sub) → guaranteed delivery, replayable messages
+
+    Add a notification microservice that only handles notification creation
+
+    Use message batching (“5 new likes”) to reduce spam
+
+    Add a rate limiter to prevent abuse
+
+    Use load balancer + multiple WebSocket servers (with Redis for shared state)
+
+In short:
+
+    Even when 1,000 people like or follow someone at once, Go handles each action in parallel, Redis queues the events, MongoDB saves them individually, and WebSocket delivers them instantly or later when the user is online — all safely and efficiently.
+
+Would you like me to show you a visual flow diagram of this “multi-user simultaneous notification” process (from frontend clicks → concurrent Go handlers → Redis → WebSocket → Flutter)? It’ll make this whole flow super clear.
+
+So what is websocket or what is http api call how it connects. Does it with websocket or rest api
+
+Excellent question 👏 — this is a key concept in how social media apps handle real-time notifications and user interactions.
+Let’s break it down step-by-step, especially in your case (Flutter frontend + Go backend).
+🧩 1. What’s the difference between HTTP API and WebSocket?
+Concept	HTTP API (REST)	WebSocket
+Connection Type	One request → one response. Then connection closes.	Persistent, continuous two-way connection.
+Direction	Client → Server only (server replies once).	Both Client ↔ Server (real-time).
+Use Case	Signup, login, like button, follow button, fetching feed, etc.	Notifications, messages, live updates, typing indicators, etc.
+Analogy	Like making a phone call, saying one sentence, and hanging up.	Like staying on a call continuously to talk both ways.
+⚙️ 2. What happens when you click “Follow” or “Like” (with Go + Flutter)
+
+Let’s go step-by-step:
+Step 1 – Flutter sends REST API call
+
+When user clicks the Follow button:
+
+await http.post(
+  Uri.parse("https://api.yourapp.com/follow"),
+  body: {
+    "follower_id": currentUserId,
+    "following_id": targetUserId,
+  },
+);
+
+So Flutter → sends a POST request to Go backend (via HTTP API).
+Step 2 – Go Backend handles the request
+
+Your Go server has a REST endpoint, for example:
+
+func FollowHandler(w http.ResponseWriter, r *http.Request) {
+    // Parse data
+    followerID := r.FormValue("follower_id")
+    followingID := r.FormValue("following_id")
+
+    // Store in database
+    _, err := db.Exec(`INSERT INTO follows (follower_id, following_id) VALUES ($1, $2)`, followerID, followingID)
+    if err != nil {
+        http.Error(w, err.Error(), 500)
+        return
+    }
+
+    // Create a notification
+    _, err = db.Exec(`INSERT INTO notifications (user_id, type, from_user, created_at) VALUES ($1, $2, $3, NOW())`,
+        followingID, "follow", followerID)
+}
+
+✅ It does two things:
+
+    Stores the follow in the follows table.
+
+    Creates a notification entry in notifications table.
+
+Step 3 – Notify target user (via WebSocket)
+
+If the target user (the one being followed) is online — i.e., they have a WebSocket connection open — then you can instantly send them a real-time notification.
+
+You’ll maintain a map of online users in your Go WebSocket server:
+
+var clients = make(map[string]*websocket.Conn)
+
+When you create the notification:
+
+if conn, ok := clients[followingID]; ok {
+    // user is online
+    message := map[string]string{
+        "type": "notification",
+        "event": "follow",
+        "from_user": followerID,
+    }
+    conn.WriteJSON(message)
+}
+
+✅ This pushes a live notification to the Flutter app instantly.
+Step 4 – Flutter receives real-time message
+
+In Flutter, your WebSocket listener will receive:
+
+channel.stream.listen((message) {
+  var data = jsonDecode(message);
+  if (data['type'] == 'notification') {
+    // show snackbar, update bell icon count, etc.
+  }
+});
+
+Now the user instantly sees:
+
+    “@alex followed you”
+
+without reloading or refreshing anything.
+⚡ When multiple users send notifications simultaneously
+
+Each notification is:
+
+    Stored separately in the notifications table.
+
+    Sent to the user’s WebSocket connection (if active).
+
+    If not online → stays in DB → delivered when user reconnects.
+
+So if 100 users like your photo at once:
+
+    100 API calls are made to the backend.
+
+    Each creates 1 DB entry.
+
+    Each triggers conn.WriteJSON() to you (if you’re online).
+
+    If you’re offline, you’ll see all 100 when you open the app next (via /api/get-notifications).
+
+🧠 Summary
+Step	Technology	Role
+1️⃣	REST API (HTTP)	Send user action to backend (like/follow/comment)
+2️⃣	Database	Save action + create notification record
+3️⃣	WebSocket	Instantly deliver live update to target user
+4️⃣	REST API (backup)	Fetch missed notifications when offline
+
+If you want, I can also show you a Go WebSocket + REST API combined example, where you can plug it directly into your backend to handle both live and stored notifications.
+Would you like that?
+
+So why don't we use websocket if it constantly created connection rather than rest api. How does it connect with database does it do with rest api or websocket or is there any other method. And tell me if there is any other method for communication like restapi or websocket or etc.
+
+Excellent — that’s a very deep backend engineering question 👍
+Let’s go step-by-step and really clear this up properly.
+🧠 Why we don’t use only WebSockets for everything
+
+At first glance, it seems logical:
+
+    “If WebSocket can send and receive continuously, why not use it for all communication?”
+
+Here’s why we don’t 👇
+Reason	Explanation
+1. WebSocket is persistent	Every open WebSocket keeps a connection alive between client ↔ server. If you have 1 million users, that’s 1 million open sockets consuming memory and CPU. We don’t need that for signup/login/fetch feed — those are one-time operations.
+2. REST API is simpler and cheaper for one-shot actions	Things like “login”, “create post”, “get profile” happen rarely and don’t need a continuous stream. A single HTTP request is lighter.
+3. Security & scalability	Load balancers, caches (Cloudflare, Nginx, etc.), and proxies handle HTTP easily; WebSockets need special routing and are harder to scale.
+4. Reliability	If the user loses connection, the WebSocket must reconnect, re-authenticate, and resync — more complexity. REST is stateless and simpler.
+
+So the usual pattern:
+
+    ✅ REST API → for regular actions (CRUD, authentication, uploading, etc.)
+
+    ⚡ WebSocket → for real-time updates (notifications, chat, live likes)
+
+    🗃️ Database → stores all state changes permanently
+
+🔄 How database fits into this
+
+Both REST and WebSocket routes talk to the same backend logic and database — the difference is how data is delivered.
+REST API → Database flow
+
+Flutter → HTTP POST → Go API → SQL (insert/update/select)
+
+Example:
+
+func CreatePost(w http.ResponseWriter, r *http.Request) {
+    db.Exec("INSERT INTO posts (user_id, caption) VALUES ($1, $2)", userID, caption)
+}
+
+WebSocket → Database flow
+
+If the data comes via a WebSocket message (for example, in-app chat):
+
+Flutter → WS message → Go WebSocket server → SQL (insert) + broadcast to others
+
+Example:
+
+func handleMessage(conn *websocket.Conn, message []byte) {
+    var msg ChatMessage
+    json.Unmarshal(message, &msg)
+    db.Exec("INSERT INTO messages (sender_id, receiver_id, text) VALUES ($1,$2,$3)",
+        msg.SenderID, msg.ReceiverID, msg.Text)
+
+    // Then broadcast via WebSocket
+    if targetConn, ok := clients[msg.ReceiverID]; ok {
+        targetConn.WriteJSON(msg)
+    }
+}
+
+So, both REST and WebSocket ultimately connect to the same database — just via different handlers.
+🛰️ Other communication methods used in social apps
+
+There are a few more you should know about 👇
+Method	Direction	Real-time?	Typical Use
+HTTP REST API	Client → Server	❌ No	Normal requests (login, fetch feed, post upload)
+WebSocket	Client ↔ Server	✅ Yes	Chat, notifications, live events
+gRPC (over HTTP/2)	Client ↔ Server	✅ Yes	High-performance internal service communication (microservices)
+Server-Sent Events (SSE)	Server → Client (one-way)	✅ Yes	Real-time data stream (e.g., live feed updates)
+MQTT	Client ↔ Broker	✅ Yes	Lightweight IoT or messaging apps (Telegram, WhatsApp use it)
+GraphQL (over HTTP or WS)	Client ↔ Server	Optional	Flexible API queries
+WebRTC	Peer ↔ Peer	✅ Yes	Voice/video calls, live streams
+Push Notifications (FCM/APNs)	Server → Device OS	✅ Yes (but external)	Notify offline users via phone OS
+⚙️ In your case (Go + Flutter)
+
+Here’s how you’ll likely combine them:
+Action	Communication	Description
+Signup/Login	REST API	One-time HTTP call to authenticate user.
+Follow / Like / Comment	REST API	Store in DB + trigger WebSocket notification to receiver.
+Notifications / Chat	WebSocket	Live delivery to online users.
+Offline users	REST API	Fetch notifications missed while offline.
+Future (optional)	FCM Push	Send “You got a new follower” even when app closed.
+🔑 In summary
+
+    REST API → stateless, short, simple.
+
+    WebSocket → continuous, bi-directional, real-time.
+
+    Database → the single source of truth.
+
+    Push / Queues / Events → make it scalable when many actions happen.
+
+If you want, I can show you an architecture diagram that visually connects all this — from Flutter button click → Go REST → DB → WebSocket push → Flutter notification.
+Would you like me to draw that out?
+
+Where fcm push is used 
+
+Perfect question 🔥 — because FCM (Firebase Cloud Messaging) is the piece that connects your backend to the user’s device when the app isn’t running or the user is offline.
+
+Let’s go step-by-step and tie it to your Go + Flutter social app 👇
+📱 What is FCM?
+
+Firebase Cloud Messaging (FCM) is a push notification service by Google.
+It lets your backend server send notifications directly to users’ phones — even if:
+
+    the app is closed,
+
+    the phone is locked, or
+
+    the user has no active WebSocket connection.
+
+⚙️ How it fits into your social app flow
+
+Let’s see the full lifecycle — from the moment someone performs an action.
+🔹 1. User performs an action (e.g., “follow”)
+
+Frontend (Flutter):
+
+await http.post(
+  Uri.parse("https://api.yourapp.com/follow"),
+  body: {
+    "follower_id": currentUserId,
+    "following_id": targetUserId,
+  },
+);
+
+🔹 2. Go backend handles it
+
+Your Go backend receives the request:
+
+func FollowHandler(w http.ResponseWriter, r *http.Request) {
+    followerID := r.FormValue("follower_id")
+    followingID := r.FormValue("following_id")
+
+    // Save follow in DB
+    db.Exec(`INSERT INTO follows (follower_id, following_id) VALUES ($1,$2)`, followerID, followingID)
+
+    // Create notification in DB
+    db.Exec(`INSERT INTO notifications (user_id, type, from_user, created_at) VALUES ($1,$2,$3,NOW())`,
+        followingID, "follow", followerID)
+
+    // Trigger FCM Push (for offline users)
+    go sendFCMNotification(followingID, fmt.Sprintf("%s started following you", followerID))
+}
+
+🔹 3. Backend calls FCM
+
+In your Go backend, you’ll use the Firebase Admin SDK or an HTTP POST to the FCM API:
+
+func sendFCMNotification(targetUserID, message string) {
+    token := getFCMTokenFromDB(targetUserID) // stored when user logged in
+
+    fcmMessage := map[string]interface{}{
+        "to": token,
+        "notification": map[string]string{
+            "title": "New Follower",
+            "body":  message,
+        },
+    }
+
+    // Send POST to FCM server
+    http.Post("https://fcm.googleapis.com/fcm/send", "application/json", bytes.NewBuffer(jsonData))
+}
+
+✅ This will cause Google’s FCM servers to deliver the message to the user’s phone.
+🔹 4. Flutter receives push notification (via OS)
+
+Even if the app is closed, Android/iOS shows a push banner:
+
+    🔔 “@alex started following you”
+
+When the user taps it → Flutter app opens → you fetch all notifications via REST or WebSocket.
+🧩 When FCM is used vs when WebSocket is used
+Case	WebSocket	FCM
+App is open & connected	✅ Real-time message via WebSocket	❌ Not used
+App is backgrounded (running but not visible)	⚠️ Sometimes active	✅ Used to wake app / show banner
+App is closed or phone locked	❌ WebSocket disconnected	✅ Used
+Internet is off	❌ Can’t deliver	⚠️ FCM retries later
+🧠 Where FCM fits in your architecture
+
+[Flutter app]
+     ↑
+  WebSocket (real-time when open)
+     ↑
+[Go backend] —> Database
+     │
+     └──> FCM Push (via Google servers)
+               ↓
+           [User’s phone OS]
+
+So FCM isn’t an alternative to WebSocket or REST —
+👉 it’s a backup channel for offline or background notification delivery.
+🗃️ How you manage it
+
+Every user’s fcm_token is stored in your DB:
+
+ALTER TABLE users ADD COLUMN fcm_token TEXT;
+
+When they log in, Flutter registers it:
+
+String? token = await FirebaseMessaging.instance.getToken();
+await http.post(
+  Uri.parse("https://api.yourapp.com/update-token"),
+  body: {"user_id": userId, "fcm_token": token},
+);
+
+Then your Go backend can look it up anytime to push notifications.
+✅ Summary
+Component	Role
+REST API	For one-time actions like follow/like/comment
+WebSocket	Real-time updates when users are online
+FCM Push	Notify offline users via Android/iOS
+Database	Stores all notifications permanently
+
+If you want, I can show you how to integrate FCM push with your Go backend (with Firebase Admin SDK setup and example code).
+Would you like that next?
+
+What fcm token represent and how user get notification when he is offline 
+
+Perfect question again 💡 — this shows you’re thinking like a backend architect now.
+Let’s break this down in simple but complete terms — so you fully understand what an FCM token is, how it works, and how offline notifications reach users.
+🔑 What is an FCM token?
+
+Think of the FCM token as your app’s unique address on the Firebase Cloud Messaging network.
+
+    Every installation of your Flutter app on a phone has its own unique FCM token.
+
+    It’s like a temporary ID that Google/Firebase assigns to that specific device + app instance.
+
+    When you (the backend) want to send a notification to a user, you don’t talk to the phone directly — you tell Firebase:
+
+        “Hey Firebase, deliver this message to the device with this token.”
+
+Then Firebase finds that device and delivers the push.
+📱 Analogy: Think of FCM tokens like WhatsApp phone numbers
+Concept	Analogy
+FCM token	Your WhatsApp phone number
+FCM server	WhatsApp’s central server
+Backend (your Go app)	Someone sending you a message
+Device	Your phone
+
+So if your backend says:
+
+    Send a message to token f02a93b5:APA91b...
+
+Firebase knows exactly which device and which app instance to deliver that notification to.
+⚙️ How the FCM token is created (in Flutter)
+
+When your app first starts, the Firebase SDK automatically generates it:
+
+import 'package:firebase_messaging/firebase_messaging.dart';
+
+void initFCM() async {
+  String? token = await FirebaseMessaging.instance.getToken();
+  print("User FCM Token: $token");
+}
+
+Then you send it to your backend:
+
+await http.post(
+  Uri.parse("https://api.yourapp.com/update-fcm-token"),
+  body: {
+    "user_id": userId,
+    "fcm_token": token,
+  },
+);
+
+🗄️ How you store it in your backend (Go + PostgreSQL)
+
+You add a column:
+
+ALTER TABLE users ADD COLUMN fcm_token TEXT;
+
+When a user logs in:
+
+func UpdateFCMToken(w http.ResponseWriter, r *http.Request) {
+    userID := r.FormValue("user_id")
+    token := r.FormValue("fcm_token")
+
+    _, err := db.Exec(`UPDATE users SET fcm_token=$1 WHERE id=$2`, token, userID)
+    if err != nil {
+        http.Error(w, err.Error(), 500)
+        return
+    }
+
+    fmt.Fprint(w, "Token updated successfully")
+}
+
+Now your backend knows exactly which device belongs to which user.
+🌐 What happens when the user is offline
+
+Let’s walk through it clearly 👇
+🧩 Step 1 – Backend triggers FCM
+
+Someone performs an action — say Alex follows John.
+
+Your backend inserts the “follow” in the database, and then looks up John’s FCM token:
+
+token := getUserFCMToken("john_id")
+sendFCMNotification(token, "Alex started following you!")
+
+🧩 Step 2 – Your Go backend sends the notification to Firebase
+
+fcmMessage := map[string]interface{}{
+    "to": token,
+    "notification": map[string]string{
+        "title": "New Follower",
+        "body":  "Alex started following you!",
+    },
+}
+
+Firebase receives this message and queues it in its system.
+🧩 Step 3 – Firebase delivers it to the OS (Android/iOS)
+
+Even though John’s app is closed or offline, the Firebase background service (built into Android or iOS) is always running in the OS level.
+
+Firebase keeps a secure connection with the device and holds the notification until:
+
+    the phone reconnects to the internet,
+
+    and the device’s FCM service receives the message.
+
+Then it shows it as a push banner (like WhatsApp or Instagram do).
+🧩 Step 4 – User taps the notification
+
+When the user taps it:
+
+    The app opens (even if it was closed)
+
+    You can fetch new notifications via your /api/get-notifications endpoint
+
+    You can clear the badge or show an in-app alert
+
+🧠 Summary
+Concept	Description
+FCM Token	Unique ID for your app instance on that device.
+Who issues it	Firebase SDK automatically.
+Where it’s stored	Your database (users.fcm_token).
+When used	When backend sends push via Firebase to that user.
+Offline behavior	Firebase holds message → delivers when user reconnects.
+When refreshed	Token may change (reinstall, clear data, logout) — so update backend.
+⚡ Typical flow in your social app
+
+(1) User installs app → gets FCM token
+(2) Flutter → sends token to Go backend
+(3) Go backend stores it in DB
+(4) When another user likes/follows/comments
+      → backend sends push via FCM
+(5) Firebase delivers to user’s phone (even if app closed)
+
+🔐 One last key thing
+
+    FCM tokens can expire or rotate. So your Flutter app should refresh token periodically:
+
+FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+  updateTokenToBackend(newToken);
+});
+
+Would you like me to show you a complete Go function that sends an FCM push to a user (using Firebase Admin SDK), so you can plug it into your backend directly?
+
+What else i can use for push notification like apn 
+
+Fantastic follow-up 💡 — yes, FCM (Firebase Cloud Messaging) isn’t the only way to deliver push notifications. It’s just the most convenient cross-platform one.
+
+Let’s break down what other options exist — and when you’d use each — especially for a Go + Flutter social app like yours.
+🚀 1. FCM (Firebase Cloud Messaging)
+
+✅ You already know this one.
+
+    Platform: Android, iOS, Web
+
+    Who owns it: Google
+
+    How it works: You send a message → Google’s FCM servers → user’s device.
+
+    Pros:
+
+        Free
+
+        Works on both Android & iOS (through Apple APNs internally)
+
+        Easy Flutter SDK
+
+    Cons:
+
+        Requires Google services (not ideal for China)
+
+        Slight latency in delivery at times
+
+🍎 2. APNs (Apple Push Notification service)
+
+    Platform: iOS, macOS, watchOS
+
+    Who owns it: Apple
+
+    How it works:
+    Your server connects directly to Apple’s APNs endpoint via HTTP/2 with a JWT or certificate, and Apple delivers it to iPhones.
+
+    Pros:
+
+        Official Apple service → best reliability on iOS
+
+        Fine-grained control (mutable content, rich notifications, etc.)
+
+    Cons:
+
+        iOS only
+
+        Requires Apple developer credentials
+
+        More setup (certificates or tokens)
+
+    Note: FCM on iOS actually uses APNs behind the scenes.
+    When you send a message through FCM, Google routes it to APNs for delivery.
+
+So if you already use FCM → you’re indirectly using APNs too for iPhones.
+☁️ 3. OneSignal
+
+    Type: Third-party push notification service
+
+    Platforms: Android, iOS, Web, Flutter
+
+    How it works: You integrate OneSignal SDK → OneSignal uses FCM/APNs internally.
+
+    Pros:
+
+        Simple integration
+
+        Analytics, targeting, segments, A/B testing
+
+    Cons:
+
+        Vendor-lock (you rely on their dashboard)
+
+        Paid for large volumes
+
+Good for small to mid-size apps where you want dashboards & analytics easily.
+📨 4. Amazon SNS (Simple Notification Service)
+
+    Platform: Cross-platform (uses FCM, APNs, ADM, etc.)
+
+    How it works: Unified interface for multiple push providers.
+
+    Pros:
+
+        Enterprise-grade, scalable
+
+        Works with FCM, APNs, Amazon Device Messaging, and email/SMS
+
+    Cons:
+
+        More setup and cost
+
+        Complex IAM permissions
+
+🧩 5. Web Push / VAPID
+
+    Platform: Web browsers (Chrome, Firefox, Safari)
+
+    Use case: Progressive Web Apps (PWA)
+
+    Pros: Doesn’t need mobile SDKs
+
+    Cons: Only for browsers, not native Flutter apps
+
+💬 6. Self-hosted brokers (for advanced setups)
+
+If you want to run everything yourself, you can use:
+
+    MQTT brokers (like Mosquitto, EMQX, or HiveMQ)
+    → Used in WhatsApp-like architectures.
+
+    Web Push Gateways (self-built over WebSockets)
+    → Real-time in-app messaging, not OS-level notifications.
+
+But:
+
+    MQTT/WebSocket notifications only work while app is open.
+    They can’t wake a closed app like FCM/APNs.
+
+🧠 Summary table
+Service	Platform	Real-time (when app open)	Offline Delivery	Best For
+FCM	Android + iOS + Web	✅	✅	General use (your app)
+APNs	iOS only	✅	✅	Native iOS apps
+OneSignal	All	✅	✅	Easy setup, analytics
+Amazon SNS	All	✅	✅	Enterprise apps
+Web Push	Browser only	✅	✅	PWAs / websites
+MQTT / WebSocket	All	✅	❌	In-app live messages only
+⚙️ For your Go + Flutter app
+
+You can choose between two main options:
+Option A – FCM only (Recommended)
+
+    Flutter SDK ready.
+
+    Works for both Android and iOS.
+
+    Your Go backend just sends one type of push.
+
+Option B – Dual stack (for more control)
+
+    Send directly to APNs for iOS users.
+
+    Send to FCM for Android users.
+
+    Your database stores which platform each user uses:
+
+    users(id, platform, fcm_token, apns_token)
+
+    Then your Go backend chooses the right service per user.
+
+If you want, I can show you a Go example of sending push notifications via APNs directly (without FCM) so you can see how that works under the hood.
+Would you like me to show that next?
+
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"sort"
+	"strings"
+)
+
+// scoredUser is a helper struct just for sorting users with their search score.
+// It is not exported and only used within this file.
+type scoredUser struct {
+	User  User
+	Score float64
+}
+
+// SearchHandler handles requests to the /search endpoint.
+func SearchHandler(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("q")
+
+	if query == "" {
+		http.Error(w, "Missing search query parameter 'q'", http.StatusBadRequest)
+		return
+	}
+
+	var scoredUsers []scoredUser
+
+	// Use the global 'users' slice from database.go
+	for _, user := range users {
+		score := calculateScore(user, query)
+		if score > 0 {
+			scoredUsers = append(scoredUsers, scoredUser{User: user, Score: score})
+		}
+	}
+
+	// Sort users based on their score in descending order.
+	sort.Slice(scoredUsers, func(i, j int) bool {
+		return scoredUsers[i].Score > scoredUsers[j].Score
+	})
+
+	// Extract the User objects from the sorted list for the response.
+	resultUsers := make([]User, len(scoredUsers))
+	for i, su := range scoredUsers {
+		resultUsers[i] = su.User
+	}
+
+	// The SearchResponse struct is defined in models.go
+	response := SearchResponse{
+		Results: resultUsers,
+		Total:   len(resultUsers),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// calculateScore calculates a relevance score for a user based on a search query.
+// It now uses the FullName field and no longer considers location.
+func calculateScore(user User, query string) float64 {
+	var score float64
+	query = strings.ToLower(query)
+
+	// Strong match for username
+	if strings.Contains(strings.ToLower(user.Username), query) {
+		score += 10.0
+	}
+	
+	// Weaker match for full name
+	if strings.Contains(strings.ToLower(user.FullName), query) {
+		score += 5.0
+	}
+
+	// Add a small bonus for having more followers
+	score += float64(user.Followers) * 0.01 // Reduced follower bonus to avoid dominating score
+
+	return score
+}
+search.go
+
+
+package main
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+
+	"github.com/gorilla/mux"
+)
+
+// LoginHandler validates credentials and returns the user's data and all other users.
+func LoginHandler(w http.ResponseWriter, r *http.Request) {
+	var creds struct {
+		Username string json:"username"
+		Password string json:"password"
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// First, validate the user's credentials.
+	if !IsValidUser(creds.Username, creds.Password) {
+		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
+		log.Printf("Failed login attempt for user %s.", creds.Username)
+		return
+	}
+
+	// If valid, fetch the logged-in user's full profile.
+	user, exists := GetUserByUsername(creds.Username)
+	if !exists {
+		// This should not happen if IsValidUser passed, but it's good practice to check.
+		http.Error(w, "Could not find user data after successful login", http.StatusInternalServerError)
+		return
+	}
+
+	// Fetch all users for the search/discovery feature.
+	allUsers := GetAllUsers()
+
+	// Create the response payload that the Flutter client expects.
+	response := map[string]interface{}{
+		"user":     user,
+		"allUsers": allUsers,
+	}
+
+	// Send the successful response.
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+	log.Printf("User %s logged in successfully. Sent user profile and all users list.", creds.Username)
+}
+
+// GetAllUsersHandler returns a list of all users.
+func GetAllUsersHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	allUsers := GetAllUsers()
+	if err := json.NewEncoder(w).Encode(allUsers); err != nil {
+		http.Error(w, "Failed to encode users", http.StatusInternalServerError)
+	}
+}
+
+// GetUserHandler returns the data for a single user.
+func GetUserHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	username := vars["username"]
+
+	user, exists := GetUserByUsername(username)
+	if !exists {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(user); err != nil {
+		http.Error(w, "Failed to encode user data", http.StatusInternalServerError)
+	}
+}
+
+// main is the entry point for the application.
+func main() {
+	InitDatabase()
+
+	r := mux.NewRouter()
+
+	api := r.PathPrefix("/api/v1").Subrouter()
+	api.HandleFunc("/users", GetAllUsersHandler).Methods("GET")
+	api.HandleFunc("/users/{username}", GetUserHandler).Methods("GET")
+
+	r.HandleFunc("/login", LoginHandler).Methods("POST")
+	r.HandleFunc("/ws/{username}", WebsocketHandler).Methods("GET")
+
+	log.Println("Starting server on :8081...")
+	if err := http.ListenAndServe(":8081", r); err != nil {
+		log.Fatalf("Could not start server: %s\n", err)
+	}
+}
+
+main.go
+
+Poor Scalability (This is the biggest issue): The algorithm checks every single user in your database for every single search. If you have 100,000 users, it has to perform 100,000 checks every time someone types a letter in the search bar. This will become very slow and expensive as your user base grows.
+No Partial Word Matching: It searches for the exact text you type. If you search for "player one", it will not find a user named "The First Player". It doesn't understand that "player" and "one" are separate words.
+Basic Relevance: The scoring is quite rigid. It doesn't handle typos or recognize that a shorter username that is a perfect match (e.g., searching "player1" and finding user "player1") is more relevant than a longer username that just contains the query (e.g., finding "anotherplayer123").
+
+what approach should i use to overcome these cons.
+
+Great question — you’ve reached the exact point where real social apps and search systems evolve.
+I’ll explain this step-by-step, tied directly to your Go + Flutter backend, and then give you practical approaches you can implement gradually (not theoretical).
+First: Why your current search has those problems (short recap)
+
+Your current approach:
+
+for _, user := range users {
+    score := calculateScore(user, query)
+}
+
+Problems:
+
+    O(N) scan → checks every user → bad at scale
+
+    String contains only → no tokenization, no fuzzy match
+
+    Static scoring → no typo tolerance, no intent understanding
+
+This is fine for learning, but no real app stops here.
+How REAL social apps solve this (progressive layers)
+
+Social apps don’t jump directly to Elasticsearch. They evolve in phases.
+
+I’ll give you 4 levels, from simplest → production-grade.
+LEVEL 1 — Database-side filtering (Immediate improvement)
+Key idea
+
+👉 Move filtering from Go loop → database query
+
+Instead of:
+
+GetAllUsers() → loop in Go
+
+Do:
+
+SELECT * FROM users
+WHERE username ILIKE '%query%'
+   OR full_name ILIKE '%query%'
+LIMIT 50;
+
+Why this helps
+
+    Database uses indexes
+
+    Reduces scanned rows massively
+
+    Faster than Go memory scan
+
+PostgreSQL index (IMPORTANT)
+
+CREATE INDEX idx_users_username ON users USING gin (username gin_trgm_ops);
+CREATE INDEX idx_users_fullname ON users USING gin (full_name gin_trgm_ops);
+
+Enable extension:
+
+CREATE EXTENSION pg_trgm;
+
+What this solves
+
+✅ Scalability (big win)
+❌ Still weak typo handling
+❌ Still basic relevance
+LEVEL 2 — Tokenization + weighted scoring (Still no search engine)
+
+Instead of searching full query as one string:
+Break query into words
+
+tokens := strings.Fields(strings.ToLower(query))
+
+Example:
+
+"player one" → ["player", "one"]
+
+Score per token
+
+for _, token := range tokens {
+    if strings.Contains(username, token) {
+        score += 10
+    }
+    if strings.Contains(fullname, token) {
+        score += 5
+    }
+}
+
+Bonus logic
+
+if username == query {
+    score += 50 // exact match
+}
+
+Result
+
+    "player one" matches "The First Player"
+
+    Short usernames rank higher
+
+    Still simple, but MUCH better UX
+
+✅ Partial word matching
+✅ Better relevance
+❌ Still no typo tolerance
+LEVEL 3 — Fuzzy matching (Typos) WITHOUT external engines
+Use Levenshtein Distance
+
+Example:
+
+func similarity(a, b string) int {
+    return levenshtein.Distance(a, b)
+}
+
+Then:
+
+distance := levenshtein.Distance(username, query)
+if distance <= 2 {
+    score += 8
+}
+
+What this enables
+
+    "plyaer1" → finds "player1"
+
+    "jon" → finds "john"
+
+⚠️ Use carefully:
+
+    Only for top 50–100 DB results
+
+    NOT on full user table
+
+✅ Typo tolerance
+❌ Still not web-scale
+LEVEL 4 — Real-world scalable solution (Used by Instagram, Twitter)
+
+At scale, search ≠ database
+Architecture
+
+Flutter
+  ↓
+Search API (Go)
+  ↓
+Search Engine (Elasticsearch / OpenSearch / Meilisearch)
+  ↓
+Postgres (source of truth)
+
+Why?
+
+Because search engines provide:
+
+    Inverted indexes
+
+    Fuzzy matching
+
+    Ranking models
+
+    Prefix search
+
+    Fast autocomplete
+
+Recommended search engines (Pick ONE)
+🔹 Meilisearch (BEST for you)
+
+    Very easy
+
+    REST API
+
+    Typo-tolerant by default
+
+    Ranking rules configurable
+
+🔹 OpenSearch / Elasticsearch
+
+    Powerful
+
+    More complex
+
+    Heavy ops
+
+How real apps sync data
+When user updates profile
+
+1. Save to PostgreSQL
+2. Update search index
+
+Example:
+
+func UpdateUser(user User) {
+    SaveToDB(user)
+    SearchIndex.Upsert(user)
+}
+
+Search ranking formula (Production-style)
+
+Final Score =
+  Text relevance (username > fullname > bio)
++ Popularity (followers, wins)
++ Interaction signals (search clicks, profile opens)
++ Social proximity (mutual follows)
+
+This is exactly what Instagram does.
+Your BEST path forward (Very important)
+Step-by-step roadmap for YOU
+
+Now
+✅ DB-side search + trigram index
+✅ Tokenized scoring
+✅ Limit results
+
+Next
+✅ Fuzzy match on top results
+
+Later
+✅ Meilisearch integration
+Example: Final recommended Go search flow
+
+1. Flutter sends query
+2. Go API:
+   - Query DB with ILIKE + LIMIT 100
+   - Tokenize + score
+   - Apply fuzzy matching
+   - Sort + return top 20
+
+Why this matches your current app
+
+    Works with Go
+
+    Works with Flutter
+
+    No Node.js
+
+    No Redis required
+
+    Scales gradually
+
+If you want next
+
+I can:
+
+    Rewrite your SearchHandler with DB-backed + tokenized + fuzzy scoring
+
+    Design search microservice
+
+    Add Meilisearch with Go SDK
+
+    Add search analytics (click tracking)
+
+Just tell me what level you want to implement next 🚀
+
+── ASSISTANT @ 2026-03-29T10:21:59.307Z ──
+Understood. I've internalized the full conversation — notification architecture, FCM/APNs, WebSocket vs REST flows, and the search improvement roadmap. Ready when you are.
+
+
+── USER @ 2026-03-29T10:23:01.165Z ──
+now i want to know how social media app get notifications of everything like if someone send request and like someone profile or anyother thing.
+
+Excellent question — this is a core part of any social media app, and since you’re already building a Flutter + Go + Node.js + Redis + MongoDB architecture, you’re in a great position to implement it cleanly.
+
+Let’s break down how social media platforms (Instagram, Facebook, X, etc.) deliver real-time notifications — and how you can implement it step-by-step in your app.
+🧩 1. The Core Concept
+
+There are two layers of notifications:
+
+    Backend event generation → something happens (like, follow, comment, etc.)
+
+    Real-time delivery + storage → user gets notified on app (and optionally via push)
+
+Every “action” in your app (like, comment, follow, challenge, DM) triggers an event that is handled by the notification system.
+⚙️ 2. Architecture Overview
+
+Here’s a clean architecture for notifications in your stack:
+🔹 Event Source
+
+When any of these happen:
+
+    User A likes User B’s post
+
+    User A follows User B
+
+    User A sends a challenge
+
+    User A comments on User B’s post
+
+→ The service (Go or Node) emits an event message, like:
+
+{
+  "type": "like",
+  "fromUser": "userA_id",
+  "toUser": "userB_id",
+  "postId": "post_id",
+  "timestamp": 1731325400
+}
+
+🔹 Message Queue or Pub/Sub (optional but ideal)
+
+Big apps use Redis Pub/Sub or Kafka/RabbitMQ so notifications can be processed asynchronously.
+
+In your case (since you already have Redis):
+
+    Node.js (or Go) publishes event → notifications_channel
+
+    A Notification Service subscribes to it.
+
+Example:
+
+// Publisher (when like occurs)
+redis.Publish(ctx, "notifications", eventJSON)
+
+// Subscriber (notification service)
+sub := redis.Subscribe(ctx, "notifications")
+for msg := range sub.Channel() {
+   handleNotification(msg.Payload)
+}
+
+🔹 Notification Storage (MongoDB)
+
+Each user has a notifications collection:
+
+{
+  "_id": "notif_123",
+  "user_id": "target_user_id",
+  "type": "like",
+  "from_user": "userA_id",
+  "post_id": "post_id",
+  "is_read": false,
+  "created_at": "2025-11-12T18:30:00Z"
+}
+
+This allows you to:
+
+    Display notification list in profile or bell icon.
+
+    Filter unread vs read.
+
+    Mark notifications as read.
+
+🔹 Real-Time Delivery (WebSocket)
+
+Since you’re already using a Node.js WebSocket server, it can:
+
+    Listen for new notifications in Redis (via subscriber)
+
+    Push to the target user instantly if they’re online.
+
+Example flow:
+
+User A likes → Go service publishes to Redis
+→ Node WebSocket server subscribed to Redis
+→ Sends JSON payload to User B’s socket connection
+→ Flutter receives and shows real-time popup
+
+Example WebSocket message:
+
+{
+  "event": "notification",
+  "data": {
+    "type": "like",
+    "from_username": "userA",
+    "post_id": "xyz"
+  }
+}
+
+🔹 Push Notifications (Optional but common)
+
+When the user is offline, you can send Firebase Cloud Messaging (FCM) push notification.
+
+Your Node service can check:
+
+if (!userIsOnline) {
+   sendPushNotification(targetUser.fcmToken, "New like from @userA")
+}
+
+🔔 3. Flutter Frontend Flow
+
+On Flutter side:
+
+    Connect to WebSocket on login.
+
+    Listen for "notification" events.
+
+    Display a local notification (snackbar, toast, or bell badge).
+
+    Store them locally or fetch via REST /api/notifications.
+
+Example:
+
+channel.stream.listen((message) {
+  final data = jsonDecode(message);
+  if (data['event'] == 'notification') {
+    showNotification(data['data']);
+  }
+});
+
+🧠 4. Summary of Responsibilities
+Layer	Responsibility
+Go or Node service	Generate event when action occurs
+Redis	Publish/Subscribe for real-time distribution
+Notification Service	Store in MongoDB + push via WebSocket
+WebSocket Server	Deliver to online users instantly
+FCM (optional)	Push to offline users
+Flutter App	Listen & display notification
+🪄 Example Notification Types
+Event Type	Triggered When	Payload Example
+like	A likes B’s post	{type:'like', from:'A', postId:'123'}
+follow	A follows B	{type:'follow', from:'A'}
+comment	A comments on B’s post	{type:'comment', from:'A', postId:'123'}
+challenge	A challenges B	{type:'challenge', from:'A', league:'Gold'}
+
+Would you like me to show you an actual code implementation (Go + Redis + Node WebSocket + Flutter listener) for one type of notification — say, a “like” event — end to end?
+
+remember first thing i am not using node.js i am just building it with goland and flutter. Now tell it accordingly
+
+Perfect — that’s an important clarification ✅
+
+So, you’re building your entire backend in Go (Golang) and frontend in Flutter — no Node.js involved. That means you’ll handle notifications, real-time updates, and database operations all inside Go.
+
+Let’s now design the complete Go-based notification system — similar to how big social apps (Instagram, TikTok) do it — but optimized for your current tech stack.
+⚙️ OVERVIEW — How Notifications Work in Your Go + Flutter App
+
+Here’s the data flow:
+
+User A likes/follows/comments → Go backend generates event
+→ Store in MongoDB (notifications collection)
+→ Publish to Redis (for real-time)
+→ WebSocket server (Go) pushes to User B if online
+→ Flutter client receives live notification
+
+If User B is offline, the next time they open the app, you fetch unread notifications via an API.
+🧱 1. Database Design (MongoDB)
+
+You’ll store notifications in a notifications collection.
+Each document can look like this:
+
+{
+  "_id": "notif_101",
+  "user_id": "target_user_id",       // who receives it
+  "from_user_id": "actor_user_id",   // who triggered it
+  "type": "like",                    // like | follow | comment | challenge
+  "post_id": "optional_post_id",
+  "is_read": false,
+  "created_at": "2025-11-12T18:30:00Z"
+}
+
+🧩 2. Redis Pub/Sub (Real-Time Layer)
+
+Since Redis is already part of your architecture, it’s perfect for broadcasting events between your Go microservices.
+Example Go Code
+Publisher (e.g., inside your Like or Follow handler)
+
+event := map[string]interface{}{
+    "type": "like",
+    "from_user_id": fromUserID,
+    "to_user_id": toUserID,
+    "post_id": postID,
+    "timestamp": time.Now().Unix(),
+}
+data, _ := json.Marshal(event)
+redisClient.Publish(ctx, "notifications", data)
+
+Subscriber (your WebSocket microservice)
+
+sub := redisClient.Subscribe(ctx, "notifications")
+ch := sub.Channel()
+
+for msg := range ch {
+    var event map[string]interface{}
+    json.Unmarshal([]byte(msg.Payload), &event)
+
+    // Find if the user is connected via WebSocket
+    toUserID := event["to_user_id"].(string)
+    if conn, ok := activeConnections[toUserID]; ok {
+        conn.WriteJSON(event) // send real-time notification
+    }
+
+    // Store in MongoDB for persistence
+    notificationsCollection.InsertOne(ctx, event)
+}
+
+🔌 3. WebSocket Server (Go)
+
+This is the real-time bridge between your backend and Flutter app.
+You’ll maintain a map of connected users:
+
+var activeConnections = make(map[string]*websocket.Conn)
+
+Connection Handler
+
+func handleConnections(w http.ResponseWriter, r *http.Request) {
+    conn, _ := upgrader.Upgrade(w, r, nil)
+    userID := r.URL.Query().Get("user_id") // Flutter sends user_id as query param
+    activeConnections[userID] = conn
+
+    defer func() {
+        conn.Close()
+        delete(activeConnections, userID)
+    }()
+
+    for {
+        _, msg, err := conn.ReadMessage()
+        if err != nil {
+            break
+        }
+        fmt.Printf("Received message from user %s: %s\n", userID, msg)
+    }
+}
+
+So now, when a Redis event arrives, you can instantly conn.WriteJSON() to the correct user.
+📱 4. Flutter Client Side
+
+In Flutter, you’ll connect using the web_socket_channel package.
+Example:
+
+import 'package:web_socket_channel/io.dart';
+import 'dart:convert';
+
+late IOWebSocketChannel channel;
+
+void connectWebSocket(String userId) {
+  channel = IOWebSocketChannel.connect(
+    Uri.parse('ws://your-server-ip:8080/ws?user_id=$userId'),
+  );
+
+  channel.stream.listen((message) {
+    final data = jsonDecode(message);
+    if (data['type'] == 'like') {
+      // Show local notification or snackbar
+      print("New Like from ${data['from_user_id']}");
+    }
+  });
+}
+
+This allows instant notification delivery while the app is open.
+📡 5. REST API for Notifications (for offline users)
+
+When the user opens the app, Flutter should call an endpoint like:
+
+GET /api/notifications?user_id=123
+
+Go Handler
+
+func GetNotifications(w http.ResponseWriter, r *http.Request) {
+    userID := r.URL.Query().Get("user_id")
+    ctx := context.TODO()
+
+    cur, err := notificationsCollection.Find(ctx, bson.M{"user_id": userID})
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    var notifs []bson.M
+    cur.All(ctx, &notifs)
+    json.NewEncoder(w).Encode(notifs)
+}
+
+🔔 6. Summary of Full Flow
+Step	Action	Component
+1	User likes/follows/comments	Go API
+2	Publish event to Redis	Go API
+3	Redis notifies WebSocket service	Go WebSocket
+4	WebSocket pushes to online users	Go WebSocket + Flutter
+5	MongoDB stores for persistence	Notification microservice
+6	Flutter fetches offline notifications via API	REST endpoint
+🚀 7. Optional Enhancements
+
+    Unread counter → store unread count in Redis for quick display
+
+    Mark as read API → /api/notifications/read
+
+    Push notifications → integrate Firebase Cloud Messaging (FCM) later for offline alerts
+
+    Notification batching → group similar events (“5 people liked your post”)
+
+Would you like me to show you the exact Go folder structure and file examples (for API + Redis + WebSocket + MongoDB integration) next?
+That’ll give you a working baseline you can plug directly into your backend.
+
+so you are saying whenever someone done any action it stores details in database what it does and when other user get online by checking if websocket is connected then it send those notifications to target user
+
+✅ Exactly right — you’ve got it perfectly.
+
+Let’s walk through that logic clearly, step by step — this is exactly how modern social media platforms do it internally (Instagram, Twitter/X, TikTok, etc.), and it fits your Go + Flutter stack beautifully.
+🧠 Concept in Simple Terms
+
+Think of notifications as “records of actions” stored in your backend.
+
+Whenever any user does something meaningful (like, follow, comment, challenge), your backend creates a record of that event — that’s the notification.
+
+Then, you have two situations:
+Situation	What Happens
+Target user is online	WebSocket connection is active → send it instantly (real-time)
+Target user is offline	Just store it in DB → send later when they come online or fetch via API
+🔄 Step-by-Step Flow
+🧩 1. An action happens
+
+Example:
+User A likes User B’s post.
+
+Your Go API that handles likes will:
+
+    Save the “like” itself (post_likes table)
+
+    Create a notification record in MongoDB (or PostgreSQL)
+
+    Publish a Redis message for real-time delivery.
+
+notification := Notification{
+    UserID:     targetUserID,    // who will receive
+    FromUserID: actorUserID,     // who triggered
+    Type:       "like",
+    PostID:     postID,
+    IsRead:     false,
+    CreatedAt:  time.Now(),
+}
+
+// 1️⃣ Store in DB
+notificationsCollection.InsertOne(ctx, notification)
+
+// 2️⃣ Publish event
+eventJSON, _ := json.Marshal(notification)
+redisClient.Publish(ctx, "notifications", eventJSON)
+
+🔌 2. WebSocket server is subscribed to Redis
+
+Your Go WebSocket service listens to Redis:
+
+sub := redisClient.Subscribe(ctx, "notifications")
+ch := sub.Channel()
+
+for msg := range ch {
+    var notif Notification
+    json.Unmarshal([]byte(msg.Payload), &notif)
+
+    // check if user is connected
+    if conn, ok := activeConnections[notif.UserID]; ok {
+        conn.WriteJSON(notif)  // 🔥 instant delivery
+    }
+}
+
+🧭 3. Online user receives instantly
+
+On the Flutter side, if User B is currently using the app and connected to WebSocket:
+
+channel.stream.listen((message) {
+  final data = jsonDecode(message);
+  print("🔥 New notification: ${data['type']} from ${data['from_user_id']}");
+});
+
+User B sees:
+
+    “@UserA liked your post”
+
+Instantly — no refresh, no polling.
+💤 4. Offline user gets it later
+
+If User B is not connected, the WebSocket check (activeConnections[userID]) fails.
+
+But that’s fine — because you already stored the notification in MongoDB.
+
+So when they open the app later, Flutter just calls:
+
+GET /api/notifications?user_id=UserB
+
+and the backend returns all unread notifications.
+📱 5. User opens app → WebSocket reconnects
+
+When User B opens the app, the Flutter app:
+
+    Connects WebSocket (/ws?user_id=B)
+
+    Fetches unread notifications (/api/notifications?user_id=B)
+
+    Marks them as read if user opens them (PATCH /api/notifications/read)
+
+🔐 6. Summary — What You Understood (and It’s 100% Correct)
+
+✅ When someone performs an action → backend logs it (DB + Redis).
+✅ If the target user is online (WebSocket active) → instantly push it.
+✅ If offline → just keep it in DB → send next time via REST fetch or on reconnect.
+
+This ensures no notification is lost, and users always get consistent behavior.
+
+Would you like me to show you the Go code structure for this — with actual working files like:
+
+/notifications/
+   model.go
+   handler.go
+   websocket.go
+   redis.go
+
+so you can just integrate it directly into your Go backend?
+
+Explain it in a way like what happens when we click follow or like button in frontend how it send trigger event to backend and in backend how it handles and stores all those triggers and in what way how they send it to target user all that
+
+Perfect — you want a real-world walkthrough of what exactly happens when a user taps “Follow” or “Like” in a social media app — from the moment the user clicks the button in the frontend, all the way to when the target user gets a notification.
+
+Let’s go through it end-to-end, step by step, in your Go + Flutter architecture.
+🚀 FULL FLOW: “User A follows User B”
+
+Let’s say:
+👉 User A (actor) clicks “Follow” on User B (target)
+
+We’ll break this down into Frontend → API → Backend → Notification → Real-time delivery
+🧩 1. FRONTEND (Flutter)
+🖱 User Action
+
+User A taps the Follow button in Flutter:
+
+ElevatedButton(
+  onPressed: () async {
+    final response = await http.post(
+      Uri.parse("http://yourserver.com/api/follow"),
+      body: {
+        "follower_id": currentUserId,
+        "following_id": targetUserId
+      },
+    );
+  },
+  child: Text("Follow"),
+)
+
+So, Flutter simply sends a POST request to your Go backend with two IDs:
+
+    follower_id: the one who clicked Follow (User A)
+
+    following_id: the one being followed (User B)
+
+⚙️ 2. BACKEND (Go API)
+
+When /api/follow endpoint receives this POST:
+Step 1️⃣ — Save the relationship in DB
+
+In your PostgreSQL or MongoDB:
+
+// Example structure
+type Follow struct {
+    FollowerID string `bson:"follower_id"`
+    FollowingID string `bson:"following_id"`
+    CreatedAt time.Time `bson:"created_at"`
+}
+
+follow := Follow{
+    FollowerID: followerID,
+    FollowingID: followingID,
+    CreatedAt: time.Now(),
+}
+followsCollection.InsertOne(ctx, follow)
+
+So now, the “Follow” relationship exists in your database.
+Step 2️⃣ — Create a Notification Object
+
+Immediately after saving, your backend creates a notification record for the target user (User B):
+
+notif := Notification{
+    UserID:     followingID,   // target (B)
+    FromUserID: followerID,    // actor (A)
+    Type:       "follow",
+    IsRead:     false,
+    CreatedAt:  time.Now(),
+}
+notificationsCollection.InsertOne(ctx, notif)
+
+So now MongoDB has:
+
+{
+  "user_id": "UserB",
+  "from_user_id": "UserA",
+  "type": "follow",
+  "is_read": false,
+  "created_at": "2025-11-12T22:00:00Z"
+}
+
+Step 3️⃣ — Publish an Event to Redis
+
+This lets the notification system or WebSocket service know something happened.
+
+event, _ := json.Marshal(notif)
+redisClient.Publish(ctx, "notifications", event)
+
+That means you’re saying:
+
+    “Hey, User A followed User B — whoever handles notifications, take care of it.”
+
+⚙️ 3. BACKEND (Notification Handler / WebSocket Service)
+
+You have a Go WebSocket service subscribed to Redis.
+It’s always listening for new messages in the "notifications" channel.
+Example:
+
+sub := redisClient.Subscribe(ctx, "notifications")
+ch := sub.Channel()
+
+for msg := range ch {
+    var notif Notification
+    json.Unmarshal([]byte(msg.Payload), &notif)
+
+    // Check if the target user (User B) is online
+    if conn, ok := activeConnections[notif.UserID]; ok {
+        // send instantly through websocket
+        conn.WriteJSON(notif)
+    } else {
+        // if offline, do nothing (already saved in DB)
+    }
+}
+
+⚡ 4. REAL-TIME DELIVERY (WebSocket)
+
+If User B is currently using the app and has a WebSocket connection open, then your WebSocket server sends the notification instantly:
+
+{
+  "type": "follow",
+  "from_user_id": "UserA",
+  "message": "UserA started following you."
+}
+
+On the Flutter side, you already have a listener like:
+
+channel.stream.listen((message) {
+  final data = jsonDecode(message);
+  if (data['type'] == 'follow') {
+    showNotification("New follower!", "${data['from_user_id']} followed you");
+  }
+});
+
+So User B instantly sees a popup or badge — real-time!
+💤 5. IF USER IS OFFLINE
+
+If User B is not connected to WebSocket, the backend doesn’t find their connection in activeConnections.
+
+That’s fine — because:
+
+    The notification is already saved in MongoDB
+
+    When User B next opens the app, Flutter calls:
+
+    GET /api/notifications?user_id=UserB
+
+    The backend fetches all notifications:
+
+    cur, _ := notificationsCollection.Find(ctx, bson.M{"user_id": userID})
+    cur.All(ctx, &results)
+    json.NewEncoder(w).Encode(results)
+
+    Flutter shows them in the Notification screen.
+
+❤️ LIKE EVENT — Similar Logic
