@@ -4,6 +4,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'dart:developer' as developer;
 
 import 'package:myapp/models/notification_model.dart';
+import 'package:myapp/services/api_service.dart';
 
 /// Connection status exposed as a stream so the UI can show a dot.
 enum WebSocketStatus { connected, disconnected, connecting }
@@ -38,8 +39,14 @@ class WebSocketService {
     if (_username.isEmpty || _baseUrl.isEmpty) return;
 
     _statusCtrl.add(WebSocketStatus.connecting);
-    final url = '$_baseUrl/ws/$_username';
-    developer.log('Ws: Connecting to $url', name: 'ws');
+    // The socket authenticates with the session token as a query param —
+    // browsers can't set an Authorization header on a WebSocket handshake, and
+    // the backend rejects the upgrade if the token's user doesn't match the
+    // path username. (See WebsocketHandler in devb/websocket.go.)
+    final token = ApiService.authToken ?? '';
+    final url =
+        '$_baseUrl/ws/$_username?token=${Uri.encodeQueryComponent(token)}';
+    developer.log('Ws: Connecting to $_baseUrl/ws/$_username', name: 'ws');
 
     try {
       _channel = WebSocketChannel.connect(Uri.parse(url));

@@ -4,6 +4,40 @@ import 'package:myapp/config/constants.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/models/challenge_model.dart';
 
+/// Thin wrapper over package:http that injects the session bearer token (held
+/// in [ApiService.authToken]) into every backend request. Introduced so the
+/// ~60 call sites in [ApiService] don't each have to thread the Authorization
+/// header through by hand. Direct-to-R2 uploads (media_upload_service)
+/// deliberately do NOT go through this — they authenticate to object storage
+/// with a presigned URL, not our token.
+class _AuthHttp {
+  Future<http.Response> get(Uri url, {Map<String, String>? headers}) =>
+      http.get(url, headers: _merge(headers));
+
+  Future<http.Response> post(Uri url,
+          {Map<String, String>? headers, Object? body, Encoding? encoding}) =>
+      http.post(url, headers: _merge(headers), body: body, encoding: encoding);
+
+  Future<http.Response> patch(Uri url,
+          {Map<String, String>? headers, Object? body, Encoding? encoding}) =>
+      http.patch(url, headers: _merge(headers), body: body, encoding: encoding);
+
+  Future<http.Response> delete(Uri url,
+          {Map<String, String>? headers, Object? body, Encoding? encoding}) =>
+      http.delete(url, headers: _merge(headers), body: body, encoding: encoding);
+
+  Map<String, String> _merge(Map<String, String>? headers) {
+    final h = <String, String>{...?headers};
+    final token = ApiService.authToken;
+    if (token != null && token.isNotEmpty) {
+      h['Authorization'] = 'Bearer $token';
+    }
+    return h;
+  }
+}
+
+final _authHttp = _AuthHttp();
+
 /// Tri-state result for [ApiService.updateUserProfile]. Lets callers
 /// distinguish a no-op success (server returned 200 with `updated:
 /// false`, no fresh user payload) from a real failure that should
@@ -36,18 +70,34 @@ class ApiService {
   ApiService._();
   static const _base = AppConstants.apiBaseUrl;
 
+  /// Session bearer token captured on [login]. Attached to every backend
+  /// request by [_AuthHttp]. Held in memory only — like the rest of the auth
+  /// state, it does not survive a cold start, so the user re-logs in on
+  /// relaunch (unchanged from before tokens existed). Cleared by [clearAuth].
+  static String? authToken;
+
+  /// Drop the session token (call on logout).
+  static void clearAuth() {
+    authToken = null;
+  }
+
   // —— Auth —————————————————————————————————————————————————————————————
-   
-  /// POST /login →{ user:{...}, allusers: [...] }
+
+  /// POST /login →{ user:{...}, token: "...", allUsers: [...] }
   static Future<Map<String, dynamic>?> login(
       String username, String password) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/login'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'username': username, 'password': password}),
       );
-      if (res.statusCode == 200) return json.decode(res.body);
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body) as Map<String, dynamic>;
+        // Capture the session token so every subsequent request is authorized.
+        authToken = data['token'] as String?;
+        return data;
+      }
       return null;
       } catch (_) {
       return null;
@@ -61,7 +111,7 @@ class ApiService {
   static Future<Map<String, dynamic>> getRecommendedFeed(
       String userId, {int page = 1, int limit = 20}) async {
     try {
-      final res = await http.get(Uri.parse(
+      final res = await _authHttp.get(Uri.parse(
         '$_base/api/v1/feed/recommended?userId=$userId&page=$page&limit=$limit',
       ));
       if (res.statusCode == 200) {
@@ -78,7 +128,7 @@ class ApiService {
   static Future<Map<String, dynamic>> getFollowingFeed(
       String userId, {int page = 1, int limit = 20}) async {
     try {
-      final res = await http.get(Uri.parse(
+      final res = await _authHttp.get(Uri.parse(
         '$_base/api/v1/feed/following?userId=$userId&page=$page&limit=$limit',
       ));
       if (res.statusCode == 200) {
@@ -92,10 +142,63 @@ class ApiService {
 
   // —— Users —————————————————————————————————————————————————————————
     
-  /// GET /api/v1/users → list of all users
-  static Future<List<UserModel>> getAllUsers() async {
+  /// GET /api/v1/users?page=&limit= → one bounded page of users.
+  ///
+  /// The backend caps `limit` at 100. This is intentionally NOT the whole
+  /// roster — loading every user (the old behaviour, on every login) doesn't
+  /// scale. Surfaces that need a specific user resolve it via
+  /// [getUserByUsername]; follow lists use [getFollowers] / [getFollowing].
+  static Future<List<UserModel>> getAllUsers({int page = 1, int limit = 50}) async {
     try {
-      final res = await http.get(Uri.parse('$_base/api/v1/users'));
+      final res = await _authHttp.get(
+          Uri.parse('$_base/api/v1/users?page=$page&limit=$limit'));
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body) as List;
+        return data.map((j) => UserModel.fromJson(j)).toList();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// GET /api/v1/users/{username} → a single user, or null if not found.
+  /// Used to resolve a username to its id before hitting id-keyed endpoints.
+  static Future<UserModel?> getUserByUsername(String username) async {
+    try {
+      final res = await _authHttp.get(
+          Uri.parse('$_base/api/v1/users/${Uri.encodeComponent(username)}'));
+      if (res.statusCode == 200) {
+        return UserModel.fromJson(json.decode(res.body) as Map<String, dynamic>);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// GET /api/v1/users/{id}/followers?page=&limit= → accounts that follow {id}.
+  static Future<List<UserModel>> getFollowers(String userId,
+      {int page = 1, int limit = 30}) async {
+    try {
+      final res = await _authHttp.get(Uri.parse(
+          '$_base/api/v1/users/$userId/followers?page=$page&limit=$limit'));
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body) as List;
+        return data.map((j) => UserModel.fromJson(j)).toList();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// GET /api/v1/users/{id}/following?page=&limit= → accounts {id} follows.
+  static Future<List<UserModel>> getFollowing(String userId,
+      {int page = 1, int limit = 30}) async {
+    try {
+      final res = await _authHttp.get(Uri.parse(
+          '$_base/api/v1/users/$userId/following?page=$page&limit=$limit'));
       if (res.statusCode == 200) {
         final data = json.decode(res.body) as List;
         return data.map((j) => UserModel.fromJson(j)).toList();
@@ -109,7 +212,7 @@ class ApiService {
   /// GET /search?q=... → ranked list of matching users
   static Future<List<UserModel>> searchUsers(String query) async {
     try {
-      final res = await http.get(
+      final res = await _authHttp.get(
         Uri.parse('$_base/search?q=${Uri.encodeComponent(query)}'),
       );
       if (res.statusCode == 200) {
@@ -133,7 +236,7 @@ class ApiService {
     required String followingUsername,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/follow'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -158,7 +261,7 @@ class ApiService {
     required String unfollowedUsername,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/unfollow'),
         headers:{'Content-Type':'application/json'},
         body: json.encode({
@@ -194,7 +297,7 @@ class ApiService {
   /// to avoid flooding the backend with 35+ concurrent requests.
   static Future<List<Map<String, dynamic>>> getChallengesFeed() async {
     try {
-      final res = await http.get(
+      final res = await _authHttp.get(
         Uri.parse('$_base/api/v1/challenges/arena'),
       );
       if (res.statusCode == 200) {
@@ -240,7 +343,7 @@ class ApiService {
     required String userId,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/challenges/dislike'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -259,7 +362,7 @@ class ApiService {
   /// GET /api/v1/challenges/arena -> list of open arena challenges
   static Future<List<ChallengeModel>> getArenaChallenges() async {
     try {
-      final res= await http.get(
+      final res= await _authHttp.get(
         Uri.parse('$_base/api/v1/challenges/arena'),
       );
       if (res.statusCode == 200) {
@@ -300,7 +403,7 @@ class ApiService {
   static Future<List<ChallengeModel>> getFriendsChallenges(
       String userId) async {
     try {
-      final res = await http.get(
+      final res = await _authHttp.get(
         Uri.parse('$_base/api/v1/challenges/friends?userId=$userId'),
       );
       if (res.statusCode ==200) {
@@ -316,7 +419,7 @@ class ApiService {
   /// GET /api/v1/challenges/{id} -> challenge + responses
   static Future<Map<String, dynamic>?> getChallengeDetail(String id) async {
     try {
-      final res = await http.get(
+      final res = await _authHttp.get(
         Uri.parse('$_base/api/v1/challenges/$id'),
       );
       if (res.statusCode == 200) {
@@ -367,7 +470,7 @@ class ApiService {
     required List<Map<String, String>> items,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/media/presign'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -402,7 +505,7 @@ class ApiService {
     Map<String, String> videoVariants = const {},
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/challenges'),
         headers: {'Content-Type': 'application/json'},
         // energyLevel intentionally omitted from the payload — the
@@ -453,7 +556,7 @@ class ApiService {
         '$_base/api/v1/suggest/challenge-prefix'
         '?q=${Uri.encodeQueryComponent(query)}&limit=$limit',
       );
-      final res = await http.get(uri);
+      final res = await _authHttp.get(uri);
       if (res.statusCode == 200) {
         final decoded = json.decode(res.body) as Map<String, dynamic>;
         return (decoded['items'] as List?)?.cast<String>() ?? const [];
@@ -483,7 +586,7 @@ class ApiService {
       if (userId.isNotEmpty) {
         q.write('&userId=${Uri.encodeQueryComponent(userId)}');
       }
-      final res = await http.get(Uri.parse(q.toString()));
+      final res = await _authHttp.get(Uri.parse(q.toString()));
       if (res.statusCode == 200) {
         final decoded = json.decode(res.body) as Map<String, dynamic>;
         return (decoded['items'] as List?)
@@ -510,7 +613,7 @@ class ApiService {
     String thumbnailUrl = '',
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/challenges/accept'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -536,7 +639,7 @@ class ApiService {
     required String userId,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/challenges/like'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -563,7 +666,7 @@ class ApiService {
     required String userId,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/challenges/delete'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -584,7 +687,7 @@ class ApiService {
     required String voterId,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/challenges/vote'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -603,7 +706,7 @@ class ApiService {
   /// GET /api/v1/challenges/{id}/votes -> vote results
   static Future<List<VoteSummary>> getVoteResults(String challengeId) async {
     try {
-      final res = await http.get(
+      final res = await _authHttp.get(
         Uri.parse('$_base/api/v1/challenges/$challengeId/votes'),
       );
       if (res.statusCode == 200) {
@@ -627,7 +730,7 @@ class ApiService {
     bool completed = false,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/watch'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -661,7 +764,7 @@ class ApiService {
       // and clears session dedup so the new feed isn't biased back toward
       // the items the user just swiped past.
       if (refresh) url += '&refresh=true';
-      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
+      final res = await _authHttp.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
       if (res.statusCode == 200) {
         final body = json.decode(res.body) as Map<String, dynamic>;
         // Normalize: backend cold path returns items:null, warm path
@@ -696,7 +799,7 @@ class ApiService {
   static Future<Map<String, dynamic>> getFollowingFeedV2(
       String userId, {int page = 1, int limit = 20}) async {
     try {
-      final res = await http.get(Uri.parse(
+      final res = await _authHttp.get(Uri.parse(
         '$_base/api/v1/feed/following/v2?userId=$userId&page=$page&limit=$limit',
       )).timeout(const Duration(seconds: 30));
       if (res.statusCode == 200) {
@@ -755,7 +858,7 @@ class ApiService {
       // resets session dedup, jitters scores, and demotes the previous
       // refresh's top-3 so the head of the feed reliably changes.
       if (refresh) url += '&refresh=true';
-      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
+      final res = await _authHttp.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
       if (res.statusCode == 200) {
         final body = json.decode(res.body) as Map<String, dynamic>;
         if (body['items'] == null) body['items'] = [];
@@ -779,7 +882,7 @@ class ApiService {
   /// POST /api/v1/events/batch — send batched user interaction events.
   static Future<bool> trackEventsBatch(List<Map<String, dynamic>> events) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/events/batch'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'events': events}),
@@ -793,7 +896,7 @@ class ApiService {
   /// GET /api/v1/categories — available content categories, emotions, energy levels.
   static Future<Map<String, dynamic>> getCategories() async {
     try {
-      final res = await http.get(Uri.parse('$_base/api/v1/categories'));
+      final res = await _authHttp.get(Uri.parse('$_base/api/v1/categories'));
       if (res.statusCode == 200) return json.decode(res.body);
       return {'categories': [], 'emotionTags': [], 'energyLevels': []};
     } catch (_) {
@@ -804,7 +907,7 @@ class ApiService {
   /// GET /api/v1/profile — get computed user personality profile.
   static Future<Map<String, dynamic>?> getUserProfile(String userId) async {
     try {
-      final res = await http.get(
+      final res = await _authHttp.get(
         Uri.parse('$_base/api/v1/profile?userId=$userId'),
       );
       if (res.statusCode == 200) return json.decode(res.body);
@@ -821,7 +924,7 @@ class ApiService {
   /// POST /api/v1/admin/reseed -> drop all data and reseed
   static Future<bool> reseedDatabase() async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/admin/reseed'),
         headers: {'Content-Type': 'application/json'},
       );
@@ -842,7 +945,7 @@ class ApiService {
     String description = '',
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/report'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -865,7 +968,7 @@ class ApiService {
   static Future<List<Map<String, dynamic>>> getChallengeComments(
       String challengeId) async {
     try {
-      final res = await http.get(
+      final res = await _authHttp.get(
         Uri.parse('$_base/api/v1/challenges/$challengeId/comments'),
       );
       if (res.statusCode == 200) {
@@ -885,7 +988,7 @@ class ApiService {
     required String text,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/challenges/comments'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -908,7 +1011,7 @@ class ApiService {
   static Future<List<Map<String, dynamic>>> getConversations(
       String userId) async {
     try {
-      final res = await http.get(
+      final res = await _authHttp.get(
         Uri.parse('$_base/api/v1/chat/conversations/$userId'),
       );
       if (res.statusCode == 200) {
@@ -925,7 +1028,7 @@ class ApiService {
       String userId, String otherUserId,
       {int limit = 50, int offset = 0}) async {
     try {
-      final res = await http.get(
+      final res = await _authHttp.get(
         Uri.parse(
             '$_base/api/v1/chat/messages/$userId/$otherUserId?limit=$limit&offset=$offset'),
       );
@@ -954,7 +1057,7 @@ class ApiService {
       if (replyToId != null && replyToId.isNotEmpty) {
         body['replyToId'] = replyToId;
       }
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/chat/send'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(body),
@@ -969,7 +1072,7 @@ class ApiService {
   /// POST /api/v1/chat/read
   static Future<void> markChatRead(String senderId, String receiverId) async {
     try {
-      await http.post(
+      await _authHttp.post(
         Uri.parse('$_base/api/v1/chat/read'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -987,7 +1090,7 @@ class ApiService {
     required String text,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/chat/edit'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -1008,7 +1111,7 @@ class ApiService {
     required String senderId,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/chat/delete'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -1029,7 +1132,7 @@ class ApiService {
     required String receiverId,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/chat/forward'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -1049,7 +1152,7 @@ class ApiService {
   static Future<Map<String, dynamic>> getUserOnlineStatus(
       String username) async {
     try {
-      final res = await http.get(
+      final res = await _authHttp.get(
         Uri.parse('$_base/api/v1/chat/online/$username'),
       );
       if (res.statusCode == 200) {
@@ -1090,7 +1193,7 @@ class ApiService {
         params['userId'] = userId;
       }
       final uri = Uri.parse('$_base/search').replace(queryParameters: params);
-      final res = await http.get(uri);
+      final res = await _authHttp.get(uri);
       if (res.statusCode == 200) {
         return json.decode(res.body) as Map<String, dynamic>;
       }
@@ -1125,7 +1228,7 @@ class ApiService {
   }) async {
     if (userId.isEmpty || lane.isEmpty) return;
     try {
-      await http.post(
+      await _authHttp.post(
         Uri.parse('$_base/suggestions/accepted'),
         headers: const {'Content-Type': 'application/json'},
         body: json.encode({
@@ -1149,7 +1252,7 @@ class ApiService {
     required String challengeId,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/save'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -1174,7 +1277,7 @@ class ApiService {
     required String platform, // 'fcm' or 'apns'
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/notifications/register'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -1193,7 +1296,7 @@ class ApiService {
   /// Called on logout / push-permission revocation.
   static Future<void> unregisterPushToken(String token) async {
     try {
-      await http.post(
+      await _authHttp.post(
         Uri.parse('$_base/api/v1/notifications/unregister'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'token': token}),
@@ -1204,7 +1307,7 @@ class ApiService {
   /// GET /api/v1/notifications/prefs?userId=X
   static Future<Map<String, dynamic>?> getNotificationPrefs(String userId) async {
     try {
-      final res = await http.get(
+      final res = await _authHttp.get(
         Uri.parse('$_base/api/v1/notifications/prefs?userId=$userId'),
       );
       if (res.statusCode == 200) return json.decode(res.body) as Map<String, dynamic>;
@@ -1217,7 +1320,7 @@ class ApiService {
   /// POST /api/v1/notifications/prefs
   static Future<bool> setNotificationPrefs(Map<String, dynamic> prefs) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/notifications/prefs'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(prefs),
@@ -1232,7 +1335,7 @@ class ApiService {
   /// Records that the user opened the app from a push notification.
   static Future<void> trackNotificationClicked(String outboxId) async {
     try {
-      await http.post(
+      await _authHttp.post(
         Uri.parse('$_base/api/v1/notifications/clicked'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'id': outboxId}),
@@ -1246,7 +1349,7 @@ class ApiService {
   static Future<Map<String, dynamic>?> getCreatorInsightsOverview(
       String creatorId, {int windowDays = 30}) async {
     try {
-      final res = await http.get(
+      final res = await _authHttp.get(
         Uri.parse('$_base/api/v1/creator/insights?creatorId=$creatorId&windowDays=$windowDays'),
       );
       if (res.statusCode == 200) return json.decode(res.body) as Map<String, dynamic>;
@@ -1264,7 +1367,7 @@ class ApiService {
     int windowDays = 30,
   }) async {
     try {
-      final res = await http.get(
+      final res = await _authHttp.get(
         Uri.parse('$_base/api/v1/creator/insights/content?creatorId=$creatorId&type=$contentType&id=$contentId&windowDays=$windowDays'),
       );
       if (res.statusCode == 200) return json.decode(res.body) as Map<String, dynamic>;
@@ -1278,7 +1381,7 @@ class ApiService {
   static Future<List<Map<String, dynamic>>> getSavedChallenges(
       String userId) async {
     try {
-      final res = await http.get(
+      final res = await _authHttp.get(
         Uri.parse('$_base/api/v1/saved/$userId'),
       );
       if (res.statusCode == 200) {
@@ -1318,7 +1421,7 @@ class ApiService {
       if (bio != null) body['bio'] = bio;
       if (visibility != null) body['visibility'] = visibility;
       if (settings != null) body['settings'] = settings;
-      final res = await http
+      final res = await _authHttp
           .patch(
             Uri.parse('$_base/api/v1/users/$userId'),
             headers: {'Content-Type': 'application/json'},
@@ -1373,7 +1476,7 @@ class ApiService {
       if (beforeCursor != null && beforeCursor.isNotEmpty) {
         q.write('&before=$beforeCursor');
       }
-      final res = await http.get(Uri.parse(q.toString()));
+      final res = await _authHttp.get(Uri.parse(q.toString()));
       if (res.statusCode == 200) {
         return json.decode(res.body) as Map<String, dynamic>;
       }
@@ -1397,7 +1500,7 @@ class ApiService {
       if (beforeCursor != null && beforeCursor.isNotEmpty) {
         q.write('&before=$beforeCursor');
       }
-      final res = await http.get(Uri.parse(q.toString()));
+      final res = await _authHttp.get(Uri.parse(q.toString()));
       if (res.statusCode == 200) {
         return json.decode(res.body) as Map<String, dynamic>;
       }
@@ -1410,7 +1513,7 @@ class ApiService {
   /// DELETE /api/v1/users/{id}/history — clear all history.
   static Future<bool> clearWatchHistory(String userId) async {
     try {
-      final res = await http.delete(
+      final res = await _authHttp.delete(
         Uri.parse('$_base/api/v1/users/$userId/history'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'userId': userId}),
@@ -1430,7 +1533,7 @@ class ApiService {
     required String blockedId,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/blocks'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -1450,7 +1553,7 @@ class ApiService {
     required String blockedId,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/unblock'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -1468,7 +1571,7 @@ class ApiService {
   static Future<List<Map<String, dynamic>>> getBlockedUsers(
       String userId) async {
     try {
-      final res = await http.get(
+      final res = await _authHttp.get(
         Uri.parse('$_base/api/v1/users/$userId/blocks'),
       );
       if (res.statusCode == 200) {
@@ -1493,7 +1596,7 @@ class ApiService {
   /// [verifyTOTP] with a valid 6-digit code to activate.
   static Future<Map<String, dynamic>?> enrollTOTP(String userId) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/users/$userId/totp/enroll'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'userId': userId}),
@@ -1515,7 +1618,7 @@ class ApiService {
     required String code,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/users/$userId/totp/verify'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'userId': userId, 'code': code}),
@@ -1533,7 +1636,7 @@ class ApiService {
     required String code,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/users/$userId/totp/disable'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'userId': userId, 'code': code}),
@@ -1558,7 +1661,7 @@ class ApiService {
     Map<String, dynamic>? extra,
   }) async {
     try {
-      final res = await http.post(
+      final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/events'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({

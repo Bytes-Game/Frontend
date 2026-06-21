@@ -68,6 +68,9 @@ class AuthProvider with ChangeNotifier {
     void logout(BuildContext context) {
     // ignore: use_build_context_synchronously
     Provider.of<DataProvider>(context, listen: false).clearData();
+    // Drop the session token so no stale Authorization header lingers for the
+    // next user who logs in on this device.
+    ApiService.clearAuth();
     _isAuthenticated = false;
     notifyListeners();
   }

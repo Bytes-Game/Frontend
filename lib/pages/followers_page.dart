@@ -38,15 +38,17 @@ class _FollowersPageState extends State<FollowersPage>
   }
 
   Future<void> _load() async {
-    final all = await ApiService.getAllUsers();
-    final target = all.firstWhere(
-      (u) => u.username == widget.username,
-      orElse: () => all.first,
-    );
+    // Resolve the username to an id, then ask the backend for just this user's
+    // followers — no more fetching the entire roster and filtering in Dart.
+    final target = await ApiService.getUserByUsername(widget.username);
+    if (target == null) {
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+    final followers = await ApiService.getFollowers(target.id);
     if (mounted) {
       setState(() {
-        _followers = 
-             all.where((u) => u.followingList.contains(target.id)).toList();
+        _followers = followers;
         _loading = false;
       });
     }
