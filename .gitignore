@@ -1,6 +1,9 @@
 # Miscellaneous
 *.class
 *.log
+# Android logcat dumps captured while debugging (can be hundreds of MB —
+# GitHub rejects files >100 MB, so never let these get committed).
+logcat.txt
 *.pyc
 *.swp
 .DS_Store
