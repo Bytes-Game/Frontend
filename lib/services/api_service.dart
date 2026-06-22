@@ -760,6 +760,10 @@ class ApiService {
     try {
       var url = '$_base/api/v1/feed/smart?userId=$userId&page=$page&limit=$limit';
       if (sessionId.isNotEmpty) url += '&sessionId=$sessionId';
+      // Send the device's UTC offset (minutes east of UTC) so the backend's
+      // hour-of-day routing buckets by the user's LOCAL hour rather than the
+      // server's timezone. Absent → backend treats it as UTC (no behaviour change).
+      url += '&tzOffset=${DateTime.now().timeZoneOffset.inMinutes}';
       // Pull-to-refresh signal — the backend drops the seen-content filter
       // and clears session dedup so the new feed isn't biased back toward
       // the items the user just swiped past.
