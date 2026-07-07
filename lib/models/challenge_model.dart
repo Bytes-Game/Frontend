@@ -63,6 +63,10 @@ class ChallengeModel {
   /// Empty when the response was uploaded before the multi-bitrate feature
   /// shipped — readers should fall back to [topResponseVideoUrl].
   final Map<String, String> topResponseVideoVariants;
+  /// HLS master manifest for the opponent video (see [hlsManifestUrl]).
+  /// Empty until the transcode worker finishes the response leg —
+  /// readers fall back to [topResponseVideoVariants]/[topResponseVideoUrl].
+  final String topResponseHlsManifestUrl;
 
   ChallengeModel({
   required this.id,
@@ -93,6 +97,7 @@ class ChallengeModel {
   this.topResponseUsername = '',
   this.topResponseLeague = '',
   this.topResponseVideoVariants = const {},
+  this.topResponseHlsManifestUrl = '',
   });
 
   /// Full challenge title from the two-part description.
@@ -147,6 +152,8 @@ class ChallengeModel {
           (json['topResponseVideoVariants'] as Map<String, dynamic>?)
                   ?.map((k, v) => MapEntry(k, v?.toString() ?? '')) ??
               const {},
+      topResponseHlsManifestUrl:
+          json['topResponseHlsManifestUrl']?.toString() ?? '',
     );
   }
 }

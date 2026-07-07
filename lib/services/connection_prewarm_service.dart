@@ -46,6 +46,25 @@ class ConnectionPrewarmService {
 
   bool _started = false;
 
+  /// Origins already warmed (scheme://host[:port]) — via [start] or
+  /// [prewarmUrlOrigin]. Prevents re-handshaking the same host every
+  /// feed page.
+  final Set<String> _warmedOrigins = {};
+
+  /// Warm the origin of an arbitrary URL (e.g. the first video URL of a
+  /// freshly-loaded feed page). The media host isn't known at boot —
+  /// video URLs arrive with feed payloads — so surfaces call this the
+  /// moment they see a playable URL. Idempotent per origin,
+  /// fire-and-forget.
+  void prewarmUrlOrigin(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.hasScheme || uri.host.isEmpty) return;
+    final origin = uri.origin;
+    if (!_warmedOrigins.add(origin)) return;
+    // ignore: discarded_futures
+    _prewarmOne(origin);
+  }
+
   /// Idempotent. Call once from main() after MediaKit.ensureInitialized.
   /// Pass additional origins (R2 hostname, CDN custom domain) on top of
   /// the built-in API origin.
@@ -57,6 +76,7 @@ class ConnectionPrewarmService {
         .where((o) => o.isNotEmpty)
         .toSet() // dedupe — caller may pass the same host the default list has
         .toList();
+    _warmedOrigins.addAll(origins);
 
     // Fire all prewarms in parallel — they share no state and the only
     // resource they consume is one socket each, which the OS pool will

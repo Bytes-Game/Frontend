@@ -188,15 +188,34 @@ class VideoPlayerService {
   /// burst based on swipe velocity); this method just caps at what
   /// the pool can hold.
   void prefetch(List<String> urls) {
+    final requested = urls.toSet();
     for (final url in urls) {
       if (url.isEmpty) continue;
       if (_prefetchedUrls.contains(url)) continue;
       if (_pool.any((e) => e.url == url)) continue;
 
       // Always leave a slot for the active controller — don't let
-      // prefetch alone fill the pool. This protects against a caller
-      // asking for a prefetch window larger than the pool budget.
-      if (_pool.length >= _config.maxPoolSize - 1) break;
+      // prefetch alone fill the pool.
+      if (_pool.length >= _config.maxPoolSize - 1) {
+        // The pool is full — but often with STALE spares (reels the
+        // user scrolled past minutes ago). The old behavior was to
+        // give up here, which silently disabled forward-prefetch for
+        // the rest of the session once the pool filled: every swipe
+        // after that landed on a cold controller (worst on the 2-slot
+        // low-RAM tiers). Instead, evict the oldest prefetch entry
+        // that is NOT part of the window we're warming right now.
+        // Non-prefetch (active/promoted) entries are never touched.
+        final evictable = _pool
+            .where((e) => e.isPrefetch && !requested.contains(e.url))
+            .toList()
+          ..sort((a, b) => a.lastUsed.compareTo(b.lastUsed));
+        if (evictable.isEmpty) break; // genuinely no room — stop
+        final victim = evictable.first;
+        _pool.remove(victim);
+        _prefetchedUrls.remove(victim.url);
+        // ignore: discarded_futures
+        victim.controller.dispose();
+      }
 
       final controller = VideoPlayerController.networkUrl(Uri.parse(url));
       // ignore: discarded_futures

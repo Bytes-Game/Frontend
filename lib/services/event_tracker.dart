@@ -1054,22 +1054,41 @@ class EventTracker {
     final batch = List<Map<String, dynamic>>.from(_eventQueue);
     _eventQueue.clear();
 
+    // trackEventsBatch swallows its own exceptions and reports failure
+    // via the returned bool — it never throws. An earlier version of
+    // this method only re-queued inside a catch block, which made the
+    // re-queue path unreachable and silently dropped every failed
+    // batch (offline rides, backend deploys, transient 5xx). Check the
+    // bool; keep the try/catch as belt-and-suspenders in case the API
+    // layer ever regains the ability to throw.
+    var ok = false;
     try {
-      await ApiService.trackEventsBatch(batch);
+      ok = await ApiService.trackEventsBatch(batch);
     } catch (e) {
-      // On failure, re-queue events (they'll be retried next flush)
       if (kDebugMode) {
-        print('EventTracker flush failed: $e');
+        print('EventTracker flush threw: $e');
       }
-      // Cap queue size to prevent unbounded memory growth
-      if (_eventQueue.length + batch.length <= _maxQueueSize) {
-        _eventQueue.insertAll(0, batch);
-      } else {
-        // Drop oldest events, keep newest
-        final space = _maxQueueSize - _eventQueue.length;
-        if (space > 0) {
-          _eventQueue.insertAll(0, batch.sublist(batch.length - space));
-        }
+      ok = false;
+    }
+    if (!ok) {
+      _requeue(batch);
+    }
+  }
+
+  /// Put a failed batch back at the head of the queue so it retries on
+  /// the next flush, dropping the oldest events past [_maxQueueSize] to
+  /// bound memory during long offline stretches.
+  void _requeue(List<Map<String, dynamic>> batch) {
+    if (kDebugMode) {
+      print('EventTracker flush failed — re-queueing ${batch.length} events');
+    }
+    if (_eventQueue.length + batch.length <= _maxQueueSize) {
+      _eventQueue.insertAll(0, batch);
+    } else {
+      // Drop oldest events, keep newest
+      final space = _maxQueueSize - _eventQueue.length;
+      if (space > 0) {
+        _eventQueue.insertAll(0, batch.sublist(batch.length - space));
       }
     }
   }

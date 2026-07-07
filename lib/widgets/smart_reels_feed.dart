@@ -9,6 +9,7 @@ import 'package:myapp/pages/challenge_detail_page.dart';
 import 'package:myapp/pages/profile_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/connection_prewarm_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/services/video_player_service.dart';
@@ -152,6 +153,30 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   static const int _velocitySamples = 4;
   static const Duration _burstWindow = Duration(milliseconds: 1500);
 
+  // ─── Rich playback signals (complete / loop / rewatch / impression) ──
+  // The backend has dedicated ranking pipelines for these events
+  // (completion & loop caches, impression bounce-classification,
+  // scroll-back boosts) that previously only received data from the
+  // retired HomeFeedPage — the live feed emitted view/skip only. The
+  // listener below watches the ACTIVE reel's controller and derives:
+  //   * complete — playhead crossed 95% of duration (once per reel-view)
+  //   * loop     — position wrapped back to the start after looping
+  // Impressions (with true dwell) and scroll-backs are emitted from the
+  // page-transition path since they're about navigation, not playback.
+  VideoPlayerController? _listenedController;
+  VoidCallback? _playbackListener;
+  bool _completeTracked = false;
+  int _loopCount = 0;
+  Duration _lastPlaybackPos = Duration.zero;
+  // Cap loop events per reel-view so a video left running in a pocket
+  // doesn't flood the queue — the ranker's loop cache counts rows, and
+  // 3 loops already saturates the "they love it" signal.
+  static const int _maxLoopEvents = 3;
+  // Content IDs that already emitted a `view` this widget lifetime —
+  // a second qualifying watch of the same reel emits `rewatch` instead
+  // (stronger positive for the LTR/embedding label mapping).
+  final Set<String> _viewTracked = <String>{};
+
   @override
   void initState() {
     super.initState();
@@ -168,6 +193,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   @override
   void dispose() {
     _initialWatchTimer?.cancel();
+    _detachPlaybackListener();
     _flushCurrentItemEvent(isSkip: false); // best-effort save on leave
     WidgetsBinding.instance.removeObserver(this);
     _pageController.dispose();
@@ -183,10 +209,13 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive) {
       VideoPlayerService.instance.pauseAll();
+      // Paused controllers stop emitting position ticks, but detach
+      // anyway so a resume-into-a-different-reel can't double-listen.
+      _detachPlaybackListener();
       _flushCurrentItemEvent(isSkip: false);
     } else if (state == AppLifecycleState.resumed) {
       _currentItemStart = DateTime.now();
-      _playCurrent();
+      _playCurrent(); // re-attaches the playback listener
     }
   }
 
@@ -256,8 +285,27 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
         }
       });
     }
-    // Kick off autoplay on the first real item.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _playCurrent());
+    // Kick off autoplay on the first real item — and warm the prefetch
+    // window immediately. Prefetch previously only ran on page CHANGES,
+    // so the very first swipe of every session always landed on a cold
+    // controller (fresh socket + init + decoder warm-up) no matter how
+    // long the user watched reel 0.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _playCurrent();
+      _prefetchUpcomingVideos();
+    });
+    // Cut the cold-connection tax for the media origin: the app can't
+    // know the R2/CDN hostname until real video URLs arrive, so the
+    // boot-time prewarm only covers the API host. Warm the video
+    // origin(s) as soon as a page lands — for page 1 this overlaps the
+    // first controller's own handshake, but every later-session origin
+    // (CDN switch, custom domain) gets covered for free.
+    for (final entry in _items.take(4)) {
+      if (entry is _ReelItem && entry.videoUrl.isNotEmpty) {
+        ConnectionPrewarmService.instance.prewarmUrlOrigin(entry.videoUrl);
+      }
+    }
   }
 
   Future<void> _loadNextPage({bool refresh = false}) async {
@@ -367,8 +415,26 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // anything else — _prefetchUpcomingVideos below consults it.
     _recordSwipe();
 
+    // Stop watching the outgoing reel's playback before its exit event
+    // fires — otherwise its controller can emit one more position tick
+    // and log a loop/complete attributed to a reel we already left.
+    _detachPlaybackListener();
+
     // Record the exit of the *previous* item.
     _flushCurrentItemEvent(isSkip: _wasQuickSkip());
+
+    // Back-swipe = the user actively sought out earlier content. One of
+    // the strongest positive signals the ranker consumes (scroll-back
+    // cache feeds a dedicated score bonus).
+    if (index < prevIndex && index < _items.length) {
+      final target = _items[index];
+      if (target is _ReelItem) {
+        EventTracker.instance.trackScrollBack(
+          contentId: target.id,
+          contentType: target.type,
+        );
+      }
+    }
 
     EventTracker.instance.trackSwipe(
       target: 'home_reels_scroll',
@@ -407,6 +473,19 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     final watched = DateTime.now().difference(_currentItemStart!).inMilliseconds;
     final totalMs = state?.controller.value.duration.inMilliseconds ?? 0;
 
+    // Impression with true dwell — one per reel exit, INCLUDING quick
+    // skips. The backend diverts these into its Redis impression
+    // aggregator, which classifies dwell (<500ms bounce / 500-1500
+    // curiosity / >3000 interest) and nudges CategoryAffinity + bounce
+    // penalties. It deliberately doesn't hit Postgres, so volume is fine.
+    if (item is _ReelItem && item.id.isNotEmpty) {
+      EventTracker.instance.trackImpression(
+        contentId: item.id,
+        contentType: item.type,
+        dwellMs: watched,
+      );
+    }
+
     if (isSkip) {
       EventTracker.instance.trackSkip(
         contentId: item.id,
@@ -415,12 +494,24 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
         totalDurationMs: totalMs,
       );
     } else if (watched >= 300) {
-      EventTracker.instance.trackView(
-        contentId: item.id,
-        contentType: item.type,
-        watchDurationMs: watched,
-        totalDurationMs: totalMs,
-      );
+      // Second+ qualifying watch of the same reel this session is a
+      // rewatch — a stronger positive label for the LTR/embedding
+      // pipelines than a plain view.
+      if (!_viewTracked.add(item.id)) {
+        EventTracker.instance.trackRewatch(
+          contentId: item.id,
+          contentType: item.type,
+          watchDurationMs: watched,
+          totalDurationMs: totalMs,
+        );
+      } else {
+        EventTracker.instance.trackView(
+          contentId: item.id,
+          contentType: item.type,
+          watchDurationMs: watched,
+          totalDurationMs: totalMs,
+        );
+      }
       // Also fire a watch_event so challenges.views grows in lockstep
       // with the displayed counter. The backend's RecordWatchEvent
       // dedupes per-user-per-day, so rewatching the same reel won't
@@ -490,6 +581,9 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     state.controller.setVolume(1.0);
     // ignore: discarded_futures
     state.controller.play();
+
+    // Watch this reel's playback for complete/loop signals.
+    _attachPlaybackListener(item, state.controller);
 
     // Record an initial watch event after a brief "are they still here?"
     // delay so the WatchHistoryPage has a row to show even when the user
@@ -574,6 +668,77 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     final s = _ReelPlayerState(controller: controller, url: url);
     _playerStates[index] = s;
     return s;
+  }
+
+  // ─── Playback-derived signals ────────────────────────────────────────
+
+  /// Watch the active reel's controller for completion and loops.
+  /// Attached in _playCurrent, detached on page change / dispose /
+  /// background. Only ever one listener at a time — prefetch-pool
+  /// controllers are NOT watched (their positions don't move).
+  void _attachPlaybackListener(_ReelItem item, VideoPlayerController c) {
+    _detachPlaybackListener();
+    _completeTracked = false;
+    _loopCount = 0;
+    _lastPlaybackPos = c.value.position;
+    void listener() {
+      final v = c.value;
+      if (!v.isInitialized) return;
+      final dur = v.duration;
+      if (dur <= Duration.zero) return;
+      final pos = v.position;
+
+      // Completion: playhead reached 95%. Fires once per reel-view; a
+      // wrap-detected loop below also implies completion, so mark there
+      // too in case the position listener never samples the tail.
+      if (!_completeTracked && pos.inMilliseconds >= dur.inMilliseconds * 0.95) {
+        _completeTracked = true;
+        EventTracker.instance.trackComplete(
+          contentId: item.id,
+          contentType: item.type,
+          totalDurationMs: dur.inMilliseconds,
+        );
+      }
+
+      // Loop: position jumped backwards by more than half the video —
+      // setLooping(true) wraps silently, so a big negative delta from
+      // the tail is the only observable. Ignore small backward jitter
+      // (seek precision) via the half-duration threshold.
+      if (_lastPlaybackPos.inMilliseconds - pos.inMilliseconds >
+          dur.inMilliseconds ~/ 2) {
+        if (!_completeTracked) {
+          _completeTracked = true;
+          EventTracker.instance.trackComplete(
+            contentId: item.id,
+            contentType: item.type,
+            totalDurationMs: dur.inMilliseconds,
+          );
+        }
+        _loopCount++;
+        if (_loopCount <= _maxLoopEvents) {
+          EventTracker.instance.trackLoop(
+            contentId: item.id,
+            contentType: item.type,
+            loopNumber: _loopCount,
+          );
+        }
+      }
+      _lastPlaybackPos = pos;
+    }
+
+    _playbackListener = listener;
+    _listenedController = c;
+    c.addListener(listener);
+  }
+
+  void _detachPlaybackListener() {
+    final c = _listenedController;
+    final l = _playbackListener;
+    if (c != null && l != null) {
+      c.removeListener(l);
+    }
+    _listenedController = null;
+    _playbackListener = null;
   }
 
   /// Add `now` to the rolling swipe-velocity window, trimming the
@@ -1342,10 +1507,12 @@ class _ReelItem implements _FeedEntry {
         chosenVideoUrl =
             variantPick?.isNotEmpty == true ? variantPick! : fallbackUrl;
       }
-      // Same logic for the opponent video — picks the right bitrate
-      // for the user's current network so a battle left-swipe doesn't
-      // suddenly stutter on cellular even though the challenger
-      // played fine.
+      // Same logic for the opponent video — HLS manifest first (the
+      // worker transcodes battle responses too), then the network-
+      // appropriate MP4 variant, then the canonical URL. Keeps a battle
+      // left-swipe from stuttering on cellular even though the
+      // challenger played fine.
+      final opponentHls = (c['topResponseHlsManifestUrl'] as String?) ?? '';
       final opponentFallback = (c['topResponseVideoUrl'] as String?) ?? '';
       final opponentVariantPick = NetworkQualityService.instance.pickVariantUrl(
         _coerceVariantsMap(c['topResponseVideoVariants']),
@@ -1360,9 +1527,11 @@ class _ReelItem implements _FeedEntry {
         creatorUsername: (c['creatorUsername'] as String?) ?? '',
         creatorLeague: (c['creatorLeague'] as String?) ?? '',
         opponentResponseId: (c['topResponseId'] as String?) ?? '',
-        opponentVideoUrl: opponentVariantPick?.isNotEmpty == true
-            ? opponentVariantPick!
-            : opponentFallback,
+        opponentVideoUrl: opponentHls.isNotEmpty
+            ? opponentHls
+            : (opponentVariantPick?.isNotEmpty == true
+                ? opponentVariantPick!
+                : opponentFallback),
         opponentThumbnailUrl: (c['topResponseThumbnailUrl'] as String?) ?? '',
         opponentUsername: (c['topResponseUsername'] as String?) ?? '',
         opponentLeague: (c['topResponseLeague'] as String?) ?? '',
@@ -1410,9 +1579,11 @@ class _ReelItem implements _FeedEntry {
       creatorUsername: c.creatorUsername,
       creatorLeague: c.creatorLeague,
       opponentResponseId: c.topResponseId,
-      opponentVideoUrl: opponentVariantPick?.isNotEmpty == true
-          ? opponentVariantPick!
-          : c.topResponseVideoUrl,
+      opponentVideoUrl: c.topResponseHlsManifestUrl.isNotEmpty
+          ? c.topResponseHlsManifestUrl
+          : (opponentVariantPick?.isNotEmpty == true
+              ? opponentVariantPick!
+              : c.topResponseVideoUrl),
       opponentThumbnailUrl: c.topResponseThumbnailUrl,
       opponentUsername: c.topResponseUsername,
       opponentLeague: c.topResponseLeague,
@@ -1657,6 +1828,16 @@ class _ReelTileState extends State<_ReelTile>
       activeController.pause();
     }
     setState(() => _isPaused = !_isPaused);
+    // Deliberate pauses are retention signals (reading a caption,
+    // studying the frame) — the ranker maps video_pause/video_play to
+    // dwell-intent. Fired after the flip so isPaused reflects the NEW
+    // state.
+    EventTracker.instance.trackPauseToggle(
+      contentId: widget.item.id,
+      contentType: widget.item.type,
+      isPaused: _isPaused,
+      positionMs: activeController.value.position.inMilliseconds,
+    );
   }
 
   void _doubleTapLike() {
@@ -1719,6 +1900,13 @@ class _ReelTileState extends State<_ReelTile>
           'contentId': widget.item.id,
           'contentType': widget.item.type,
         },
+      );
+      // Dedicated battle_switch event alongside the generic swipe —
+      // the backend's content-event taxonomy scores it as active
+      // engagement with the battle format (side 1 = opponent).
+      EventTracker.instance.trackBattleSwitch(
+        challengeId: widget.item.id,
+        side: show ? 1 : 0,
       );
     }
   }
