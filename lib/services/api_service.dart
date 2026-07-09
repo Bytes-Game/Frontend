@@ -1207,6 +1207,35 @@ class ApiService {
     }
   }
 
+  /// GET /api/v1/search/recent — the caller's own recent queries (the
+  /// same list the For You ranker's search-affinity signal reads).
+  static Future<List<String>> getRecentSearches() async {
+    try {
+      final res = await _authHttp.get(Uri.parse('$_base/api/v1/search/recent'));
+      if (res.statusCode == 200) {
+        final body = json.decode(res.body) as Map<String, dynamic>;
+        return (body['recent'] as List? ?? []).map((e) => e.toString()).toList();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// GET /api/v1/search/trending — the platform's current top queries.
+  static Future<List<String>> getTrendingSearches() async {
+    try {
+      final res = await _authHttp.get(Uri.parse('$_base/api/v1/search/trending'));
+      if (res.statusCode == 200) {
+        final body = json.decode(res.body) as Map<String, dynamic>;
+        return (body['trending'] as List? ?? []).map((e) => e.toString()).toList();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
   /// Empty search shape — every section returns an empty list so callers
   /// don't need null-checks on individual keys.
   static Map<String, dynamic> _emptySearchResponse() => {

@@ -60,6 +60,22 @@ class _SearchPageState extends State<SearchPage>
   String _lastQuery = '';
   bool _lastQueryHadResultTap = false;
 
+  // Monotonic search sequence — package:http can't abort an in-flight
+  // request, so instead we DROP stale responses: fast typers fire
+  // several debounced searches and the responses can land out of order,
+  // which used to let an older query's results overwrite a newer one's.
+  int _searchSeq = 0;
+
+  // Server hints from the last search response (search_ctr.go):
+  // _related = the results are a trending fallback for a zero-hit query;
+  // _intent = "user" | "category:<x>" | "general" for section ordering.
+  bool _related = false;
+  String _intent = 'general';
+
+  // Empty-state suggestion rows (loaded once).
+  List<String> _recentSearches = [];
+  List<String> _trendingSearches = [];
+
   @override
   String get pageName => 'search_page';
 
@@ -79,6 +95,18 @@ class _SearchPageState extends State<SearchPage>
       _previewCoord.clearActive();
     });
     _loadExploreChallenges();
+    _loadSearchSuggestions();
+  }
+
+  Future<void> _loadSearchSuggestions() async {
+    final recent = await ApiService.getRecentSearches();
+    final trending = await ApiService.getTrendingSearches();
+    if (mounted) {
+      setState(() {
+        _recentSearches = recent;
+        _trendingSearches = trending;
+      });
+    }
   }
 
   @override
@@ -137,13 +165,16 @@ class _SearchPageState extends State<SearchPage>
       });
       return;
     }
-    _debounce = Timer(const Duration(milliseconds: 300), () => _search(query));
+    // 150ms: fast enough to feel instant while typing, slow enough that
+    // a steady typist doesn't fire a request per keystroke.
+    _debounce = Timer(const Duration(milliseconds: 150), () => _search(query));
   }
 
   Future<void> _search(String query) async {
     if (query.trim().isEmpty) return;
     setState(() => _loading = true);
     final start = DateTime.now();
+    final seq = ++_searchSeq;
 
     // Pass the userId so the backend can apply personalization signals
     // (FoF boost on accounts, category-affinity on challenges, etc.).
@@ -151,6 +182,9 @@ class _SearchPageState extends State<SearchPage>
     final userId = dp.user?.id ?? '';
 
     final result = await ApiService.searchAll(query.trim(), userId: userId);
+    // A newer search superseded this one while it was in flight — drop
+    // this response entirely (results AND analytics).
+    if (seq != _searchSeq) return;
     if (mounted) {
       final accounts = (result['accounts'] as List? ?? [])
           .map((j) => UserModel.fromJson(j as Map<String, dynamic>))
@@ -189,6 +223,8 @@ class _SearchPageState extends State<SearchPage>
         _accounts = accounts;
         _battles = battles;
         _shorts = shorts;
+        _related = result['related'] == true;
+        _intent = (result['intent'] as String?) ?? 'general';
         _loading = false;
         _hasSearched = true;
       });
@@ -324,7 +360,69 @@ class _SearchPageState extends State<SearchPage>
     }
     return RefreshIndicator(
       onRefresh: () => _loadExploreChallenges(refresh: true),
-      child: _challengeGrid(_exploreChallenges, 'explore'),
+      child: CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          if (_recentSearches.isNotEmpty || _trendingSearches.isNotEmpty)
+            SliverToBoxAdapter(child: _suggestionRows()),
+          SliverFillRemaining(
+            hasScrollBody: true,
+            child: _challengeGrid(_exploreChallenges, 'explore'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Recent (yours) + Trending (everyone's) query chips above the
+  /// empty-state grid. Tapping one runs the search immediately — the
+  /// classic TikTok/IG search entry pattern.
+  Widget _suggestionRows() {
+    Widget chipRow(String label, IconData icon, List<String> queries) {
+      if (queries.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Icon(icon, size: 16,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Wrap(
+                spacing: 6,
+                children: queries.take(6).map((q) {
+                  return ActionChip(
+                    label: Text(q, style: const TextStyle(fontSize: 12)),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () {
+                      EventTracker.instance.trackTap(
+                        target: 'search_suggestion_${label.toLowerCase()}',
+                        pageName: pageName,
+                        params: {'query': q},
+                      );
+                      _searchCtrl.text = q;
+                      _search(q);
+                    },
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        chipRow('Recent', Icons.history, _recentSearches),
+        chipRow('Trending', Icons.trending_up, _trendingSearches),
+        const SizedBox(height: 8),
+      ],
     );
   }
 
@@ -357,6 +455,16 @@ class _SearchPageState extends State<SearchPage>
       );
     }
 
+    // Build the three sections separately so the server's intent hint can
+    // order them: username-shaped queries lead with Accounts (default),
+    // topic-shaped queries lead with content.
+    final accountsSection = <Widget>[
+      if (accountsHead.isNotEmpty) ...[
+        _sectionHeader('Accounts', onSeeAll: () => _tabCtrl.animateTo(1)),
+        ...accountsHead.asMap().entries.map((e) => _accountTile(e.value, e.key)),
+      ],
+    ];
+
     return RefreshIndicator(
       // Pull-to-refresh re-runs the active query so the user can shake
       // up the result ordering — same TikTok/IG behavior as the home reels.
@@ -367,13 +475,31 @@ class _SearchPageState extends State<SearchPage>
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 16),
       children: [
-        if (accountsHead.isNotEmpty) ...[
-          _sectionHeader('Accounts', onSeeAll: () => _tabCtrl.animateTo(1)),
-          ...accountsHead
-              .asMap()
-              .entries
-              .map((e) => _accountTile(e.value, e.key)),
-        ],
+        // Zero-result rescue banner: these results are trending content,
+        // not matches — say so instead of pretending the query hit.
+        if (_related)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            child: Row(
+              children: [
+                Icon(Icons.trending_up,
+                    size: 18, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'No exact matches for "$_lastQuery" — trending now:',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        // Content-intent queries (intent = "category:x") lead with content;
+        // everything else keeps Accounts first.
+        if (!_intent.startsWith('category:')) ...accountsSection,
         if (battlesHead.isNotEmpty) ...[
           _sectionHeader('Battles', onSeeAll: () => _tabCtrl.animateTo(2)),
           SizedBox(
@@ -418,6 +544,8 @@ class _SearchPageState extends State<SearchPage>
             ),
           ),
         ],
+        // Content-intent ordering: accounts trail the content sections.
+        if (_intent.startsWith('category:')) ...accountsSection,
       ],
       ),
     );
