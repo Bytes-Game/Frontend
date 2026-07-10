@@ -1,0 +1,41 @@
+name: frontend-ci
+
+# Flutter analyze + test on every push touching the app. Note: devb is a
+# bare gitlink in this repo (backend source lives in the gobackend repo,
+# which has its own CI) — nothing here may depend on devb contents.
+
+on:
+  push:
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'pubspec.yaml'
+      - '.github/workflows/frontend-ci.yml'
+  pull_request:
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'pubspec.yaml'
+  workflow_dispatch: {}
+
+jobs:
+  analyze-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      # --no-fatal-infos: ~50 pre-existing info-level lints (deprecated
+      # withOpacity etc.) predate CI; errors and warnings still fail.
+      - name: flutter analyze
+        run: flutter analyze --no-fatal-infos
+
+      - name: flutter test
+        run: flutter test

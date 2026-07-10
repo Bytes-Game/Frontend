@@ -60,6 +60,14 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
   final List<String> _tags = [];
   bool _busy = false;
 
+  // EARLY UPLOAD: the video is final the moment this page opens (trim
+  // just finished), so processing + upload start NOW and run while the
+  // user types. By Post time the bytes are usually already in R2 and
+  // posting is one API call — instant. If the user backs out, the
+  // prepared job is abandoned.
+  UploadJob? _preparedJob;
+  bool _submitted = false;
+
   // ── Suggestion caches ──────────────────────────────────────────────
   // The SuggestField widget pulls these directly from props on every
   // build — when the async fetch lands and we setState, the overlay
@@ -105,10 +113,32 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
     // populate the moment the user focuses either one.
     _refreshPrefixSuggestions('');
     _refreshSubjectSuggestions('');
+    // EARLY UPLOAD: the video is final the moment this page opens, so
+    // processing + upload start NOW and run while the user types the
+    // metadata — by Post time the bytes are usually already in R2.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final dp = Provider.of<DataProvider>(context, listen: false);
+      final creatorId = dp.user?.id ?? '';
+      if (creatorId.isEmpty) return;
+      _preparedJob = UploadJobManager.instance.prepareChallenge(
+        creatorId: creatorId,
+        sourcePath: widget.processedSourcePath,
+      );
+      EventTracker.instance.trackUploadStep(
+        uploadType: 'challenge',
+        step: 'early_upload_started',
+      );
+    });
   }
 
   @override
   void dispose() {
+    // Back-swipe / pop without posting → quietly drop the prepared
+    // early upload. _submitted guards the intended pop after Post.
+    if (!_submitted && _preparedJob != null) {
+      UploadJobManager.instance.abandonPrepared(_preparedJob!);
+    }
     _prefixCtl.dispose();
     _subjectCtl.dispose();
     super.dispose();
@@ -188,23 +218,36 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
       },
     );
 
-    UploadJobManager.instance.submitChallenge(
-      creatorId: creatorId,
-      sourcePath: widget.processedSourcePath,
-      meta: ChallengeSubmissionMeta(
-        prefix: _prefixCtl.text.trim(),
-        subject: _subjectCtl.text.trim(),
-        visibility: _visibility,
-        category: _category,
-        // Tags ride in on the emotionTags slot for now — the
-        // backend's emotion column was never used as a hard constraint
-        // and the column is JSONB so it accepts whatever strings we
-        // throw at it. A follow-up will rename the column / API field
-        // to "tags" cleanly; for this release we're keeping the
-        // payload shape stable so older builds keep working.
-        emotionTags: _tags,
-      ),
+    final meta = ChallengeSubmissionMeta(
+      prefix: _prefixCtl.text.trim(),
+      subject: _subjectCtl.text.trim(),
+      visibility: _visibility,
+      category: _category,
+      // Tags ride in on the emotionTags slot for now — the
+      // backend's emotion column was never used as a hard constraint
+      // and the column is JSONB so it accepts whatever strings we
+      // throw at it. A follow-up will rename the column / API field
+      // to "tags" cleanly; for this release we're keeping the
+      // payload shape stable so older builds keep working.
+      emotionTags: _tags,
     );
+
+    // Prepared path: the upload has (usually) been running since this
+    // page opened — finalize attaches the metadata. Fallback path (no
+    // prepared job, e.g. creatorId raced empty at page open): classic
+    // full pipeline. Both are fire-and-forget from this page's POV.
+    _submitted = true;
+    final prepared = _preparedJob;
+    if (prepared != null) {
+      // ignore: discarded_futures
+      UploadJobManager.instance.finalizeChallenge(prepared, meta);
+    } else {
+      UploadJobManager.instance.submitChallenge(
+        creatorId: creatorId,
+        sourcePath: widget.processedSourcePath,
+        meta: meta,
+      );
+    }
 
     Provider.of<DataProvider>(context, listen: false).bumpFeedRefresh();
     _toast('Posting in the background — you can keep browsing.');

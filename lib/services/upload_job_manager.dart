@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/services/api_service.dart';
@@ -55,6 +57,74 @@ class UploadJobManager {
   Stream<UploadJob> get onCompleted => _completedCtl.stream;
 
   // —— Public submit API ————————————————————————————————————————————
+
+  /// EARLY UPLOAD (the TikTok trick): call this the moment trimming
+  /// finishes — i.e. when the metadata page OPENS, not when the user
+  /// taps Post. Processing + upload run while they type the title, so
+  /// by Post time the bytes are usually already in R2 and
+  /// [finalizeChallenge] only has to make one API call: posting feels
+  /// instant.
+  UploadJob prepareChallenge({
+    required String creatorId,
+    required String sourcePath,
+  }) {
+    final job = UploadJob._(
+      id: _newId(),
+      kind: UploadJobKind.challenge,
+      sourcePath: sourcePath,
+      title: 'Preparing video',
+    );
+    job._creatorId = creatorId;
+    job._prepared = Completer<UploadResult?>();
+    _enqueue(job);
+    // ignore: discarded_futures
+    _runPrepare(job, userId: creatorId);
+    return job;
+  }
+
+  /// Attach metadata to a prepared job and post it. If the prepare leg
+  /// failed (network died while the user was typing), this falls back
+  /// to the full pipeline transparently — the caller never has to care
+  /// which path ran. Returns the job carrying the terminal state.
+  Future<UploadJob> finalizeChallenge(
+      UploadJob job, ChallengeSubmissionMeta meta) async {
+    job._challengeMeta = meta;
+    await _persistJobs();
+    final prepared = job._prepared;
+    if (prepared == null) {
+      // Not a prepared job — legacy full-pipeline path.
+      return job;
+    }
+    if (job._abandoned) {
+      job._abandoned = false; // user came back — un-abandon
+    }
+    final uploaded = await prepared.future;
+    if (uploaded == null) {
+      // Prepare leg failed — rerun everything with the metadata we now
+      // have. The overlay shows one fresh job instead of a dead one.
+      dismiss(job.id);
+      return submitChallenge(
+        creatorId: job._creatorId ?? '',
+        sourcePath: job.sourcePath,
+        meta: meta,
+      );
+    }
+    // ignore: discarded_futures
+    _finalizePrepared(job, uploaded, meta);
+    return job;
+  }
+
+  /// The user backed out of the create flow after a prepare started.
+  /// Marks the job so it quietly disappears when the upload leg ends
+  /// (already-uploaded R2 objects are orphaned; the backend's cleanup
+  /// job reaps objects with no challenge row).
+  void abandonPrepared(UploadJob job) {
+    if (job._prepared == null) return;
+    job._abandoned = true;
+    if (job._prepared!.isCompleted) {
+      dismiss(job.id);
+    }
+  }
 
   /// Kick off a challenge-creation pipeline. Returns the job
   /// immediately — caller can pop their navigation and let the job
@@ -142,6 +212,148 @@ class UploadJobManager {
 
   // —— Internal: job runners ———————————————————————————————————————
 
+  /// Prepare leg: processing + upload only (progress 0..0.9). Completes
+  /// [job._prepared] with the upload result (null on failure) so
+  /// [finalizeChallenge] can pick up whenever the user taps Post.
+  Future<void> _runPrepare(UploadJob job, {required String userId}) async {
+    final pathsToCleanup = <String>[];
+    try {
+      job._update((s) => s.copyWith(stage: UploadJobStage.processing));
+      final estimatedBytes = await _estimateBytes(job.sourcePath);
+
+      final processed = VideoProcessorService.instance.processStream(
+        sourcePath: job.sourcePath,
+        onProgress: (e) {
+          job._update((s) => s.copyWith(
+                stage: UploadJobStage.processing,
+                progress: e.fraction * 0.5,
+                message: 'Preparing ${e.stage}…',
+              ));
+        },
+      );
+
+      final upstream = StreamController<ProcessingArtifact>();
+      // ignore: discarded_futures
+      () async {
+        try {
+          await for (final a in processed) {
+            pathsToCleanup.add(a.path);
+            upstream.add(a);
+          }
+          await upstream.close();
+        } catch (e, st) {
+          upstream.addError(e, st);
+          await upstream.close();
+        }
+      }();
+
+      job._update((s) => s.copyWith(
+            stage: UploadJobStage.uploading,
+            progress: 0.5,
+            message: 'Uploading…',
+          ));
+
+      final uploaded = await MediaUploadService.instance.uploadStream(
+        userId: userId,
+        artifacts: upstream.stream,
+        expectedTotalBytes: estimatedBytes,
+        expectedItems: const [
+          (kind: 'thumbnail', variant: 'default', contentType: 'image/jpeg'),
+          (kind: 'video', variant: '720p', contentType: 'video/mp4'),
+        ],
+        onProgress: (p) {
+          job._update((s) => s.copyWith(
+                stage: UploadJobStage.uploading,
+                progress: 0.5 + p.fraction * 0.4,
+                activeVariant: p.activeVariant,
+                message: 'Uploading…',
+              ));
+        },
+      );
+
+      if (uploaded == null) {
+        job._prepared?.complete(null);
+        // Don't _fail() here — the user may still be typing metadata;
+        // finalizeChallenge falls back to the full pipeline on Post.
+        // Show a quiet holding state instead of a scary red entry.
+        job._update((s) => s.copyWith(
+              stage: UploadJobStage.queued,
+              progress: 0,
+              message: 'Will retry on post',
+            ));
+        return;
+      }
+
+      job._prepared?.complete(uploaded);
+      if (job._abandoned) {
+        dismiss(job.id);
+        return;
+      }
+      job._update((s) => s.copyWith(
+            stage: UploadJobStage.queued,
+            progress: 0.9,
+            message: 'Ready to post',
+          ));
+    } catch (e) {
+      if (!(job._prepared?.isCompleted ?? true)) {
+        job._prepared?.complete(null);
+      }
+      job._update((s) => s.copyWith(
+            stage: UploadJobStage.queued,
+            progress: 0,
+            message: 'Will retry on post',
+          ));
+    } finally {
+      await VideoProcessorService.instance.cleanupArtifacts(pathsToCleanup);
+    }
+  }
+
+  /// Finalize leg for a prepared job: one createChallenge call.
+  Future<void> _finalizePrepared(
+      UploadJob job, UploadResult uploaded, ChallengeSubmissionMeta meta) async {
+    final start = DateTime.now();
+    try {
+      job._update((s) => s.copyWith(
+            stage: UploadJobStage.finalizing,
+            progress: 0.96,
+            message: 'Posting…',
+          ));
+      final challenge = await ApiService.createChallenge(
+        creatorId: job._creatorId ?? '',
+        videoUrl: uploaded.defaultVideoUrl,
+        videoVariants: uploaded.videoVariants,
+        thumbnailUrl: uploaded.thumbnailUrl,
+        prefix: meta.prefix,
+        subject: meta.subject,
+        visibility: meta.visibility,
+        category: meta.category,
+        emotionTags: meta.emotionTags,
+      );
+      if (challenge == null) {
+        _fail(job, 'create_fail',
+            'Could not save the challenge. Tap retry to try again.');
+        return;
+      }
+      EventTracker.instance.trackUploadComplete(
+        uploadType: 'challenge',
+        contentId: challenge.id,
+        durationMs: DateTime.now().difference(start).inMilliseconds,
+        totalElapsedMs: DateTime.now().difference(start).inMilliseconds,
+      );
+      job._update((s) => s.copyWith(
+            stage: UploadJobStage.done,
+            progress: 1.0,
+            message: 'Posted',
+            result: challenge,
+          ));
+      _completedCtl.add(job);
+      _scheduleAutoDismiss(job);
+      await _removePersisted(job.id);
+    } catch (e) {
+      _fail(job, 'unknown', 'Something went wrong: $e');
+    }
+  }
+
   Future<void> _runChallenge(
     UploadJob job, {
     required String creatorId,
@@ -149,6 +361,10 @@ class UploadJobManager {
   }) async {
     job._creatorId = creatorId;
     job._challengeMeta = meta;
+    // Persist now that the job carries full retry info — an app kill
+    // from here on restores a tappable retry on next launch.
+    // ignore: discarded_futures
+    _persistJobs();
     final start = DateTime.now();
     EventTracker.instance.track(
       eventType: 'challenge_pipeline_start',
@@ -270,6 +486,7 @@ class UploadJobManager {
           ));
       _completedCtl.add(job);
       _scheduleAutoDismiss(job);
+      await _removePersisted(job.id);
     } on _PipelineFailure catch (f) {
       _fail(job, f.code, f.message);
     } catch (e) {
@@ -287,6 +504,8 @@ class UploadJobManager {
     required String challengeId,
   }) async {
     job._responderId = responderId;
+    // ignore: discarded_futures
+    _persistJobs();
     final start = DateTime.now();
     EventTracker.instance.track(
       eventType: 'response_pipeline_start',
@@ -390,6 +609,7 @@ class UploadJobManager {
           ));
       _completedCtl.add(job);
       _scheduleAutoDismiss(job);
+      await _removePersisted(job.id);
     } on _PipelineFailure catch (f) {
       _fail(job, f.code, f.message);
     } catch (e) {
@@ -403,6 +623,8 @@ class UploadJobManager {
 
   void _enqueue(UploadJob job) {
     activeJobs.value = [...activeJobs.value, job];
+    // ignore: discarded_futures
+    _persistJobs();
   }
 
   void _fail(UploadJob job, String code, String message) {
@@ -421,7 +643,10 @@ class UploadJobManager {
           errorCode: code,
           message: message,
         ));
-    // Failed jobs stay visible until the user retries or dismisses.
+    // Failed jobs stay visible until the user retries or dismisses —
+    // and persisted, so an app kill doesn't erase the retry option.
+    // ignore: discarded_futures
+    _persistJobs();
   }
 
   void _scheduleAutoDismiss(UploadJob job) {
@@ -429,6 +654,109 @@ class UploadJobManager {
     // notices it. Then auto-dismiss to avoid clutter — a 4-post burst
     // would otherwise leave 4 stale entries on screen forever.
     Future.delayed(const Duration(seconds: 3), () => dismiss(job.id));
+  }
+
+  // —— Internal: crash-survival persistence ————————————————————————
+  //
+  // Jobs used to live only in memory: killing the app mid-upload lost
+  // the post silently. We persist lightweight descriptors (paths +
+  // metadata, never bytes) of every job that has enough information to
+  // retry, and restore them as tappable-retry entries on next launch.
+  // A job whose source file no longer exists (temp dir purged) is
+  // dropped — retrying it could never work.
+
+  File? _persistFile;
+
+  Future<File?> _jobsFile() async {
+    if (_persistFile != null) return _persistFile;
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      _persistFile = File('${dir.path}/upload_jobs_v1.json');
+      return _persistFile;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _persistJobs() async {
+    final f = await _jobsFile();
+    if (f == null) return;
+    try {
+      final descriptors = activeJobs.value
+          .where((j) =>
+              j.state.value.stage != UploadJobStage.done && j._hasRetryInfo)
+          .map((j) => j._descriptor())
+          .toList();
+      await f.writeAsString(json.encode(descriptors), flush: true);
+    } catch (_) {}
+  }
+
+  Future<void> _removePersisted(String jobId) => _persistJobs();
+
+  /// Restore interrupted jobs from the last app run. Called once from
+  /// main() after startup; fire-and-forget.
+  Future<void> restorePersisted() async {
+    final f = await _jobsFile();
+    if (f == null) return;
+    try {
+      if (!await f.exists()) return;
+      final raw = await f.readAsString();
+      if (raw.isEmpty) return;
+      final list = json.decode(raw) as List<dynamic>;
+      var restored = 0;
+      for (final d in list) {
+        final m = d as Map<String, dynamic>;
+        final sourcePath = m['sourcePath'] as String? ?? '';
+        if (sourcePath.isEmpty || !File(sourcePath).existsSync()) continue;
+        final kind = m['kind'] == 'response'
+            ? UploadJobKind.response
+            : UploadJobKind.challenge;
+        final job = UploadJob._(
+          id: _newId(),
+          kind: kind,
+          sourcePath: sourcePath,
+          title: kind == UploadJobKind.challenge
+              ? 'Posting challenge'
+              : 'Submitting response',
+          challengeId: m['challengeId'] as String?,
+        );
+        job._creatorId = m['creatorId'] as String?;
+        job._responderId = m['responderId'] as String?;
+        final metaJson = m['meta'] as Map<String, dynamic>?;
+        if (metaJson != null) {
+          job._challengeMeta = ChallengeSubmissionMeta(
+            prefix: metaJson['prefix'] as String? ?? '',
+            subject: metaJson['subject'] as String? ?? '',
+            visibility: metaJson['visibility'] as String? ?? 'arena',
+            category: metaJson['category'] as String? ?? 'other',
+            emotionTags: (metaJson['emotionTags'] as List? ?? [])
+                .map((e) => e.toString())
+                .toList(),
+          );
+        }
+        if (!job._hasRetryInfo) continue;
+        job._update((s) => s.copyWith(
+              stage: UploadJobStage.failed,
+              errorCode: 'interrupted',
+              message: 'Upload was interrupted — tap retry',
+            ));
+        activeJobs.value = [...activeJobs.value, job];
+        restored++;
+      }
+      if (restored > 0) {
+        EventTracker.instance.track(
+          eventType: 'upload_jobs_restored',
+          contentId: 'restore',
+          contentType: 'upload',
+          metadata: {'count': restored},
+        );
+      }
+    } catch (_) {
+      // Corrupt persistence file — wipe it rather than fail every boot.
+      try {
+        await f.delete();
+      } catch (_) {}
+    }
   }
 
   Future<int> _estimateBytes(String sourcePath) async {
@@ -516,6 +844,12 @@ class UploadJob {
   String? _creatorId;
   String? _responderId;
 
+  // Early-upload (prepare/finalize) state. _prepared completes with the
+  // upload result when the prepare leg lands; _abandoned marks a job
+  // whose create-flow was backed out of before Post.
+  Completer<UploadResult?>? _prepared;
+  bool _abandoned = false;
+
   UploadJob._({
     required this.id,
     required this.kind,
@@ -527,6 +861,29 @@ class UploadJob {
   void _update(UploadJobState Function(UploadJobState) f) {
     state.value = f(state.value);
   }
+
+  /// A job is worth persisting only when a retry could actually run:
+  /// challenges need creator + metadata, responses need responder + id.
+  bool get _hasRetryInfo => switch (kind) {
+        UploadJobKind.challenge => _creatorId != null && _challengeMeta != null,
+        UploadJobKind.response => _responderId != null && challengeId != null,
+      };
+
+  Map<String, dynamic> _descriptor() => {
+        'kind': kind == UploadJobKind.response ? 'response' : 'challenge',
+        'sourcePath': sourcePath,
+        'challengeId': challengeId,
+        'creatorId': _creatorId,
+        'responderId': _responderId,
+        if (_challengeMeta != null)
+          'meta': {
+            'prefix': _challengeMeta!.prefix,
+            'subject': _challengeMeta!.subject,
+            'visibility': _challengeMeta!.visibility,
+            'category': _challengeMeta!.category,
+            'emotionTags': _challengeMeta!.emotionTags,
+          },
+      };
 }
 
 /// Bag of challenge-creation metadata captured from the metadata page

@@ -12,8 +12,10 @@ import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
+import 'package:myapp/pages/onboarding_interests_page.dart';
 import 'package:myapp/screens/login_screen.dart';
 import 'package:myapp/screens/main_shell.dart';
+import 'package:myapp/services/upload_job_manager.dart';
 import 'package:myapp/widgets/upload_status_overlay.dart';
 
 /// Sentry DSN — read at compile time from `--dart-define=SENTRY_DSN=...`.
@@ -83,6 +85,11 @@ Future<void> main() async {
   //
   // When SENTRY_DSN is empty (default for local dev) the init no-ops
   // and runApp runs directly — no overhead, no console spam.
+  // Restore any upload jobs interrupted by an app kill — they surface
+  // as tappable-retry entries in the status overlay. Fire-and-forget.
+  // ignore: discarded_futures
+  UploadJobManager.instance.restorePersisted();
+
   if (_sentryDsn.isEmpty) {
     runApp(const MyApp());
     return;
@@ -200,12 +207,48 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                       child: UploadStatusOverlay(child: child!),
                     )
                 : null,
-            home: auth.isAuthenticated
-                ? const MainShell()
-                : const LoginScreen(),
+            home: auth.restoring
+                // Cold-start session restore in flight (fast: one
+                // keystore read + one refresh call). A branded splash
+                // beats flashing the login screen at returning users.
+                ? const _RestoreSplash()
+                : auth.isAuthenticated
+                    ? (auth.needsOnboarding
+                        ? const OnboardingInterestsPage()
+                        : const MainShell())
+                    : const LoginScreen(),
           );
         },
       ),
+    );
+  }
+}
+
+/// Shown while AuthProvider.restoreSession validates the stored token.
+/// Kicks the restore off exactly once from the first build.
+class _RestoreSplash extends StatefulWidget {
+  const _RestoreSplash();
+
+  @override
+  State<_RestoreSplash> createState() => _RestoreSplashState();
+}
+
+class _RestoreSplashState extends State<_RestoreSplash> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      // ignore: discarded_futures
+      Provider.of<AuthProvider>(context, listen: false)
+          .restoreSession(context);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: Center(child: CircularProgressIndicator()),
     );
   }
 }

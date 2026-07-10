@@ -83,6 +83,13 @@ dependencies:
   # storage permissions in one place instead of three native APIs.
   permission_handler: ^11.3.1
 
+  # flutter_secure_storage: session persistence. The bearer token +
+  # user snapshot live in the platform keystore (Android
+  # EncryptedSharedPreferences, iOS Keychain) so a cold start restores
+  # the session instead of forcing a re-login — the single worst UX
+  # papercut pre-1.0.
+  flutter_secure_storage: ^9.2.2
+
   # ---------- Observability ----------
   # sentry_flutter: crash & error reporting. Free tier covers 5k events
   # per month — enough headroom for the first few thousand DAU. We

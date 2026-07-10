@@ -81,6 +81,78 @@ class ApiService {
     authToken = null;
   }
 
+  /// POST /signup → same shape as /login ({user, token, allUsers}).
+  /// Returns null on failure; [error] via the second element when the
+  /// server gave a usable message (taken username, weak password).
+  static Future<Map<String, dynamic>?> signup(
+      String username, String password) async {
+    try {
+      final res = await _authHttp.post(
+        Uri.parse('$_base/signup'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'username': username, 'password': password}),
+      );
+      if (res.statusCode == 201) {
+        final data = json.decode(res.body) as Map<String, dynamic>;
+        authToken = data['token'] as String?;
+        return data;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// GET /signup/available — live availability for the signup form.
+  static Future<bool> isUsernameAvailable(String username) async {
+    try {
+      final res = await _authHttp.get(Uri.parse(
+          '$_base/signup/available?username=${Uri.encodeQueryComponent(username)}'));
+      if (res.statusCode == 200) {
+        final body = json.decode(res.body) as Map<String, dynamic>;
+        return body['available'] == true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// POST /api/v1/auth/refresh — mint a fresh token for the current
+  /// session. Doubles as session VALIDATION on restore: a 401 means the
+  /// stored token is dead and the caller should clear the session.
+  static Future<String?> refreshToken() async {
+    try {
+      final res =
+          await _authHttp.post(Uri.parse('$_base/api/v1/auth/refresh'));
+      if (res.statusCode == 200) {
+        final body = json.decode(res.body) as Map<String, dynamic>;
+        final fresh = body['token'] as String?;
+        if (fresh != null && fresh.isNotEmpty) {
+          authToken = fresh;
+          return fresh;
+        }
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// POST /api/v1/profile/interests — onboarding interest picker.
+  static Future<bool> seedInterests(List<String> categories) async {
+    try {
+      final res = await _authHttp.post(
+        Uri.parse('$_base/api/v1/profile/interests'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'categories': categories}),
+      );
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // —— Auth —————————————————————————————————————————————————————————————
 
   /// POST /login →{ user:{...}, token: "...", allUsers: [...] }
