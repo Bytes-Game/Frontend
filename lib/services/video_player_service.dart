@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:video_player/video_player.dart';
 
 /// Tier-matched pool sizing. Set once at app start by
@@ -121,6 +122,16 @@ class VideoPlayerService {
   /// URLs that have been prefetched (initialized but paused, volume=0).
   final Set<String> _prefetchedUrls = {};
 
+  /// Session-wide feed mute state. UI toggles it (speaker icon on each
+  /// reel); every code path that restores "audible" volume routes
+  /// through [activeVolume] so a muted session stays muted across
+  /// swipes, promotions, and battle side-switches. Unmuting fires the
+  /// `unmute` ranking signal at the toggle site.
+  final ValueNotifier<bool> feedMuted = ValueNotifier(false);
+
+  /// The volume an ACTIVE (visible, playing) controller should get.
+  double get activeVolume => feedMuted.value ? 0.0 : 1.0;
+
   /// Set the runtime pool config. Safe to call after the app is
   /// already running — if the new maxPoolSize is smaller, excess
   /// entries are evicted immediately.
@@ -152,7 +163,7 @@ class VideoPlayerService {
       // Restore audible volume on promotion. Prefetched controllers
       // are created muted so a paused, off-screen video can't fight
       // the active reel for AudioFocus.
-      existing.controller.setVolume(1.0);
+      existing.controller.setVolume(activeVolume);
       return existing.controller;
     }
 
@@ -170,7 +181,7 @@ class VideoPlayerService {
     // ignore: discarded_futures
     controller.initialize().then((_) {
       // Default to audible; reels feed will mute prefetch via prefetch().
-      controller.setVolume(1.0);
+      controller.setVolume(activeVolume);
     }).catchError((_) {
       // Swallowed — caller can inspect controller.value.hasError when
       // they actually try to use the controller. Throwing here would
@@ -248,7 +259,7 @@ class VideoPlayerService {
         entry.controller.pause();
         entry.controller.setVolume(0);
       } else {
-        entry.controller.setVolume(1.0);
+        entry.controller.setVolume(activeVolume);
       }
     }
   }

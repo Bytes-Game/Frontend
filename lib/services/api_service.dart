@@ -1279,6 +1279,25 @@ class ApiService {
     }
   }
 
+  /// POST /api/v1/media/multipart — presigned S3 multipart operations
+  /// (init/part/complete/abort). Body shape per media_multipart.go.
+  static Future<Map<String, dynamic>?> mediaMultipart(
+      Map<String, dynamic> body) async {
+    try {
+      final res = await _authHttp.post(
+        Uri.parse('$_base/api/v1/media/multipart'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(body),
+      );
+      if (res.statusCode == 200) {
+        return json.decode(res.body) as Map<String, dynamic>;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// GET /api/v1/search/recent — the caller's own recent queries (the
   /// same list the For You ranker's search-affinity signal reads).
   static Future<List<String>> getRecentSearches() async {

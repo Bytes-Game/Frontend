@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui' show PointerDeviceKind;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:video_player/video_player.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/models/challenge_model.dart';
@@ -578,7 +579,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // play guarantees audible output in case a prefetch entry was
     // muted mid-promote.
     // ignore: discarded_futures
-    state.controller.setVolume(1.0);
+    state.controller.setVolume(VideoPlayerService.instance.activeVolume);
     // ignore: discarded_futures
     state.controller.play();
 
@@ -1841,9 +1842,104 @@ class _ReelTileState extends State<_ReelTile>
   }
 
   void _doubleTapLike() {
+    HapticFeedback.lightImpact();
     widget.onLike();
     setState(() => _showHeart = true);
     _heartCtl.forward(from: 0);
+  }
+
+  /// Flip session-wide feed mute. Unmuting fires trackUnmute — a
+  /// top-tier positive ranking signal ("I explicitly want to hear
+  /// this") the backend has supported all along.
+  void _toggleMute() {
+    final svc = VideoPlayerService.instance;
+    final nowMuted = !svc.feedMuted.value;
+    svc.feedMuted.value = nowMuted;
+    // ignore: discarded_futures
+    _activeState.controller.setVolume(nowMuted ? 0.0 : 1.0);
+    if (!nowMuted) {
+      EventTracker.instance.trackUnmute(
+        contentId: widget.item.id,
+        contentType: widget.item.type,
+      );
+    }
+  }
+
+  /// Long-press sheet: the explicit-negative affordance ("Not
+  /// interested" — a strong ranking signal with no UI entry point until
+  /// now) plus save/share/playback-speed.
+  void _showLongPressMenu() {
+    HapticFeedback.mediumImpact();
+    EventTracker.instance.trackLongPress(
+      contentId: widget.item.id,
+      contentType: widget.item.type,
+    );
+    final currentSpeed = _activeState.controller.value.playbackSpeed;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetCtx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.visibility_off_outlined),
+              title: const Text('Not interested'),
+              subtitle: const Text("You'll see less like this"),
+              onTap: () {
+                EventTracker.instance.trackNotInterested(
+                  contentId: widget.item.id,
+                  contentType: widget.item.type,
+                );
+                Navigator.of(sheetCtx).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text("Got it — you'll see less like this."),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.bookmark_add_outlined),
+              title: const Text('Save'),
+              onTap: () {
+                Navigator.of(sheetCtx).pop();
+                widget.onSave();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.share_outlined),
+              title: const Text('Share'),
+              onTap: () {
+                Navigator.of(sheetCtx).pop();
+                widget.onShare();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.speed_rounded),
+              title: const Text('Playback speed'),
+              trailing: Text('${currentSpeed}x'),
+              onTap: () {
+                final next = switch (currentSpeed) {
+                  1.0 => 1.5,
+                  1.5 => 2.0,
+                  _ => 1.0,
+                };
+                // ignore: discarded_futures
+                _activeState.controller.setPlaybackSpeed(next);
+                Navigator.of(sheetCtx).pop();
+                EventTracker.instance.trackTap(
+                  target: 'playback_speed',
+                  pageName: 'home_page',
+                  params: {'speed': next, 'contentId': widget.item.id},
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// The player state currently driving the visible video — primary by
@@ -1879,14 +1975,14 @@ class _ReelTileState extends State<_ReelTile>
       // ignore: discarded_futures
       widget.state.controller.pause();
       // ignore: discarded_futures
-      s.controller.setVolume(1.0);
+      s.controller.setVolume(VideoPlayerService.instance.activeVolume);
       // ignore: discarded_futures
       s.controller.play();
     } else {
       // ignore: discarded_futures
       _opponentState?.controller.pause();
       // ignore: discarded_futures
-      widget.state.controller.setVolume(1.0);
+      widget.state.controller.setVolume(VideoPlayerService.instance.activeVolume);
       // ignore: discarded_futures
       widget.state.controller.play();
     }
@@ -2016,7 +2112,30 @@ class _ReelTileState extends State<_ReelTile>
             behavior: HitTestBehavior.translucent,
             onTap: _togglePause,
             onDoubleTap: _doubleTapLike,
+            onLongPress: _showLongPressMenu,
             onHorizontalDragEnd: _onHorizontalDragEnd,
+          ),
+        ),
+
+        // Mute toggle — top-right, out of the action rail's way. This
+        // is what makes the backend's `unmute` ranking signal reachable
+        // at all: the feed used to be permanently unmuted, so the
+        // strongest "I actively want to hear this" signal never fired.
+        Positioned(
+          top: 12,
+          right: 12,
+          child: SafeArea(
+            child: ValueListenableBuilder<bool>(
+              valueListenable: VideoPlayerService.instance.feedMuted,
+              builder: (_, muted, _) => IconButton(
+                icon: Icon(
+                  muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                  color: Colors.white,
+                  shadows: const [Shadow(blurRadius: 8, color: Colors.black54)],
+                ),
+                onPressed: _toggleMute,
+              ),
+            ),
           ),
         ),
 

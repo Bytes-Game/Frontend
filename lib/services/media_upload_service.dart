@@ -76,6 +76,13 @@ class MediaUploadService {
   /// map still gets HD-ish playback.
   static const _defaultVariantLabel = '720p';
 
+  /// Videos above this size upload via S3 multipart (5MB parts, per-part
+  /// retry) instead of one monolithic PUT — a network blip costs one
+  /// part, not the whole file. Threshold > partSize guarantees ≥2 parts
+  /// (S3 requires every part except the last to be ≥5MB).
+  static const _multipartThresholdBytes = 8 * 1024 * 1024;
+  static const _partSizeBytes = 5 * 1024 * 1024;
+
   /// Run the whole upload. Returns null if any unrecoverable step
   /// fails — callers should toast and let the user retry.
   Future<UploadResult?> upload({
@@ -316,6 +323,34 @@ class MediaUploadService {
       final entry = urlByKey[slot(kind, variant)];
       if (entry == null) return false;
 
+      // Large videos go multipart: per-part retry means a mid-transfer
+      // network blip re-sends 5MB, not the whole reel. The multipart
+      // path allocates its own object key server-side, so the single-PUT
+      // presign entry for this unit simply goes unused.
+      if (kind == 'video' && art.sizeBytes > _multipartThresholdBytes) {
+        final publicUrl = await _multipartUpload(
+          kind: kind,
+          variant: variant,
+          file: File(art.path),
+          contentType: art.contentType,
+          onBytesSent: (n) {
+            sentByLabel[art.label] = n;
+            onProgress?.call(UploadProgress(
+              bytesSent: sumSent(),
+              bytesTotal: expectedTotalBytes,
+              stage: 'uploading',
+              activeVariant: art.label,
+            ));
+          },
+        );
+        if (publicUrl != null) {
+          sentByLabel[art.label] = art.sizeBytes;
+          publicUrlByLabel[art.label] = publicUrl;
+          return true;
+        }
+        return false;
+      }
+
       final unit = _UploadUnit(
         label: art.label,
         file: File(art.path),
@@ -408,6 +443,121 @@ class MediaUploadService {
       thumbnailUrl: thumbUrl,
       uploadId: uploadId,
     );
+  }
+
+  /// S3 multipart upload against R2, orchestrated through the backend's
+  /// presign endpoint (/api/v1/media/multipart). Sequence:
+  ///   init (POST ?uploads → UploadId XML) → N part PUTs (ETag headers,
+  ///   3 retries each) → complete (POST ?uploadId with the parts XML).
+  /// Returns the object's public URL, or null after abort on failure.
+  Future<String?> _multipartUpload({
+    required String kind,
+    required String variant,
+    required File file,
+    required String contentType,
+    required ValueChanged<int> onBytesSent,
+  }) async {
+    // 1) init — backend allocates the key + presigns the init call.
+    final init = await ApiService.mediaMultipart(
+        {'action': 'init', 'kind': kind, 'variant': variant});
+    final initUrl = init?['url'] as String?;
+    final key = init?['key'] as String?;
+    final publicUrl = init?['publicUrl'] as String?;
+    if (initUrl == null || key == null || publicUrl == null) return null;
+
+    final initRes = await http.post(Uri.parse(initUrl),
+        headers: {'Content-Type': contentType});
+    if (initRes.statusCode != 200) return null;
+    final uploadId =
+        RegExp(r'<UploadId>(.+?)</UploadId>').firstMatch(initRes.body)?.group(1);
+    if (uploadId == null || uploadId.isEmpty) return null;
+
+    Future<void> abort() async {
+      final ab = await ApiService.mediaMultipart(
+          {'action': 'abort', 'key': key, 'uploadId': uploadId});
+      final abortUrl = ab?['url'] as String?;
+      if (abortUrl != null) {
+        try {
+          await http.delete(Uri.parse(abortUrl));
+        } catch (_) {}
+      }
+    }
+
+    // 2) parts — sequential within this unit (units already run in
+    // parallel with each other), 5MB each, 3 attempts per part.
+    final total = await file.length();
+    final partCount = (total / _partSizeBytes).ceil();
+    final etags = <int, String>{};
+    var sent = 0;
+    final raf = await file.open();
+    try {
+      for (var part = 1; part <= partCount; part++) {
+        final offset = (part - 1) * _partSizeBytes;
+        final size =
+            (offset + _partSizeBytes <= total) ? _partSizeBytes : total - offset;
+        await raf.setPosition(offset);
+        final bytes = await raf.read(size);
+
+        var ok = false;
+        for (var attempt = 1; attempt <= maxRetries && !ok; attempt++) {
+          final p = await ApiService.mediaMultipart({
+            'action': 'part',
+            'key': key,
+            'uploadId': uploadId,
+            'partNumber': part,
+          });
+          final partUrl = p?['url'] as String?;
+          if (partUrl == null) break;
+          try {
+            final res = await http.put(Uri.parse(partUrl), body: bytes);
+            final etag = res.headers['etag'];
+            if ((res.statusCode == 200 || res.statusCode == 201) &&
+                etag != null) {
+              etags[part] = etag;
+              ok = true;
+            }
+          } catch (e) {
+            if (kDebugMode) {
+              debugPrint('multipart part $part attempt $attempt: $e');
+            }
+          }
+          if (!ok && attempt < maxRetries) {
+            await Future.delayed(
+                Duration(milliseconds: 400 * (1 << (attempt - 1))));
+          }
+        }
+        if (!ok) {
+          await abort();
+          return null;
+        }
+        sent += size;
+        onBytesSent(sent);
+      }
+    } finally {
+      await raf.close();
+    }
+
+    // 3) complete — XML listing every part's ETag, in order.
+    final comp = await ApiService.mediaMultipart(
+        {'action': 'complete', 'key': key, 'uploadId': uploadId});
+    final completeUrl = comp?['url'] as String?;
+    if (completeUrl == null) {
+      await abort();
+      return null;
+    }
+    final xml = StringBuffer('<CompleteMultipartUpload>');
+    for (var part = 1; part <= partCount; part++) {
+      xml.write(
+          '<Part><PartNumber>$part</PartNumber><ETag>${etags[part]}</ETag></Part>');
+    }
+    xml.write('</CompleteMultipartUpload>');
+    final compRes = await http.post(Uri.parse(completeUrl),
+        headers: {'Content-Type': 'application/xml'}, body: xml.toString());
+    if (compRes.statusCode != 200) {
+      await abort();
+      return null;
+    }
+    return publicUrl;
   }
 
   /// Streaming PUT with byte-level progress callbacks. We use
