@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import 'package:myapp/services/api_service.dart';
+
 /// Pre-warms the DNS + TLS connection to the video-storage origin (and
 /// optionally the API origin) at app launch, so the first reel the user
 /// taps doesn't have to pay the cold-connection tax.
@@ -91,18 +93,19 @@ class ConnectionPrewarmService {
   Future<void> _prewarmOne(String origin) async {
     try {
       // HEAD is the minimum-body request shape. We don't care about the
-      // response — we just want the OS to do the DNS lookup, TLS
-      // handshake, and keep the resulting socket in its pool. Tight
-      // timeout because if the host is down we shouldn't hang app boot.
-      final client = http.Client();
-      try {
-        final req = http.Request('HEAD', Uri.parse(origin));
-        await client.send(req).timeout(const Duration(seconds: 3));
-      } finally {
-        // Close releases our reference but the underlying socket pool
-        // entry is kept warm by the platform until keep-alive expiry.
-        client.close();
-      }
+      // response — we just want the DNS lookup + TLS handshake done and
+      // the socket pooled. Tight timeout because if the host is down we
+      // shouldn't hang app boot.
+      //
+      // Deliberately uses ApiService.httpClient (the SHARED client, not
+      // a throwaway): when that client is Cronet-backed, this very
+      // request performs the alt-svc h3 discovery — meaning every API
+      // call after boot negotiates HTTP/3 instead of the first real
+      // user-facing request paying the discovery round.
+      final req = http.Request('HEAD', Uri.parse(origin));
+      await ApiService.httpClient
+          .send(req)
+          .timeout(const Duration(seconds: 3));
     } catch (e) {
       // Log only in debug — a prewarm failure is a perf miss, not a
       // bug. Common causes: airplane mode at boot, DNS server unreachable

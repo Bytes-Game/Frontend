@@ -10,21 +10,50 @@ import 'package:myapp/models/challenge_model.dart';
 /// header through by hand. Direct-to-R2 uploads (media_upload_service)
 /// deliberately do NOT go through this — they authenticate to object storage
 /// with a presigned URL, not our token.
+///
+/// Requests run on [ApiService.httpClient] — a swappable shared client.
+/// Two wins over the old top-level http.get/post calls:
+///   1. Connection reuse: top-level helpers create a NEW client (and
+///      often a new TLS connection) per request; a shared client keeps
+///      sockets pooled.
+///   2. Transport upgrade: main() swaps in a Cronet-backed client on
+///      Android, which negotiates HTTP/3 (QUIC) with the API edge —
+///      Render's Cloudflare front advertises h3, so after the first
+///      request (alt-svc discovery, conveniently done by the boot-time
+///      prewarm) API calls ride QUIC: faster handshakes and
+///      wifi<->cellular connection migration.
 class _AuthHttp {
+  /// Ceiling on every API request. Render's free tier suspends the
+  /// service after ~15min idle and its proxy HOLDS incoming requests
+  /// while the instance cold-boots (~30-60s) — without a timeout a
+  /// request against a sleeping backend can hang the UI indefinitely
+  /// (the splash-gate hang: no login page, no feed, just a spinner).
+  /// 30s converts that into a normal failure that retry paths handle.
+  static const _requestTimeout = Duration(seconds: 30);
+
   Future<http.Response> get(Uri url, {Map<String, String>? headers}) =>
-      http.get(url, headers: _merge(headers));
+      ApiService.httpClient
+          .get(url, headers: _merge(headers))
+          .timeout(_requestTimeout);
 
   Future<http.Response> post(Uri url,
           {Map<String, String>? headers, Object? body, Encoding? encoding}) =>
-      http.post(url, headers: _merge(headers), body: body, encoding: encoding);
+      ApiService.httpClient
+          .post(url, headers: _merge(headers), body: body, encoding: encoding)
+          .timeout(_requestTimeout);
 
   Future<http.Response> patch(Uri url,
           {Map<String, String>? headers, Object? body, Encoding? encoding}) =>
-      http.patch(url, headers: _merge(headers), body: body, encoding: encoding);
+      ApiService.httpClient
+          .patch(url, headers: _merge(headers), body: body, encoding: encoding)
+          .timeout(_requestTimeout);
 
   Future<http.Response> delete(Uri url,
           {Map<String, String>? headers, Object? body, Encoding? encoding}) =>
-      http.delete(url, headers: _merge(headers), body: body, encoding: encoding);
+      ApiService.httpClient
+          .delete(url,
+              headers: _merge(headers), body: body, encoding: encoding)
+          .timeout(_requestTimeout);
 
   Map<String, String> _merge(Map<String, String>? headers) {
     final h = <String, String>{...?headers};
@@ -68,6 +97,16 @@ class UpdateProfileResult {
 /// methods and manage the returned data in their own state.
 class ApiService {
   ApiService._();
+
+  /// Shared HTTP client for every API call. Defaults to the plain Dart
+  /// client (VM tests, web, iOS); main() upgrades it to a Cronet-backed
+  /// client on Android via [useClient] for HTTP/3 to the API edge.
+  static http.Client httpClient = http.Client();
+
+  /// Swap the transport. Called once at boot; safe no-op to skip.
+  static void useClient(http.Client client) {
+    httpClient = client;
+  }
   static const _base = AppConstants.apiBaseUrl;
 
   /// Session bearer token captured on [login]. Attached to every backend
@@ -1796,7 +1835,7 @@ class ApiService {
           'metadata': {
             'surface': surface,
             'description': description,
-            if (extra != null) ...extra,
+            ...?extra,
           },
         }),
       );

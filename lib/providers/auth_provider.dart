@@ -66,7 +66,15 @@ class AuthProvider with ChangeNotifier {
       if (stored == null) return;
 
       ApiService.authToken = stored.token;
-      final fresh = await ApiService.refreshToken();
+      // Hard 6s cap on the splash screen. A sleeping Render instance
+      // holds requests for 30-60s while it cold-boots; without this cap
+      // the user stares at the splash that whole time ("app shows
+      // nothing"). Timeout == network-down: keep the stored session
+      // optimistically and let the feed's own retry take over — the
+      // in-flight refresh still completes in the background and
+      // installs the fresh token when it lands.
+      final fresh = await ApiService.refreshToken()
+          .timeout(const Duration(seconds: 6), onTimeout: () => null);
       if (fresh != null) {
         await SessionStore.save(fresh, stored.userJson);
       } else {

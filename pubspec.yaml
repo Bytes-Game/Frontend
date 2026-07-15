@@ -83,6 +83,15 @@ dependencies:
   # storage permissions in one place instead of three native APIs.
   permission_handler: ^11.3.1
 
+  # cronet_http: Chromium network stack for API calls on Android.
+  # Render's edge (Cloudflare-fronted *.onrender.com) advertises
+  # HTTP/3 — Cronet negotiates QUIC after alt-svc discovery, giving
+  # faster handshakes, loss-resilient multiplexing, and connection
+  # migration on wifi<->cellular handoffs. Wired with a try/catch
+  # fallback to the default Dart client (devices without Play
+  # Services, tests, non-Android platforms).
+  cronet_http: ^1.3.2
+
   # flutter_secure_storage: session persistence. The bearer token +
   # user snapshot live in the platform keystore (Android
   # EncryptedSharedPreferences, iOS Keychain) so a cold start restores

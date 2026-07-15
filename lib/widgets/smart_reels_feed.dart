@@ -80,6 +80,14 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   // Last error message from the API (null means success or genuinely empty).
   String? _lastError;
 
+  // Automatic recovery from a failed FIRST page. The dominant cause is
+  // Render's free-tier cold start: the instance sleeps after ~15min idle
+  // and takes 30-60s to wake, so the opening fetch times out exactly when
+  // the user launches the app after a break. Three spaced retries ride
+  // out the wake window without the user ever tapping Retry.
+  int _autoRetries = 0;
+  static const _maxAutoRetries = 3;
+
   // Active reel tracking.
   late final PageController _pageController;
   int _currentIndex = 0;
@@ -346,9 +354,22 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
         _lastError = errorMsg;
       } else {
         _lastError = null;
+        if (parsed.isNotEmpty) _autoRetries = 0;
       }
     });
     _trimMemoryIfNeeded();
+    // Self-heal a failed first load: back off 4s/8s/16s and re-pull.
+    // Combined with the 30s request timeout this spans the full cold-
+    // start wake, so the feed appears on its own once the server is up.
+    if (_lastError != null && _items.isEmpty && _autoRetries < _maxAutoRetries) {
+      _autoRetries++;
+      final delay = Duration(seconds: 4 * (1 << (_autoRetries - 1)));
+      Future.delayed(delay, () {
+        if (mounted && _items.isEmpty && !_loadingMore) {
+          _loadInitialPage();
+        }
+      });
+    }
   }
 
   /// Dispatches to the right backend endpoint based on widget.kind. Each

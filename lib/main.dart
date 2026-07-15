@@ -1,6 +1,11 @@
+import 'dart:io' show Platform;
+
+import 'package:cronet_http/cronet_http.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
+import 'package:myapp/services/api_service.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/providers/data_provider.dart';
@@ -41,6 +46,26 @@ Future<void> main() async {
   // and ExoPlayer/AVPlayer/HTMLVideoElement are lazily constructed on
   // the first VideoPlayerController.
   WidgetsFlutterBinding.ensureInitialized();
+  // HTTP/3 (QUIC) for API calls: swap the shared API client to a
+  // Cronet-backed one on Android. Render's Cloudflare edge advertises
+  // h3, so after the boot-time prewarm performs alt-svc discovery,
+  // every API call rides QUIC — faster handshakes, loss-resilient
+  // multiplexing, and connection migration across wifi<->cellular.
+  // Fail-open: devices without Play Services Cronet (or any init
+  // error) silently keep the default Dart client.
+  if (!kIsWeb && Platform.isAndroid) {
+    try {
+      final engine = CronetEngine.build(
+        cacheMode: CacheMode.disabled,
+        enableQuic: true,
+        enableHttp2: true,
+        userAgent: 'BattleArena/1.0',
+      );
+      ApiService.useClient(CronetClient.fromCronetEngine(engine));
+    } catch (e) {
+      debugPrint('Cronet unavailable, using default HTTP client: $e');
+    }
+  }
   // Cap the image cache so Flutter's default 100 MB allowance doesn't eat
   // into the heap budget shared with ExoPlayer MediaCodec instances. On
   // Android the app gets ~512 MB total (largeHeap=true); ExoPlayer needs
