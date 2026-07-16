@@ -1221,61 +1221,6 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     });
   }
 
-  // ─── 3D cube page transition ─────────────────────────────────────────
-  //
-  // Instagram-stories-style cube turn, adapted to a vertical pager: as the
-  // user swipes between reels the outgoing page folds away around the
-  // shared seam and the incoming page unfolds from it, both faces receding
-  // from the seam like two sides of a rotating cube viewed from outside.
-  //
-  // Geometry: for a page at scroll delta d = index - controller.page
-  // (d ∈ [-1, 1] while visible), rotate around the X axis by d·90° with
-  // the hinge on the edge that touches the neighboring page — top edge for
-  // the page below (d > 0), bottom edge for the page above (d < 0). The
-  // PageView's own translation keeps the hinge glued to the seam, so the
-  // rotation alone produces the cube illusion. The perspective entry makes
-  // the far half of each face shrink, which is what sells the depth.
-  static const double _cubePerspective = 0.0012;
-
-  Widget _cubePage(int index, Widget child) {
-    return AnimatedBuilder(
-      animation: _pageController,
-      builder: (context, inner) {
-        double page = _currentIndex.toDouble();
-        if (_pageController.hasClients &&
-            _pageController.position.haveDimensions) {
-          page = _pageController.page ?? page;
-        }
-        final delta = (index - page).clamp(-1.0, 1.0);
-        // Centered page (and settled neighbors) — skip the transform work
-        // entirely so steady-state playback pays zero extra cost.
-        if (delta.abs() < 0.001) return inner!;
-        // Progressive shading on the turning faces — the further a face is
-        // rotated away, the darker it gets. This is the cue that makes the
-        // depth read as a solid object instead of a flat skew (IG does the
-        // same on story cubes).
-        final shade = (delta.abs() * 0.45).clamp(0.0, 0.45);
-        return Transform(
-          alignment:
-              delta > 0 ? Alignment.topCenter : Alignment.bottomCenter,
-          transform: Matrix4.identity()
-            ..setEntry(3, 2, _cubePerspective)
-            ..rotateX(delta * math.pi / 2),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              inner!,
-              IgnorePointer(
-                child: ColoredBox(color: Color.fromRGBO(0, 0, 0, shade)),
-              ),
-            ],
-          ),
-        );
-      },
-      child: child,
-    );
-  }
-
   // ─── Manual pull-to-refresh ──────────────────────────────────────────
   //
   // Why this exists at all: Material's `RefreshIndicator` requires the host
@@ -1436,7 +1381,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                 // tile for the suggested-accounts entries the backend
                 // interleaves into the feed.
                 if (entry is _AccountsCard) {
-                  return _cubePage(index, _AccountsCardTile(card: entry));
+                  return _AccountsCardTile(card: entry);
                 }
                 final reel = entry as _ReelItem;
                 final state = _getPlayerState(index);
@@ -1444,7 +1389,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                 // with a real video URL; the fallback placeholder keeps the
                 // page renderable in the rare empty-URL edge case.
                 if (state == null) {
-                  return _cubePage(index, _Placeholder(item: reel));
+                  return _Placeholder(item: reel);
                 }
                 final currentUserId =
                     context.read<DataProvider>().user?.id ?? '';
@@ -1452,21 +1397,18 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                     reel.creatorId.isNotEmpty &&
                     currentUserId.isNotEmpty &&
                     reel.creatorId == currentUserId;
-                return _cubePage(
-                  index,
-                  _ReelTile(
-                    item: reel,
-                    state: state,
-                    isActive: index == _currentIndex,
-                    isOwner: isOwner,
-                    onLike: () => _onLike(index),
-                    onComment: () => _onComment(index),
-                    onShare: () => _onShare(index),
-                    onSave: () => _onSave(index),
-                    onVote: () => _onVote(index),
-                    onOpenDetail: () => _onOpenDetail(index),
-                    onDelete: () => _onDelete(index),
-                  ),
+                return _ReelTile(
+                  item: reel,
+                  state: state,
+                  isActive: index == _currentIndex,
+                  isOwner: isOwner,
+                  onLike: () => _onLike(index),
+                  onComment: () => _onComment(index),
+                  onShare: () => _onShare(index),
+                  onSave: () => _onSave(index),
+                  onVote: () => _onVote(index),
+                  onOpenDetail: () => _onOpenDetail(index),
+                  onDelete: () => _onDelete(index),
                 );
               },
             ),
@@ -1916,7 +1858,7 @@ class _ReelTile extends StatefulWidget {
 }
 
 class _ReelTileState extends State<_ReelTile>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   bool _showHeart = false;
   bool _isPaused = false;
   late final AnimationController _heartCtl;
@@ -1927,6 +1869,14 @@ class _ReelTileState extends State<_ReelTile>
   // lazily on first toggle so plain shorts don't allocate a second player.
   bool _showingOpponent = false;
   _ReelPlayerState? _opponentState;
+
+  // 3D cube flip between the challenger and opponent videos — the
+  // Instagram-stories cube turn, around the vertical axis. _flipDir is
+  // +1 while turning toward the opponent, -1 while turning back, 0 when
+  // settled (build renders the plain single-face layout at zero cost).
+  late final AnimationController _flipCtl;
+  int _flipDir = 0;
+  static const double _cubePerspective = 0.0012;
 
   @override
   void initState() {
@@ -1943,6 +1893,15 @@ class _ReelTileState extends State<_ReelTile>
         });
       }
     });
+    _flipCtl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 380),
+    );
+    _flipCtl.addStatusListener((s) {
+      if (s == AnimationStatus.completed && mounted) {
+        setState(() => _flipDir = 0);
+      }
+    });
   }
 
   @override
@@ -1954,7 +1913,7 @@ class _ReelTileState extends State<_ReelTile>
     // happens if we leave _showingOpponent set while the parent's
     // _playCurrent unconditionally starts the primary URL on re-entry.
     if (old.isActive && !widget.isActive && _showingOpponent) {
-      _setShowOpponent(false, track: false);
+      _setShowOpponent(false, track: false, animate: false);
     }
   }
 
@@ -1962,6 +1921,7 @@ class _ReelTileState extends State<_ReelTile>
   void dispose() {
     _opponentState?.dispose();
     _heartCtl.dispose();
+    _flipCtl.dispose();
     super.dispose();
   }
 
@@ -2107,13 +2067,28 @@ class _ReelTileState extends State<_ReelTile>
 
   /// Flip between challenger and opponent video. No-op on non-battles, on a
   /// repeat-toggle to the same side, or while the tile is offscreen.
-  void _setShowOpponent(bool show, {bool track = true}) {
+  ///
+  /// `animate: false` (offscreen reset path) swaps instantly; otherwise the
+  /// switch plays as a 3D cube turn — challenger and opponent are the two
+  /// faces of a cube rotating around the vertical axis, IG-stories style.
+  void _setShowOpponent(bool show, {bool track = true, bool animate = true}) {
     if (!widget.item.isBattle) return;
     if (show == _showingOpponent) return;
+
+    // Make sure the opponent's player exists BEFORE the first frame of the
+    // turn — both cube faces render live video during the animation.
+    if (show) _ensureOpponentState();
 
     setState(() {
       _showingOpponent = show;
       _isPaused = false; // resume on swap so the new side autoplays
+      if (animate) {
+        _flipDir = show ? 1 : -1;
+        _flipCtl.forward(from: 0);
+      } else {
+        _flipCtl.stop();
+        _flipDir = 0;
+      }
     });
 
     if (show) {
@@ -2167,6 +2142,91 @@ class _ReelTileState extends State<_ReelTile>
     }
   }
 
+  /// One side of the reel — poster behind, live video on top once its
+  /// controller has a frame. Extracted from build so the cube flip can
+  /// render BOTH sides simultaneously as the two turning faces.
+  ///
+  /// The poster stays in the tree while the video buffers (no black
+  /// screen on slow networks) and doubles as the whole face when the
+  /// opponent's controller hasn't produced a frame yet mid-turn.
+  Widget _videoFace({required bool opponent}) {
+    final item = widget.item;
+    final url = opponent ? item.opponentVideoUrl : item.videoUrl;
+    final poster = opponent && item.opponentThumbnailUrl.isNotEmpty
+        ? item.opponentThumbnailUrl
+        : item.thumbnailUrl;
+    final st = opponent ? _opponentState : widget.state;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (poster.isNotEmpty)
+          Image.network(
+            poster,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            // Don't show a broken-image icon if the CDN burps — we'd
+            // rather fall through to a black background and let the
+            // video load on top of it.
+            errorBuilder: (_, _, _) => const SizedBox.shrink(),
+          )
+        else
+          const ColoredBox(color: Colors.black),
+        if (url.isNotEmpty && st != null)
+          // ValueListenableBuilder binds the rebuild DIRECTLY to the
+          // controller's value: as soon as isInitialized flips true the
+          // VideoPlayer paints over the poster. FittedBox(cover) gives
+          // reels the edge-to-edge crop the format demands.
+          ValueListenableBuilder<VideoPlayerValue>(
+            valueListenable: st.controller,
+            builder: (context, value, _) {
+              if (!value.isInitialized) return const SizedBox.shrink();
+              return SizedBox.expand(
+                child: FittedBox(
+                  key: ValueKey(
+                      'reel-video-${item.id}-${opponent ? 'opp' : 'pri'}'),
+                  fit: BoxFit.cover,
+                  child: SizedBox(
+                    width: value.size.width,
+                    height: value.size.height,
+                    child: VideoPlayer(st.controller),
+                  ),
+                ),
+              );
+            },
+          )
+        else if (url.isEmpty && !opponent)
+          _Placeholder(item: item),
+      ],
+    );
+  }
+
+  /// Position + rotate one cube face. `delta` is the face's virtual pager
+  /// offset (0 = centered, ±1 = fully turned away): translate it by
+  /// delta·width so the hinge tracks the seam, rotate 90°·delta around
+  /// the seam-side edge, and shade it progressively as it turns — the
+  /// same recipe IG stories use, around the vertical axis.
+  Widget _cubeFace(double delta, double width, Widget face) {
+    final shade = (delta.abs() * 0.45).clamp(0.0, 0.45);
+    return Transform.translate(
+      offset: Offset(delta * width, 0),
+      child: Transform(
+        alignment: delta > 0 ? Alignment.centerLeft : Alignment.centerRight,
+        transform: Matrix4.identity()
+          ..setEntry(3, 2, _cubePerspective)
+          ..rotateY(-delta * math.pi / 2),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            face,
+            IgnorePointer(
+              child: ColoredBox(color: Color.fromRGBO(0, 0, 0, shade)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final item = widget.item;
@@ -2174,82 +2234,45 @@ class _ReelTileState extends State<_ReelTile>
     final hasVideo = activeUrl.isNotEmpty;
     final isChallenge = item.type == 'challenge';
 
-    // Pick the right poster for whichever side is currently visible. On a
-    // battle, swiping to the opponent should show the opponent's
-    // thumbnail behind the buffering frames — using the challenger's
-    // poster there would flash the wrong image for a fraction of a
-    // second while media_kit decodes the new stream's first frame.
-    final posterUrl = _showingOpponent && item.opponentThumbnailUrl.isNotEmpty
-        ? item.opponentThumbnailUrl
-        : item.thumbnailUrl;
-
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Thumbnail poster behind the video. Shown while media_kit is
-        // still buffering / decoding the first frame so the user doesn't
-        // stare at a black screen on slow networks. The Video widget
-        // paints over this once the first frame lands; we keep the
-        // poster in the tree (rather than swapping it out on a "ready"
-        // signal) because (a) the Video widget is opaque so there's no
-        // visible cost once playback starts, and (b) it gives us a free
-        // fallback if media_kit fails to start.
-        if (posterUrl.isNotEmpty)
-          Positioned.fill(
-            child: Image.network(
-              posterUrl,
-              fit: BoxFit.cover,
-              gaplessPlayback: true,
-              // Don't show a broken-image icon if the CDN burps — we'd
-              // rather fall through to a black background and let the
-              // video load on top of it.
-              errorBuilder: (_, _, _) => const SizedBox.shrink(),
-            ),
-          )
-        else
-          const ColoredBox(color: Colors.black),
-
-        // Background video / placeholder. Re-keyed when toggling to
-        // opponent so the VideoPlayer rebuilds against the new
-        // controller.
-        //
-        // ValueListenableBuilder binds the rebuild DIRECTLY to the
-        // controller's value, bypassing the previous _firstFrameSeen
-        // listener-and-flag dance that had a race window where the
-        // surface was ready but no setState had fired yet — leaving the
-        // user staring at the thumbnail until they tapped the screen.
-        //
-        // The builder fires for every value change (init, play, position,
-        // size, etc.), so as soon as isInitialized flips true the
-        // VideoPlayer paints. No opacity gating — ExoPlayer's surface
-        // typically has the first frame ready by initialize() completion,
-        // so a brief black flash is rare on Android. iOS / Web behave
-        // the same. The thumbnail underneath still shows during the
-        // ~50-200ms init handshake before isInitialized is true.
-        //
-        // FittedBox(cover) gives reels the edge-to-edge crop the
-        // format demands (never letterbox).
-        if (hasVideo)
-          ValueListenableBuilder<VideoPlayerValue>(
-            valueListenable: _activeState.controller,
-            builder: (context, value, _) {
-              if (!value.isInitialized) return const SizedBox.shrink();
-              return SizedBox.expand(
-                child: FittedBox(
-                  key: ValueKey(
-                      'reel-video-${item.id}-${_showingOpponent ? 'opp' : 'pri'}'),
-                  fit: BoxFit.cover,
-                  child: SizedBox(
-                    width: value.size.width,
-                    height: value.size.height,
-                    child: VideoPlayer(_activeState.controller),
-                  ),
+        // Media layer: poster + video for the visible side. When settled
+        // this is a single plain face (zero transform cost); during a
+        // battle side-switch it becomes two live faces of a 3D cube
+        // turning around the vertical axis — see _videoFace/_cubeFace.
+        Positioned.fill(
+          child: _flipDir == 0
+              ? _videoFace(opponent: _showingOpponent)
+              : LayoutBuilder(
+                  builder: (context, constraints) {
+                    final w = constraints.maxWidth;
+                    return AnimatedBuilder(
+                      animation: _flipCtl,
+                      builder: (context, _) {
+                        final t = Curves.easeInOutCubic
+                            .transform(_flipCtl.value);
+                        final dir = _flipDir.toDouble();
+                        // Virtual pager offsets: the outgoing face slides
+                        // from 0 to -dir while the incoming face slides
+                        // from dir to 0; _cubeFace turns each around the
+                        // seam edge to complete the cube illusion.
+                        final outDelta = -t * dir;
+                        final inDelta = (1 - t) * dir;
+                        return Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            _cubeFace(outDelta, w,
+                                _videoFace(opponent: !_showingOpponent)),
+                            _cubeFace(inDelta, w,
+                                _videoFace(opponent: _showingOpponent)),
+                          ],
+                        );
+                      },
+                    );
+                  },
                 ),
-              );
-            },
-          )
-        else if (!hasVideo)
-          _Placeholder(item: item),
+        ),
 
         // Gesture catcher (translucent — vertical swipes still reach the
         // parent PageView, horizontal swipes drive the battle side switch).
