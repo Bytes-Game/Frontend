@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
@@ -1220,6 +1221,61 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     });
   }
 
+  // ─── 3D cube page transition ─────────────────────────────────────────
+  //
+  // Instagram-stories-style cube turn, adapted to a vertical pager: as the
+  // user swipes between reels the outgoing page folds away around the
+  // shared seam and the incoming page unfolds from it, both faces receding
+  // from the seam like two sides of a rotating cube viewed from outside.
+  //
+  // Geometry: for a page at scroll delta d = index - controller.page
+  // (d ∈ [-1, 1] while visible), rotate around the X axis by d·90° with
+  // the hinge on the edge that touches the neighboring page — top edge for
+  // the page below (d > 0), bottom edge for the page above (d < 0). The
+  // PageView's own translation keeps the hinge glued to the seam, so the
+  // rotation alone produces the cube illusion. The perspective entry makes
+  // the far half of each face shrink, which is what sells the depth.
+  static const double _cubePerspective = 0.0012;
+
+  Widget _cubePage(int index, Widget child) {
+    return AnimatedBuilder(
+      animation: _pageController,
+      builder: (context, inner) {
+        double page = _currentIndex.toDouble();
+        if (_pageController.hasClients &&
+            _pageController.position.haveDimensions) {
+          page = _pageController.page ?? page;
+        }
+        final delta = (index - page).clamp(-1.0, 1.0);
+        // Centered page (and settled neighbors) — skip the transform work
+        // entirely so steady-state playback pays zero extra cost.
+        if (delta.abs() < 0.001) return inner!;
+        // Progressive shading on the turning faces — the further a face is
+        // rotated away, the darker it gets. This is the cue that makes the
+        // depth read as a solid object instead of a flat skew (IG does the
+        // same on story cubes).
+        final shade = (delta.abs() * 0.45).clamp(0.0, 0.45);
+        return Transform(
+          alignment:
+              delta > 0 ? Alignment.topCenter : Alignment.bottomCenter,
+          transform: Matrix4.identity()
+            ..setEntry(3, 2, _cubePerspective)
+            ..rotateX(delta * math.pi / 2),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              inner!,
+              IgnorePointer(
+                child: ColoredBox(color: Color.fromRGBO(0, 0, 0, shade)),
+              ),
+            ],
+          ),
+        );
+      },
+      child: child,
+    );
+  }
+
   // ─── Manual pull-to-refresh ──────────────────────────────────────────
   //
   // Why this exists at all: Material's `RefreshIndicator` requires the host
@@ -1380,7 +1436,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                 // tile for the suggested-accounts entries the backend
                 // interleaves into the feed.
                 if (entry is _AccountsCard) {
-                  return _AccountsCardTile(card: entry);
+                  return _cubePage(index, _AccountsCardTile(card: entry));
                 }
                 final reel = entry as _ReelItem;
                 final state = _getPlayerState(index);
@@ -1388,7 +1444,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                 // with a real video URL; the fallback placeholder keeps the
                 // page renderable in the rare empty-URL edge case.
                 if (state == null) {
-                  return _Placeholder(item: reel);
+                  return _cubePage(index, _Placeholder(item: reel));
                 }
                 final currentUserId =
                     context.read<DataProvider>().user?.id ?? '';
@@ -1396,18 +1452,21 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                     reel.creatorId.isNotEmpty &&
                     currentUserId.isNotEmpty &&
                     reel.creatorId == currentUserId;
-                return _ReelTile(
-                  item: reel,
-                  state: state,
-                  isActive: index == _currentIndex,
-                  isOwner: isOwner,
-                  onLike: () => _onLike(index),
-                  onComment: () => _onComment(index),
-                  onShare: () => _onShare(index),
-                  onSave: () => _onSave(index),
-                  onVote: () => _onVote(index),
-                  onOpenDetail: () => _onOpenDetail(index),
-                  onDelete: () => _onDelete(index),
+                return _cubePage(
+                  index,
+                  _ReelTile(
+                    item: reel,
+                    state: state,
+                    isActive: index == _currentIndex,
+                    isOwner: isOwner,
+                    onLike: () => _onLike(index),
+                    onComment: () => _onComment(index),
+                    onShare: () => _onShare(index),
+                    onSave: () => _onSave(index),
+                    onVote: () => _onVote(index),
+                    onOpenDetail: () => _onOpenDetail(index),
+                    onDelete: () => _onDelete(index),
+                  ),
                 );
               },
             ),
