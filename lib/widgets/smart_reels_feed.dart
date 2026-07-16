@@ -689,7 +689,61 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     controller.setLooping(true);
     final s = _ReelPlayerState(controller: controller, url: url);
     _playerStates[index] = s;
+    _armSourceFallback(item, controller);
     return s;
+  }
+
+  /// Self-healing for a dead HLS source. If the manifest the backend
+  /// advertised can't actually be loaded (storage access revoked,
+  /// rendition deleted, malformed transcode), the controller surfaces
+  /// hasError — we swap the item to its direct-MP4 fallback and rebuild
+  /// the player, instead of leaving the user staring at a black reel.
+  /// One-shot per item: after the swap videoUrl == fallbackVideoUrl and
+  /// re-arming no-ops, so an MP4 that ALSO fails just lands in the
+  /// tile's normal error UI (no retry loop).
+  void _armSourceFallback(_ReelItem item, VideoPlayerController controller) {
+    if (item.fallbackVideoUrl.isEmpty ||
+        item.videoUrl == item.fallbackVideoUrl) {
+      return;
+    }
+    void swap() {
+      if (!mounted || item.videoUrl == item.fallbackVideoUrl) return;
+      debugPrint(
+          'reel ${item.id}: HLS source failed, falling back to MP4');
+      item.videoUrl = item.fallbackVideoUrl;
+      // Drop every player state bound to the dead manifest — indices can
+      // shift under trimming, so match by URL rather than position.
+      _playerStates.removeWhere((_, st) {
+        final stale = st.controller == controller;
+        if (stale) st.dispose();
+        return stale;
+      });
+      setState(() {});
+      // If the broken reel is the one on screen, restart playback so the
+      // fallback controller spins up immediately.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _playCurrent();
+      });
+    }
+
+    // A prefetched controller may have already failed before this reel
+    // became current — the listener below would never fire (no value
+    // change), so check the current state first.
+    if (controller.value.hasError) {
+      swap();
+      return;
+    }
+    late final VoidCallback onChange;
+    onChange = () {
+      if (item.videoUrl == item.fallbackVideoUrl) {
+        controller.removeListener(onChange);
+        return;
+      }
+      if (!controller.value.hasError) return;
+      controller.removeListener(onChange);
+      swap();
+    };
+    controller.addListener(onChange);
   }
 
   // ─── Playback-derived signals ────────────────────────────────────────
@@ -1411,7 +1465,17 @@ class _ReelItem implements _FeedEntry {
   final String id;
   @override
   final String type; // "post" | "challenge"
-  final String videoUrl;
+  /// Playback URL. Mutable on purpose: starts as the HLS manifest when
+  /// the transcode worker has produced one, and _armSourceFallback
+  /// rewrites it to [fallbackVideoUrl] if that manifest fails to load
+  /// (expired storage access, deleted rendition, bad transcode). Every
+  /// consumer — player, prefetch, prewarm — reads this field, so one
+  /// swap heals them all.
+  String videoUrl;
+  /// The non-HLS (direct MP4) URL to retry with when [videoUrl] is an
+  /// HLS manifest that fails to load. Empty when videoUrl is already
+  /// the MP4 (no second fallback — the tile's error UI takes over).
+  final String fallbackVideoUrl;
   final String thumbnailUrl;
   final String caption;
   /// Stable creator user id. Required to check ownership for the
@@ -1461,6 +1525,7 @@ class _ReelItem implements _FeedEntry {
     required this.id,
     required this.type,
     required this.videoUrl,
+    this.fallbackVideoUrl = '',
     required this.thumbnailUrl,
     required this.caption,
     this.creatorId = '',
@@ -1519,16 +1584,12 @@ class _ReelItem implements _FeedEntry {
       // Empty hlsManifestUrl means the worker hasn't finished yet (or
       // isn't deployed) — fall back to the per-bitrate MP4 picker.
       final hlsUrl = (c['hlsManifestUrl'] as String?) ?? '';
-      final String chosenVideoUrl;
-      if (hlsUrl.isNotEmpty) {
-        chosenVideoUrl = hlsUrl;
-      } else {
-        final variantPick = NetworkQualityService.instance.pickVariantUrl(
-          _coerceVariantsMap(c['videoVariants']),
-        );
-        chosenVideoUrl =
-            variantPick?.isNotEmpty == true ? variantPick! : fallbackUrl;
-      }
+      final variantPick = NetworkQualityService.instance.pickVariantUrl(
+        _coerceVariantsMap(c['videoVariants']),
+      );
+      final mp4Url =
+          variantPick?.isNotEmpty == true ? variantPick! : fallbackUrl;
+      final chosenVideoUrl = hlsUrl.isNotEmpty ? hlsUrl : mp4Url;
       // Same logic for the opponent video — HLS manifest first (the
       // worker transcodes battle responses too), then the network-
       // appropriate MP4 variant, then the canonical URL. Keeps a battle
@@ -1543,6 +1604,9 @@ class _ReelItem implements _FeedEntry {
         id: c['id']?.toString() ?? '',
         type: 'challenge',
         videoUrl: chosenVideoUrl,
+        // Only meaningful when we chose HLS — if the manifest turns out
+        // to be unreachable the player retries with the direct MP4.
+        fallbackVideoUrl: hlsUrl.isNotEmpty ? mp4Url : '',
         thumbnailUrl: (c['thumbnailUrl'] as String?) ?? '',
         caption: title,
         creatorId: (c['creatorId'] as String?) ?? '',
@@ -1588,13 +1652,15 @@ class _ReelItem implements _FeedEntry {
         NetworkQualityService.instance.pickVariantUrl(c.videoVariants);
     final opponentVariantPick = NetworkQualityService.instance
         .pickVariantUrl(c.topResponseVideoVariants);
-    final chosenVideoUrl = c.hlsManifestUrl.isNotEmpty
-        ? c.hlsManifestUrl
-        : (variantPick?.isNotEmpty == true ? variantPick! : c.videoUrl);
+    final mp4Url =
+        variantPick?.isNotEmpty == true ? variantPick! : c.videoUrl;
+    final chosenVideoUrl =
+        c.hlsManifestUrl.isNotEmpty ? c.hlsManifestUrl : mp4Url;
     return _ReelItem(
       id: c.id,
       type: 'challenge',
       videoUrl: chosenVideoUrl,
+      fallbackVideoUrl: c.hlsManifestUrl.isNotEmpty ? mp4Url : '',
       thumbnailUrl: c.thumbnailUrl ?? '',
       caption: c.title,
       creatorId: c.creatorId,
