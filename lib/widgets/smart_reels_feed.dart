@@ -1870,13 +1870,21 @@ class _ReelTileState extends State<_ReelTile>
   bool _showingOpponent = false;
   _ReelPlayerState? _opponentState;
 
-  // 3D cube flip between the challenger and opponent videos — the
-  // Instagram-stories cube turn, around the vertical axis. _flipDir is
-  // +1 while turning toward the opponent, -1 while turning back, 0 when
-  // settled (build renders the plain single-face layout at zero cost).
-  late final AnimationController _flipCtl;
-  int _flipDir = 0;
+  // 3D cube turn between the challenger and opponent videos — the
+  // Instagram-stories cube, around the vertical axis. _cubeCtl.value is
+  // the continuous cube position: 0.0 = challenger face front, 1.0 =
+  // opponent face front, anything between = mid-turn. While the finger
+  // is down the value tracks the drag 1:1 in screen-widths (the cube
+  // follows the finger, forward or backward, and freezes if the finger
+  // stops); on release it settles to whichever side won — by fling
+  // velocity if the user flicked, else by whichever face is more than
+  // half turned — exactly the IG-highlights feel.
+  late final AnimationController _cubeCtl;
+  bool _cubeDragging = false;
   static const double _cubePerspective = 0.0012;
+  // Fling faster than this (px/s) settles in the fling direction even
+  // if the cube is less than half-turned.
+  static const double _cubeFlingVelocity = 300;
 
   @override
   void initState() {
@@ -1893,15 +1901,10 @@ class _ReelTileState extends State<_ReelTile>
         });
       }
     });
-    _flipCtl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 380),
-    );
-    _flipCtl.addStatusListener((s) {
-      if (s == AnimationStatus.completed && mounted) {
-        setState(() => _flipDir = 0);
-      }
-    });
+    // Unbounded-duration controller: the value is set directly while the
+    // finger drags and animated via animateTo (which supplies its own
+    // duration) on release, so no fixed duration is configured here.
+    _cubeCtl = AnimationController(vsync: this, value: 0.0);
   }
 
   @override
@@ -1912,8 +1915,16 @@ class _ReelTileState extends State<_ReelTile>
     // confusing "opponent video frozen + primary audio playing" race that
     // happens if we leave _showingOpponent set while the parent's
     // _playCurrent unconditionally starts the primary URL on re-entry.
-    if (old.isActive && !widget.isActive && _showingOpponent) {
-      _setShowOpponent(false, track: false, animate: false);
+    if (old.isActive && !widget.isActive) {
+      _cubeDragging = false;
+      if (_showingOpponent) {
+        _setShowOpponent(false, track: false, animate: false);
+      } else if (_cubeCtl.value != 0) {
+        // Mid-drag or mid-settle when the tile scrolled away: snap the
+        // cube back to the challenger face instantly.
+        _cubeCtl.stop();
+        _cubeCtl.value = 0;
+      }
     }
   }
 
@@ -1921,7 +1932,7 @@ class _ReelTileState extends State<_ReelTile>
   void dispose() {
     _opponentState?.dispose();
     _heartCtl.dispose();
-    _flipCtl.dispose();
+    _cubeCtl.dispose();
     super.dispose();
   }
 
@@ -2065,30 +2076,37 @@ class _ReelTileState extends State<_ReelTile>
     return _opponentState!;
   }
 
-  /// Flip between challenger and opponent video. No-op on non-battles, on a
-  /// repeat-toggle to the same side, or while the tile is offscreen.
+  /// Flip between challenger and opponent video. No-op on non-battles or on
+  /// a repeat-toggle to the same side. Entry point for the battle-indicator
+  /// taps and the offscreen reset.
   ///
   /// `animate: false` (offscreen reset path) swaps instantly; otherwise the
-  /// switch plays as a 3D cube turn — challenger and opponent are the two
-  /// faces of a cube rotating around the vertical axis, IG-stories style.
+  /// cube turns from wherever it currently is to the requested face.
   void _setShowOpponent(bool show, {bool track = true, bool animate = true}) {
     if (!widget.item.isBattle) return;
-    if (show == _showingOpponent) return;
 
+    if (!animate) {
+      _cubeCtl.stop();
+      _cubeCtl.value = show ? 1.0 : 0.0;
+      if (show != _showingOpponent) _commitSide(show, track: track);
+      return;
+    }
+
+    if (show == _showingOpponent && !_cubeCtl.isAnimating) return;
     // Make sure the opponent's player exists BEFORE the first frame of the
     // turn — both cube faces render live video during the animation.
     if (show) _ensureOpponentState();
+    _settleTo(show, track: track);
+  }
 
+  /// Side-effect half of a side switch: make [show] the front side, swap
+  /// playback + audio to its controller, and (optionally) emit the swipe
+  /// and battle_switch events. Cube geometry is driven separately by
+  /// [_cubeCtl] — callers pair this with a snap or a settle animation.
+  void _commitSide(bool show, {bool track = true}) {
     setState(() {
       _showingOpponent = show;
       _isPaused = false; // resume on swap so the new side autoplays
-      if (animate) {
-        _flipDir = show ? 1 : -1;
-        _flipCtl.forward(from: 0);
-      } else {
-        _flipCtl.stop();
-        _flipDir = 0;
-      }
     });
 
     if (show) {
@@ -2128,18 +2146,74 @@ class _ReelTileState extends State<_ReelTile>
     }
   }
 
-  /// Translate horizontal-fling velocity into a side switch. Threshold is
-  /// permissive so casual flicks register without triggering on micro
-  /// horizontal jitter the user didn't intend.
-  void _onHorizontalDragEnd(DragEndDetails d) {
+  /// Animate the cube from wherever it currently is to fully showing
+  /// [opponent]. Commits the side change (audio + events) up front so the
+  /// new side's video is already playing as its face swings in — the same
+  /// "commit at release" behaviour IG stories has.
+  void _settleTo(bool opponent, {bool track = true}) {
+    if (opponent != _showingOpponent) _commitSide(opponent, track: track);
+    final target = opponent ? 1.0 : 0.0;
+    final distance = (target - _cubeCtl.value).abs();
+    if (distance == 0) return;
+    // Duration scales with the remaining arc so a nearly-finished drag
+    // snaps shut quickly while a barely-started one takes the full turn.
+    // ignore: discarded_futures
+    _cubeCtl.animateTo(
+      target,
+      duration: Duration(milliseconds: (120 + 260 * distance).round()),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  // ── Finger-driven cube gestures ────────────────────────────────────────
+  // The cube position tracks the finger 1:1 (one full screen-width of drag
+  // = one quarter-turn). Dragging left turns toward the opponent, dragging
+  // right turns back; the user can reverse mid-gesture and the cube follows.
+
+  void _onHorizontalDragStart(DragStartDetails d) {
     if (!widget.item.isBattle) return;
+    _cubeDragging = true;
+    // Grab the cube wherever it is — interrupting a settle animation
+    // mid-turn hands control straight back to the finger.
+    _cubeCtl.stop();
+    // Both faces render during the turn, so the opponent's player must
+    // exist from the very first dragged frame (poster shows until its
+    // controller has a frame).
+    _ensureOpponentState();
+  }
+
+  void _onHorizontalDragUpdate(DragUpdateDetails d) {
+    if (!widget.item.isBattle || !_cubeDragging) return;
+    final w = context.size?.width ?? MediaQuery.of(context).size.width;
+    if (w <= 0) return;
+    // Finger left (negative dx) → progress toward the opponent face.
+    // Clamped hard at the ends: a two-face cube has nowhere further to
+    // turn, and the clamp is what keeps the geometry inside the tile.
+    _cubeCtl.value = (_cubeCtl.value - d.delta.dx / w).clamp(0.0, 1.0);
+  }
+
+  /// Release: pick the winning side. A real fling settles in the fling's
+  /// direction regardless of how far the cube has turned; a slow release
+  /// settles to whichever face is currently more than half showing.
+  void _onHorizontalDragEnd(DragEndDetails d) {
+    if (!widget.item.isBattle || !_cubeDragging) return;
+    _cubeDragging = false;
     final vx = d.primaryVelocity ?? 0;
-    if (vx.abs() < 200) return;
-    if (vx < 0) {
-      _setShowOpponent(true);
+    final bool toOpponent;
+    if (vx.abs() >= _cubeFlingVelocity) {
+      toOpponent = vx < 0;
     } else {
-      _setShowOpponent(false);
+      toOpponent = _cubeCtl.value >= 0.5;
     }
+    _settleTo(toOpponent);
+  }
+
+  void _onHorizontalDragCancel() {
+    if (!widget.item.isBattle || !_cubeDragging) return;
+    _cubeDragging = false;
+    // Gesture arena took the pointer away (e.g. the vertical pager won a
+    // diagonal drag) — settle to whichever side is closest, no events.
+    _settleTo(_cubeCtl.value >= 0.5, track: false);
   }
 
   /// One side of the reel — poster behind, live video on top once its
@@ -2214,14 +2288,23 @@ class _ReelTileState extends State<_ReelTile>
         transform: Matrix4.identity()
           ..setEntry(3, 2, _cubePerspective)
           ..rotateY(-delta * math.pi / 2),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            face,
-            IgnorePointer(
-              child: ColoredBox(color: Color.fromRGBO(0, 0, 0, shade)),
-            ),
-          ],
+        // ClipRect sits INSIDE the transform, so it clips in face-local
+        // coordinates before the 3D projection is applied. This is what
+        // stops the "photo leaking to the other side" mid-turn: the
+        // cover-fit video inside _videoFace lives in a FittedBox, and
+        // FittedBox does NOT clip its overflow — without this clip a
+        // wide video paints past the face's edge straight across the
+        // seam onto the neighbouring face.
+        child: ClipRect(
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              face,
+              IgnorePointer(
+                child: ColoredBox(color: Color.fromRGBO(0, 0, 0, shade)),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2238,51 +2321,67 @@ class _ReelTileState extends State<_ReelTile>
       fit: StackFit.expand,
       children: [
         // Media layer: poster + video for the visible side. When settled
-        // this is a single plain face (zero transform cost); during a
-        // battle side-switch it becomes two live faces of a 3D cube
-        // turning around the vertical axis — see _videoFace/_cubeFace.
+        // this is a single plain face (zero transform cost); mid-turn it
+        // becomes two live faces of a 3D cube rotating around the
+        // vertical axis, position driven directly by _cubeCtl (finger or
+        // settle animation) — see _videoFace/_cubeFace.
         Positioned.fill(
-          child: _flipDir == 0
-              ? _videoFace(opponent: _showingOpponent)
-              : LayoutBuilder(
-                  builder: (context, constraints) {
-                    final w = constraints.maxWidth;
-                    return AnimatedBuilder(
-                      animation: _flipCtl,
-                      builder: (context, _) {
-                        final t = Curves.easeInOutCubic
-                            .transform(_flipCtl.value);
-                        final dir = _flipDir.toDouble();
-                        // Virtual pager offsets: the outgoing face slides
-                        // from 0 to -dir while the incoming face slides
-                        // from dir to 0; _cubeFace turns each around the
-                        // seam edge to complete the cube illusion.
-                        final outDelta = -t * dir;
-                        final inDelta = (1 - t) * dir;
-                        return Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            _cubeFace(outDelta, w,
-                                _videoFace(opponent: !_showingOpponent)),
-                            _cubeFace(inDelta, w,
-                                _videoFace(opponent: _showingOpponent)),
-                          ],
-                        );
-                      },
-                    );
-                  },
-                ),
+          child: AnimatedBuilder(
+            animation: _cubeCtl,
+            builder: (context, _) {
+              final p = _cubeCtl.value;
+              // Fully settled on either face → plain single-face layout.
+              if (p <= 0.001) return _videoFace(opponent: false);
+              if (p >= 0.999) return _videoFace(opponent: true);
+              return LayoutBuilder(
+                builder: (context, constraints) {
+                  final w = constraints.maxWidth;
+                  // Challenger sits at pager offset -p (sliding out to the
+                  // left as p grows), opponent at 1-p (sliding in from the
+                  // right); _cubeFace turns each around the shared seam
+                  // edge to complete the cube illusion. The black
+                  // ColoredBox behind them is what shows through the
+                  // perspective gaps at the receding edges — the "3D space
+                  // with black borders" around the turning cube — and the
+                  // outer ClipRect guarantees nothing paints outside the
+                  // tile.
+                  return ClipRect(
+                    child: ColoredBox(
+                      color: Colors.black,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          _cubeFace(-p, w, _videoFace(opponent: false)),
+                          _cubeFace(1 - p, w, _videoFace(opponent: true)),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
         ),
 
         // Gesture catcher (translucent — vertical swipes still reach the
-        // parent PageView, horizontal swipes drive the battle side switch).
+        // parent PageView; on battles, horizontal drags drive the cube
+        // continuously, finger-following, and settle on release).
+        //
+        // The horizontal handlers are registered even on non-battles
+        // (where they no-op): the tile has always claimed horizontal
+        // drags so they don't fall through to the home page's
+        // TabBarView and yank the user between For You / Following /
+        // Explore mid-reel. Tab switching stays on the tap strip.
         Positioned.fill(
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
             onTap: _togglePause,
             onDoubleTap: _doubleTapLike,
             onLongPress: _showLongPressMenu,
+            onHorizontalDragStart: _onHorizontalDragStart,
+            onHorizontalDragUpdate: _onHorizontalDragUpdate,
             onHorizontalDragEnd: _onHorizontalDragEnd,
+            onHorizontalDragCancel: _onHorizontalDragCancel,
           ),
         ),
 
