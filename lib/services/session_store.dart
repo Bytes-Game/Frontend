@@ -8,7 +8,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 /// "is it even worth sending this?". Returns null for anything we can't
 /// parse (opaque tokens, malformed input), which callers treat as "can't
 /// tell, try it".
-DateTime? jwtExpiry(String token) {
+Map<String, dynamic>? jwtClaims(String token) {
   try {
     final parts = token.split('.');
     if (parts.length != 3) return null;
@@ -16,15 +16,25 @@ DateTime? jwtExpiry(String token) {
     var payload = parts[1];
     payload = payload.padRight(
         payload.length + ((4 - payload.length % 4) % 4), '=');
-    final claims =
-        json.decode(utf8.decode(base64Url.decode(payload)));
+    final claims = json.decode(utf8.decode(base64Url.decode(payload)));
     if (claims is! Map) return null;
-    final exp = claims['exp'];
-    if (exp is! int) return null;
-    return DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true);
+    return Map<String, dynamic>.from(claims);
   } catch (_) {
     return null;
   }
+}
+
+DateTime? jwtExpiry(String token) {
+  final exp = jwtClaims(token)?['exp'];
+  if (exp is! int) return null;
+  return DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true);
+}
+
+/// The `username` claim, i.e. who this token actually authenticates as.
+/// Used to catch a token being sent on a socket opened for someone else.
+String? jwtUsername(String token) {
+  final u = jwtClaims(token)?['username'];
+  return u is String && u.isNotEmpty ? u : null;
 }
 
 /// A restored session: the bearer token, the user snapshot captured at

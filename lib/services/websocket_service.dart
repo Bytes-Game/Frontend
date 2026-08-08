@@ -5,6 +5,7 @@ import 'dart:developer' as developer;
 
 import 'package:myapp/models/notification_model.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/session_store.dart' show jwtUsername;
 
 /// Connection status exposed as a stream so the UI can show a dot.
 enum WebSocketStatus { connected, disconnected, connecting }
@@ -43,12 +44,34 @@ class WebSocketService {
     if (_isDisposed ||_statusCtrl.isClosed) return;
     if (_username.isEmpty || _baseUrl.isEmpty) return;
 
-    _statusCtrl.add(WebSocketStatus.connecting);
     // The socket authenticates with the session token as a query param —
     // browsers can't set an Authorization header on a WebSocket handshake, and
     // the backend rejects the upgrade if the token's user doesn't match the
     // path username. (See WebsocketHandler in devb/websocket.go.)
+    //
+    // _username is captured when this service is constructed, but the token is
+    // read fresh on every attempt — including retries. After a logout/login as
+    // a DIFFERENT user, a service left over from the previous session keeps
+    // retrying its own username while picking up the new user's token, so the
+    // handshake is guaranteed to be refused, forever, every few seconds:
+    //   /ws/player2?token=<player1's token>   ← seen in the wild
+    // Detect that here and stop for good instead of retrying: the correct
+    // socket for the new user is owned by a different instance.
     final token = ApiService.authToken ?? '';
+    if (token.isEmpty) {
+      // Signed out (or not yet signed in). Nothing to authenticate with, and
+      // retrying can't conjure a token — the next login builds a new service.
+      _stopPermanently('no session token');
+      return;
+    }
+    final tokenUser = jwtUsername(token);
+    if (tokenUser != null && tokenUser != _username) {
+      _stopPermanently(
+          'token belongs to $tokenUser, this socket is for $_username');
+      return;
+    }
+
+    _statusCtrl.add(WebSocketStatus.connecting);
     final url =
         '$_baseUrl/ws/$_username?token=${Uri.encodeQueryComponent(token)}';
     developer.log('Ws: Connecting to $_baseUrl/ws/$_username', name: 'ws');
@@ -85,6 +108,17 @@ class WebSocketService {
     }).catchError((Object e) {
       _handleDrop('handshake failed: $e');
     });
+  }
+
+  /// Retire this service without scheduling a retry. Used when retrying is
+  /// provably pointless (no token, or a token for a different user) — the
+  /// condition can only change by building a new service, which the auth
+  /// flow already does on login.
+  void _stopPermanently(String why) {
+    _reconnectTimer?.cancel();
+    if (_statusCtrl.isClosed) return;
+    developer.log('WS: not connecting — $why', name: 'ws');
+    _statusCtrl.add(WebSocketStatus.disconnected);
   }
 
   /// Single exit path for "the socket is not usable" — from a synchronous

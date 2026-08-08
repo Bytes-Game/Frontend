@@ -116,9 +116,31 @@ void main() {
       expect(await ApiService.refreshSession(), TokenRefresh.unreachable);
     });
   });
+
+  _wsIdentityTests();
 }
 
 /// Stand-in for a transport-level failure (no dart:io in widget tests).
 class SocketishFailure implements Exception {
   const SocketishFailure();
+}
+
+// ── Websocket identity guard ────────────────────────────────────────────
+//
+// Observed on device: a socket opened for player2 kept retrying after the
+// user signed in as player1, picking up the NEW token each time, so the
+// backend refused every handshake — /ws/player2?token=<player1's token>.
+void _wsIdentityTests() {
+  group('jwtUsername', () {
+    test('reads the username claim', () {
+      const player1 =
+          'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6InBsYXllcjEiLCJzdWIiOiIxIiwiZXhwIjoxNzg2Nzg2NzEyLCJpYXQiOjE3ODYxODE5MTJ9.tbiivyq1tvIkoIQ3kxCP-ZSLMySLzww_izZsvKlj4Ys';
+      expect(jwtUsername(player1), 'player1');
+    });
+
+    test('null when unreadable', () {
+      expect(jwtUsername('opaque'), isNull);
+      expect(jwtUsername(''), isNull);
+    });
+  });
 }
