@@ -17,6 +17,7 @@ import 'package:http/testing.dart';
 
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/device_capabilities.dart';
+import 'package:myapp/services/local_media_server.dart';
 import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/services/video_cache_service.dart';
 
@@ -139,6 +140,182 @@ void main() {
 
   test('prefetch depth is a positive, connection-derived window', () {
     expect(VideoCacheService.instance.prefetchDepth, greaterThan(0));
+  });
+
+  // ── Prefix mode, and every way out of it ────────────────────────────
+  //
+  // Warming a sliver of many reels instead of all of a few is the whole
+  // point of the proxy, but it puts a moving part on the critical path of
+  // every video. So the requirement is not just that it works — it is
+  // that every way it can fail lands back on the whole-file downloader
+  // that shipped before it, with a complete, playable file on disk.
+  group('prefix mode and its fallbacks', () {
+    const fileSize = 4 * 1024 * 1024;
+
+    /// Records whether each request carried a Range header, which is what
+    /// distinguishes a sliver warm from a whole-file download.
+    List<String?> rangesSeen = [];
+
+    String? rangeOf(http.BaseRequest req) {
+      for (final e in req.headers.entries) {
+        if (e.key.toLowerCase() == 'range') return e.value;
+      }
+      return null;
+    }
+
+    setUp(() {
+      rangesSeen = [];
+      LocalMediaServer.instance.debugReset();
+    });
+
+    tearDown(() async {
+      await LocalMediaServer.instance.stop();
+      LocalMediaServer.instance.debugReset();
+      NetworkQualityService.instance.debugSetQuality(NetworkQuality.unknown);
+    });
+
+    /// An origin that honours ranges, tracking how many bytes it served so
+    /// a test can prove only a sliver was taken.
+    int useRangeCapableOrigin() {
+      var served = 0;
+      ApiService.useClient(MockClient.streaming((req, _) async {
+        final range = rangeOf(req);
+        rangesSeen.add(range);
+        final m = RegExp(r'bytes=(\d+)-(\d+)').firstMatch(range ?? '');
+        if (m == null) {
+          served += fileSize;
+          return http.StreamedResponse(
+              Stream.value(List.filled(fileSize, 1)), 200,
+              contentLength: fileSize);
+        }
+        final s = int.parse(m.group(1)!);
+        final e = m.group(2)!.isEmpty
+            ? fileSize - 1
+            : (int.parse(m.group(2)!) < fileSize - 1
+                ? int.parse(m.group(2)!)
+                : fileSize - 1);
+        final len = e - s + 1;
+        served += len;
+        return http.StreamedResponse(
+            Stream.value(List.filled(len, 1)), 206,
+            contentLength: len,
+            headers: {'content-range': 'bytes $s-$e/$fileSize'});
+      }));
+      return served;
+    }
+
+    test('warms only a sliver and routes playback through the proxy',
+        () async {
+      await LocalMediaServer.instance.start();
+      useRangeCapableOrigin();
+
+      VideoCacheService.instance.warm(['https://cdn/ok.mp4']);
+      expect(
+          await eventually(() =>
+              LocalMediaServer.instance.localUrlFor('https://cdn/ok.mp4') !=
+              null),
+          isTrue,
+          reason: 'a range-capable origin should produce a registered prefix');
+
+      expect(VideoCacheService.instance.playbackUrlFor('https://cdn/ok.mp4'),
+          startsWith('http://127.0.0.1:'));
+
+      // The saving that justifies the whole design: a fraction of the reel
+      // bought the same instant start as the entire reel used to.
+      final onDisk = tmp
+          .listSync()
+          .whereType<File>()
+          .fold<int>(0, (a, f) => a + f.lengthSync());
+      expect(onDisk, lessThanOrEqualTo(VideoCacheService.prefixBytes));
+      expect(onDisk * 4, lessThan(fileSize),
+          reason: 'a sliver must be a small fraction of the reel');
+    });
+
+    test('an origin that ignores Range falls back to the whole file',
+        () async {
+      await LocalMediaServer.instance.start();
+      expect(LocalMediaServer.instance.healthy, isTrue);
+
+      // Answers 200 with the full body no matter what was asked for —
+      // the classic misbehaving CDN.
+      ApiService.useClient(MockClient((req) async {
+        rangesSeen.add(rangeOf(req));
+        return http.Response.bytes(List.filled(4096, 6), 200);
+      }));
+
+      VideoCacheService.instance.warm(['https://cdn/norange.mp4']);
+      expect(
+          await eventually(() =>
+              VideoCacheService.instance.pathFor('https://cdn/norange.mp4') !=
+              null),
+          isTrue,
+          reason: 'a reel must still get cached when slivering is impossible');
+
+      final path =
+          VideoCacheService.instance.pathFor('https://cdn/norange.mp4')!;
+      expect(File(path).lengthSync(), 4096,
+          reason: 'the fallback file must be complete, not a fragment');
+      expect(rangesSeen.first, isNotNull,
+          reason: 'it should have tried a sliver first');
+      expect(rangesSeen.last, isNull,
+          reason: 'and then re-fetched without a Range');
+      expect(LocalMediaServer.instance.localUrlFor('https://cdn/norange.mp4'),
+          isNull,
+          reason: 'nothing registered, so playback uses the file directly');
+    });
+
+    test('a demoted proxy sends warms straight down the whole-file path',
+        () async {
+      await LocalMediaServer.instance.start();
+      LocalMediaServer.instance.debugDemote('forced for test');
+      useRangeCapableOrigin();
+
+      VideoCacheService.instance.warm(['https://cdn/demoted.mp4']);
+      expect(
+          await eventually(() =>
+              VideoCacheService.instance.pathFor('https://cdn/demoted.mp4') !=
+              null),
+          isTrue);
+
+      expect(File(VideoCacheService.instance.pathFor('https://cdn/demoted.mp4')!)
+              .lengthSync(),
+          fileSize,
+          reason: 'demotion must yield whole, playable files');
+      expect(rangesSeen, everyElement(isNull),
+          reason: 'a demoted proxy must not even attempt a sliver fetch');
+    });
+
+    test('with no proxy at all, behaviour is exactly the old downloader',
+        () async {
+      expect(LocalMediaServer.instance.healthy, isFalse,
+          reason: 'server never started');
+      useRangeCapableOrigin();
+
+      VideoCacheService.instance.warm(['https://cdn/noproxy.mp4']);
+      expect(
+          await eventually(() =>
+              VideoCacheService.instance.pathFor('https://cdn/noproxy.mp4') !=
+              null),
+          isTrue);
+
+      expect(rangesSeen, everyElement(isNull));
+      expect(VideoCacheService.instance.playbackUrlFor('https://cdn/noproxy.mp4'),
+          'https://cdn/noproxy.mp4',
+          reason: 'no proxy means the player opens the origin as before');
+    });
+
+    test('the window only deepens when slivers are actually available',
+        () async {
+      NetworkQualityService.instance.debugSetQuality(NetworkQuality.high);
+
+      final shallow = VideoCacheService.instance.prefetchDepth;
+      await LocalMediaServer.instance.start();
+      final deep = VideoCacheService.instance.prefetchDepth;
+
+      expect(deep, greaterThan(shallow),
+          reason: 'cheap slivers are what make a deeper window affordable; '
+              'without them a deep window would just waste bandwidth');
+    });
   });
 
   _capTests();
