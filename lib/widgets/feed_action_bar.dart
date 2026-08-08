@@ -91,10 +91,20 @@ class _FeedActionBarState extends State<FeedActionBar> {
         }
       }
     });
-    await ApiService.dislikeChallenge(
+    final result = await ApiService.dislikeChallenge(
       challengeId: widget.challenge.id,
       userId: dp.user!.id,
     );
+    // Sync with server — disliking clears the like server-side, so take
+    // both counters from the response rather than trusting the optimistic
+    // decrement (which would drift if the like was already gone).
+    if (result != null && mounted) {
+      setState(() {
+        _disliked = result['disliked'] == true;
+        _likeCount = result['likes'] ?? _likeCount;
+        if (_disliked) _liked = false;
+      });
+    }
   }
 
   void _onComment() {

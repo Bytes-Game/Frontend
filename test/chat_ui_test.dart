@@ -181,7 +181,7 @@ void main() {
 
   group('ChatConversationPage — Instagram thread', () {
     // Newest first, matching the API contract (the page reverses it).
-    List<Map<String, dynamic>> _thread() {
+    List<Map<String, dynamic>> thread() {
       final now = DateTime.now().toUtc();
       String at(int minutesAgo) =>
           now.subtract(Duration(minutes: minutesAgo)).toIso8601String();
@@ -231,7 +231,7 @@ void main() {
 
     testWidgets('renders bubbles, activity subtitle and the Seen sign',
         (tester) async {
-      _installMockApi(messages: _thread());
+      _installMockApi(messages: thread());
       final dp = _dp();
 
       await tester.pumpWidget(_wrap(

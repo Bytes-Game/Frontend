@@ -448,8 +448,13 @@ class ApiService {
     }
   }
 
-  /// POST /api/v1/challenges/dislike -> dislike a challenge
-  static Future<bool> dislikeChallenge({
+  /// POST /api/v1/challenges/dislike -> toggle an explicit dislike.
+  ///
+  /// Returns the server's `{disliked, dislikes, likes}` so the caller can
+  /// reconcile optimistic state, or null when the call failed. Disliking
+  /// clears any existing like server-side, which is why `likes` comes back
+  /// — the heart has to re-render without a second round-trip.
+  static Future<Map<String, dynamic>?> dislikeChallenge({
     required String challengeId,
     required String userId,
   }) async {
@@ -462,9 +467,12 @@ class ApiService {
           'userId': userId,
         }),
       );
-      return res.statusCode == 200 || res.statusCode == 201;
+      if (res.statusCode == 200 || res.statusCode == 201) {
+        return json.decode(res.body) as Map<String, dynamic>;
+      }
+      return null;
     } catch (_) {
-      return false;
+      return null;
     }
   }
 
@@ -1392,7 +1400,10 @@ class ApiService {
     if (userId.isEmpty || lane.isEmpty) return;
     try {
       await _authHttp.post(
-        Uri.parse('$_base/suggestions/accepted'),
+        // Registered under the versioned API prefix (main.go registers it
+        // on the `api` subrouter, not the root router) — without /api/v1
+        // this 404s and the acceptance signal is silently dropped.
+        Uri.parse('$_base/api/v1/suggestions/accepted'),
         headers: const {'Content-Type': 'application/json'},
         body: json.encode({
           'userId': userId,
