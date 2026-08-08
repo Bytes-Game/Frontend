@@ -65,26 +65,44 @@ class AuthProvider with ChangeNotifier {
       final stored = await SessionStore.load();
       if (stored == null) return;
 
+      // Cheapest check first, and the only one that works offline: a token
+      // already past its own `exp` cannot be revived by any request. Booting
+      // into a session around one is strictly worse than showing login —
+      // every authed call 401s and the websocket upgrade is refused, so the
+      // app looks broken instead of logged out.
+      if (stored.isExpired) {
+        await SessionStore.clear();
+        return;
+      }
+
       ApiService.authToken = stored.token;
       // Hard 6s cap on the splash screen. A sleeping Render instance
       // holds requests for 30-60s while it cold-boots; without this cap
       // the user stares at the splash that whole time ("app shows
-      // nothing"). Timeout == network-down: keep the stored session
-      // optimistically and let the feed's own retry take over — the
-      // in-flight refresh still completes in the background and
-      // installs the fresh token when it lands.
-      final fresh = await ApiService.refreshToken()
-          .timeout(const Duration(seconds: 6), onTimeout: () => null);
-      if (fresh != null) {
-        await SessionStore.save(fresh, stored.userJson);
-      } else {
-        // Distinguish "token rejected" from "network down": a rejected
-        // token means any authed call 401s — probe cheaply via profile
-        // refresh below; if we can't reach the server at all, keep the
-        // session and let normal request retries take over.
-        // (refreshToken returns null for both; the profile refresh in
-        // _hydrateFromStored surfaces a live user object when the token
-        // is actually fine.)
+      // nothing"). Timeout is treated as network-down, NOT as a bad
+      // token: keep the stored session optimistically and let the feed's
+      // own retry take over.
+      final outcome = await ApiService.refreshSession().timeout(
+        const Duration(seconds: 6),
+        onTimeout: () => TokenRefresh.unreachable,
+      );
+
+      switch (outcome) {
+        case TokenRefresh.rejected:
+          // The server answered and refused the token. Same destination as
+          // having no session at all.
+          ApiService.clearAuth();
+          await SessionStore.clear();
+          return;
+        case TokenRefresh.refreshed:
+          final fresh = ApiService.authToken;
+          if (fresh != null && fresh.isNotEmpty) {
+            await SessionStore.save(fresh, stored.userJson);
+          }
+        case TokenRefresh.unreachable:
+          // Can't reach the server — say nothing about the token and let
+          // normal request retries sort it out once connectivity returns.
+          break;
       }
 
       final user = UserModel.fromJson(stored.userJson);

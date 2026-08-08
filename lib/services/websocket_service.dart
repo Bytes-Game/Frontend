@@ -25,6 +25,11 @@ class WebSocketService {
   Timer? _reconnectTimer;
   bool _isDisposed = false;
 
+  /// Backoff exponent for the next reconnect: delay = 5s << step, so
+  /// 5s, 10s, 20s, 40s, 80s. Reset to 0 whenever a handshake succeeds.
+  int _reconnectDelayStep = 0;
+  static const int _maxReconnectStep = 4;
+
   final _statusCtrl = StreamController<WebSocketStatus>.broadcast();
   Stream<WebSocketStatus> get statusStream => _statusCtrl.stream;
 
@@ -48,18 +53,47 @@ class WebSocketService {
         '$_baseUrl/ws/$_username?token=${Uri.encodeQueryComponent(token)}';
     developer.log('Ws: Connecting to $_baseUrl/ws/$_username', name: 'ws');
 
+    final WebSocketChannel channel;
     try {
-      _channel = WebSocketChannel.connect(Uri.parse(url));
-      _statusCtrl.add(WebSocketStatus.connected);
-      developer.log('WS: Connected', name:'ws');
-      _listen();
+      channel = WebSocketChannel.connect(Uri.parse(url));
     } catch (e) {
-      if (!_statusCtrl.isClosed){
-        _statusCtrl.add(WebSocketStatus.disconnected);
-        developer.log('WS: Connect failed: $e', name: 'ws');
-        _scheduleReconnect();
-      }
+      // Only synchronous failures (a malformed URI) land here.
+      _handleDrop('connect threw: $e');
+      return;
     }
+    _channel = channel;
+
+    // WebSocketChannel.connect is LAZY: it hands back a channel immediately
+    // and performs the HTTP upgrade in the background. A refused upgrade
+    // (expired token, server down, proxy in the way) surfaces as an error on
+    // `ready` — and because nothing used to await that future, Dart reported
+    // it as an *unhandled* exception. That's what filled the logs with
+    //   "Connection to '…/ws/…' was not upgraded to websocket"
+    // once per reconnect, and with Sentry configured it would ship a crash
+    // report each time too.
+    //
+    // Handling `ready` also makes the status honest: previously we announced
+    // `connected` the instant connect() returned, before any handshake had
+    // happened, so the UI's connection dot was green while the socket was
+    // actually dead.
+    channel.ready.then((_) {
+      if (_isDisposed || _statusCtrl.isClosed) return;
+      _reconnectDelayStep = 0; // a real connection resets the backoff
+      _statusCtrl.add(WebSocketStatus.connected);
+      developer.log('WS: Connected', name: 'ws');
+      _listen();
+    }).catchError((Object e) {
+      _handleDrop('handshake failed: $e');
+    });
+  }
+
+  /// Single exit path for "the socket is not usable" — from a synchronous
+  /// throw, a refused handshake, a stream error, or a clean close.
+  void _handleDrop(String why) {
+    if (_isDisposed || _statusCtrl.isClosed) return;
+    developer.log('WS: $why', name: 'ws');
+    _statusCtrl.add(WebSocketStatus.disconnected);
+    _scheduleReconnect();
   }
 
   void _listen() {
@@ -68,25 +102,22 @@ class WebSocketService {
         final data = json.decode(msg);
         _notifCtrl.add(NotificationModel.fromJson(data));
       },
-      onDone: () {
-        if (!_statusCtrl.isClosed) {
-          _statusCtrl.add(WebSocketStatus.disconnected);
-          _scheduleReconnect();
-        }
-      },
-      onError:(error){
-        if(!_statusCtrl.isClosed){
-          _statusCtrl.add(WebSocketStatus.disconnected);
-          _scheduleReconnect();
-        }
-      },
+      onDone: () => _handleDrop('closed by peer'),
+      onError: (Object error) => _handleDrop('stream error: $error'),
     );
   }
 
   void _scheduleReconnect() {
     if (_isDisposed) return;
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(const Duration(seconds: 5), () {
+    // Exponential backoff, capped. A flat 5-second retry against a backend
+    // that keeps refusing the upgrade (dead token, outage) meant a failed
+    // handshake — and a log line — every 5 seconds, forever. Backing off to
+    // a minute keeps a genuinely transient drop fast to recover while a
+    // persistent failure stays quiet.
+    final delay = Duration(seconds: 5 * (1 << _reconnectDelayStep));
+    if (_reconnectDelayStep < _maxReconnectStep) _reconnectDelayStep++;
+    _reconnectTimer = Timer(delay, () {
       developer.log('WS: Reconnecting...', name: 'ws');
       connect();
     });

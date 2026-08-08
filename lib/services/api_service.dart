@@ -95,6 +95,16 @@ class UpdateProfileResult {
 ///
 /// All methods are static - no state is held. Providers call these
 /// methods and manage the returned data in their own state.
+/// Outcome of a session-token refresh.
+///
+/// The distinction that matters is [rejected] vs [unreachable]: both used to
+/// collapse into a bare `null`, so the caller could not tell "the server says
+/// your token is dead" (→ send the user to login) from "I couldn't reach the
+/// server" (→ keep the session, the user may just be offline). Conflating
+/// them is what let an expired token boot into a fully "logged in" app where
+/// every request 401s.
+enum TokenRefresh { refreshed, rejected, unreachable }
+
 class ApiService {
   ApiService._();
 
@@ -160,7 +170,7 @@ class ApiService {
   /// POST /api/v1/auth/refresh — mint a fresh token for the current
   /// session. Doubles as session VALIDATION on restore: a 401 means the
   /// stored token is dead and the caller should clear the session.
-  static Future<String?> refreshToken() async {
+  static Future<TokenRefresh> refreshSession() async {
     try {
       final res =
           await _authHttp.post(Uri.parse('$_base/api/v1/auth/refresh'));
@@ -169,12 +179,20 @@ class ApiService {
         final fresh = body['token'] as String?;
         if (fresh != null && fresh.isNotEmpty) {
           authToken = fresh;
-          return fresh;
+          return TokenRefresh.refreshed;
         }
+        // 200 with no usable token is not a working session either.
+        return TokenRefresh.rejected;
       }
-      return null;
+      // The server answered and said no — this token is dead.
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        return TokenRefresh.rejected;
+      }
+      // Any other status (5xx, proxy error, Render cold-start body) tells
+      // us nothing about the token, only that the server is unwell.
+      return TokenRefresh.unreachable;
     } catch (_) {
-      return null;
+      return TokenRefresh.unreachable;
     }
   }
 

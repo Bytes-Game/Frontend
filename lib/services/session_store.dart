@@ -2,6 +2,31 @@ import 'dart:convert';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+/// Reads the `exp` claim out of a JWT without verifying its signature.
+///
+/// Verification is the server's job — all we need locally is the answer to
+/// "is it even worth sending this?". Returns null for anything we can't
+/// parse (opaque tokens, malformed input), which callers treat as "can't
+/// tell, try it".
+DateTime? jwtExpiry(String token) {
+  try {
+    final parts = token.split('.');
+    if (parts.length != 3) return null;
+    // JWT uses base64url WITHOUT padding; Dart's decoder requires it.
+    var payload = parts[1];
+    payload = payload.padRight(
+        payload.length + ((4 - payload.length % 4) % 4), '=');
+    final claims =
+        json.decode(utf8.decode(base64Url.decode(payload)));
+    if (claims is! Map) return null;
+    final exp = claims['exp'];
+    if (exp is! int) return null;
+    return DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true);
+  } catch (_) {
+    return null;
+  }
+}
+
 /// A restored session: the bearer token, the user snapshot captured at
 /// login, and when the token was minted (drives proactive refresh).
 class StoredSession {
@@ -19,6 +44,22 @@ class StoredSession {
   /// never gets anywhere near the hard expiry.
   bool get shouldRefresh =>
       DateTime.now().difference(issuedAt) > const Duration(days: 3);
+
+  /// When this token stops being valid, if we can read it.
+  DateTime? get expiresAt => jwtExpiry(token);
+
+  /// True only when the token's own `exp` is definitively in the past.
+  ///
+  /// This is deliberately decided from the token itself rather than from
+  /// [issuedAt]: an already-expired token cannot work under ANY condition —
+  /// online, offline, or against a sleeping server — so restoring a session
+  /// around one just produces an app where every authed request 401s and the
+  /// websocket upgrade is refused. Unreadable tokens return false, so we
+  /// never lock someone out over a parsing quirk.
+  bool get isExpired {
+    final exp = expiresAt;
+    return exp != null && DateTime.now().toUtc().isAfter(exp);
+  }
 }
 
 /// Persists the session in the platform keystore (Android
