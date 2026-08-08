@@ -150,7 +150,8 @@
       "Bash(flutter clean *)",
       "Bash(./gradlew --stop)",
       "Bash(find F:/flutter/flutter_cache/hosted/pub.dev -maxdepth 2 -type d -name \"sentry_flutter*\" 2>&1 | head -5)",
-      "mcp__Claude_Code_Remote__send_later"
+      "mcp__Claude_Code_Remote__send_later",
+      "mcp__Claude_Code_Remote__add_repo"
     ]
   }
 }
