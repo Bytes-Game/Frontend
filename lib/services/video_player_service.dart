@@ -204,10 +204,18 @@ class VideoPlayerService {
   /// A cache miss falls back to streaming, i.e. exactly the old
   /// behaviour, so a cold cache is never worse than before.
   VideoPlayerController _controllerFor(String url) {
+    // Proxy first: the loopback server answers out of the cached opening
+    // with no network round-trip, which is the whole point.
+    final proxied = VideoCacheService.instance.playbackUrlFor(url);
+    if (proxied != url) {
+      return VideoPlayerController.networkUrl(Uri.parse(proxied));
+    }
+    // Then a whole file, if we're in the fallback mode that fetches them.
     final cached = VideoCacheService.instance.pathFor(url);
     if (cached != null) {
       return VideoPlayerController.file(File(cached));
     }
+    // Otherwise stream from origin — the pre-cache behaviour.
     return VideoPlayerController.networkUrl(Uri.parse(url));
   }
 
