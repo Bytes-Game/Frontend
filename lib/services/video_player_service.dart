@@ -1,5 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:video_player/video_player.dart';
+
+import 'package:myapp/services/video_cache_service.dart';
 
 /// Tier-matched pool sizing. Set once at app start by
 /// [DeviceCapabilities.probe] based on physical RAM, and read by both
@@ -172,7 +176,7 @@ class VideoPlayerService {
       _evictLru();
     }
 
-    final controller = VideoPlayerController.networkUrl(Uri.parse(url));
+    final controller = _controllerFor(url);
     // Fire-and-forget initialize — caller can also await the same
     // future via `controller.initialize()` (it's a no-op the second
     // time). Pre-kicking here means by the time a caller actually
@@ -191,62 +195,83 @@ class VideoPlayerService {
     return controller;
   }
 
-  /// Prefetch videos around the current swipe position so they're
-  /// ready when the user swipes either forward OR back. Caller
-  /// typically passes the combined window — `[currentIndex+1 .. +ahead]`
-  /// concatenated with `[currentIndex-1 .. -prefetchBack]`. The
-  /// number of urls to pass is up to the caller (it picks base vs.
-  /// burst based on swipe velocity); this method just caps at what
-  /// the pool can hold.
-  void prefetch(List<String> urls) {
-    final requested = urls.toSet();
-    for (final url in urls) {
-      if (url.isEmpty) continue;
-      if (_prefetchedUrls.contains(url)) continue;
-      if (_pool.any((e) => e.url == url)) continue;
-
-      // Always leave a slot for the active controller — don't let
-      // prefetch alone fill the pool.
-      if (_pool.length >= _config.maxPoolSize - 1) {
-        // The pool is full — but often with STALE spares (reels the
-        // user scrolled past minutes ago). The old behavior was to
-        // give up here, which silently disabled forward-prefetch for
-        // the rest of the session once the pool filled: every swipe
-        // after that landed on a cold controller (worst on the 2-slot
-        // low-RAM tiers). Instead, evict the oldest prefetch entry
-        // that is NOT part of the window we're warming right now.
-        // Non-prefetch (active/promoted) entries are never touched.
-        final evictable = _pool
-            .where((e) => e.isPrefetch && !requested.contains(e.url))
-            .toList()
-          ..sort((a, b) => a.lastUsed.compareTo(b.lastUsed));
-        if (evictable.isEmpty) break; // genuinely no room — stop
-        final victim = evictable.first;
-        _pool.remove(victim);
-        _prefetchedUrls.remove(victim.url);
-        // ignore: discarded_futures
-        victim.controller.dispose();
-      }
-
-      final controller = VideoPlayerController.networkUrl(Uri.parse(url));
-      // ignore: discarded_futures
-      controller.initialize().then((_) {
-        // Prefetched controllers are silent. AudioFocus on Android is
-        // exclusive — multiple unmuted players fight for it and the
-        // active reel's audio cuts in and out. Mute prefetch; the
-        // promote path in getController restores volume to 1.0.
-        controller.setVolume(0);
-      }).catchError((_) {
-        // Same rationale as getController — caller surfaces the error
-        // when they actually try to use this URL.
-      });
-      _pool.add(_PoolEntry(
-        controller: controller,
-        url: url,
-        isPrefetch: true,
-      ));
-      _prefetchedUrls.add(url);
+  /// Build a controller for [url], preferring a copy the cache has
+  /// already pulled onto the device.
+  ///
+  /// A local file is the whole point of [VideoCacheService]: the network
+  /// round-trip — which is what actually makes a swipe feel slow — has
+  /// already happened, so the player only has to open and decode.
+  /// A cache miss falls back to streaming, i.e. exactly the old
+  /// behaviour, so a cold cache is never worse than before.
+  VideoPlayerController _controllerFor(String url) {
+    final cached = VideoCacheService.instance.pathFor(url);
+    if (cached != null) {
+      return VideoPlayerController.file(File(cached));
     }
+    return VideoPlayerController.networkUrl(Uri.parse(url));
+  }
+
+  /// Warm the reels around the current position.
+  ///
+  /// This used to start a full player per upcoming reel, which is what
+  /// made the feed heavy: five ready reels meant five live decoders plus
+  /// five audio decoders, and the audio ones decoded buffers that were
+  /// thrown away unheard (device logs: 144 decoded, 144 dropped) because
+  /// prefetched reels are silent by design.
+  ///
+  /// Now the work is split by cost:
+  ///
+  ///   * EVERY url in the window is warmed as BYTES by
+  ///     [VideoCacheService] — no player, no decoder, no audio, so the
+  ///     window can be much deeper than the old player pool allowed.
+  ///   * Only the very next reel also gets a live controller, so the
+  ///     common single-swipe case still lands on an already-initialised
+  ///     player.
+  ///
+  /// [urls] is nearest-first; the caller supplies forward reels before
+  /// backward ones so the cache prioritises where the user is heading.
+  void prefetch(List<String> urls) {
+    final window = urls.where((u) => u.isNotEmpty).toList();
+    if (window.isEmpty) return;
+
+    VideoCacheService.instance.warm(window);
+
+    // One live spare. Anything beyond this is bytes-only — that is the
+    // change that removes the decoder pile-up.
+    final next = window.first;
+    if (_prefetchedUrls.contains(next)) return;
+    if (_pool.any((e) => e.url == next)) return;
+
+    // Never let the spare crowd out the active reel's slot.
+    if (_pool.length >= _config.maxPoolSize - 1) {
+      final evictable = _pool
+          .where((e) => e.isPrefetch && e.url != next)
+          .toList()
+        ..sort((a, b) => a.lastUsed.compareTo(b.lastUsed));
+      if (evictable.isEmpty) return;
+      final victim = evictable.first;
+      _pool.remove(victim);
+      _prefetchedUrls.remove(victim.url);
+      // ignore: discarded_futures
+      victim.controller.dispose();
+    }
+
+    final controller = _controllerFor(next);
+    // ignore: discarded_futures
+    controller.initialize().then((_) {
+      // The spare is silent. AudioFocus on Android is exclusive — an
+      // unmuted spare fights the active reel and chops its audio. The
+      // promote path in getController restores volume.
+      controller.setVolume(0);
+    }).catchError((_) {
+      // Surfaced when the caller actually tries to use this URL.
+    });
+    _pool.add(_PoolEntry(
+      controller: controller,
+      url: next,
+      isPrefetch: true,
+    ));
+    _prefetchedUrls.add(next);
   }
 
   /// Pause all controllers except the one playing the given URL. Also

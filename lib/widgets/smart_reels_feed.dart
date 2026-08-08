@@ -14,6 +14,7 @@ import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/connection_prewarm_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/network_quality_service.dart';
+import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/widgets/feed_action_bar.dart'
     show ChallengeCommentSheet, ChallengeShareSheet, showChallengeVoteDialog;
@@ -848,8 +849,17 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // the warm pool. Back-prefetch doesn't widen — back-swipes are
     // bursty too, but the previous reel they land on is almost
     // always at currentIndex-1, so the depth doesn't help.
-    final aheadCount =
-        _isBurstScrolling() ? cfg.prefetchAheadBurst : cfg.prefetchAhead;
+    // Forward reach is now set by the CACHE, not the player pool.
+    // Warming a reel costs a download, not a decoder, so the window can
+    // be far deeper than the pool ever allowed — VideoCacheService picks
+    // the depth from the connection (deep on wifi, shallow on cellular
+    // where an unwatched warm reel is wasted data). The pool's
+    // prefetchAhead now only governs the single live spare that
+    // VideoPlayerService.prefetch keeps.
+    final cacheDepth = VideoCacheService.instance.prefetchDepth;
+    final aheadCount = _isBurstScrolling()
+        ? cacheDepth + cfg.prefetchAheadBurst
+        : cacheDepth;
     final backCount = cfg.prefetchBack;
 
     final upcoming = <String>[];
@@ -1590,7 +1600,23 @@ class _ReelItem implements _FeedEntry {
       );
       final mp4Url =
           variantPick?.isNotEmpty == true ? variantPick! : fallbackUrl;
-      final chosenVideoUrl = hlsUrl.isNotEmpty ? hlsUrl : mp4Url;
+      // MP4 first, HLS only as a fallback — the reverse of what this
+      // used to do.
+      //
+      // HLS earns its keep on long video, where it can drop quality
+      // mid-playback instead of stalling. On a sub-90s reel there is no
+      // time for that to matter, and it costs the thing that does: HLS
+      // needs THREE sequential round-trips before a frame appears
+      // (master playlist → variant playlist → first segment) where an
+      // MP4 needs one — and a cache-warmed MP4 needs none. It also can't
+      // be pre-downloaded as a single file, which is what
+      // VideoCacheService relies on.
+      //
+      // The HLS pipeline is not retired: the manifest is still produced
+      // and is still the right source for the detail page and anything
+      // longer, and it remains the fallback here for legacy challenges
+      // that predate multi-bitrate MP4s.
+      final chosenVideoUrl = mp4Url.isNotEmpty ? mp4Url : hlsUrl;
       // Same logic for the opponent video — HLS manifest first (the
       // worker transcodes battle responses too), then the network-
       // appropriate MP4 variant, then the canonical URL. Keeps a battle
@@ -1607,18 +1633,19 @@ class _ReelItem implements _FeedEntry {
         videoUrl: chosenVideoUrl,
         // Only meaningful when we chose HLS — if the manifest turns out
         // to be unreachable the player retries with the direct MP4.
-        fallbackVideoUrl: hlsUrl.isNotEmpty ? mp4Url : '',
+        // Primary is MP4 now, so the manifest becomes the retry.
+        fallbackVideoUrl: mp4Url.isNotEmpty ? hlsUrl : '',
         thumbnailUrl: (c['thumbnailUrl'] as String?) ?? '',
         caption: title,
         creatorId: (c['creatorId'] as String?) ?? '',
         creatorUsername: (c['creatorUsername'] as String?) ?? '',
         creatorLeague: (c['creatorLeague'] as String?) ?? '',
         opponentResponseId: (c['topResponseId'] as String?) ?? '',
-        opponentVideoUrl: opponentHls.isNotEmpty
-            ? opponentHls
-            : (opponentVariantPick?.isNotEmpty == true
-                ? opponentVariantPick!
-                : opponentFallback),
+        // Same MP4-first ordering as the challenger side, so a battle
+        // side-switch is cache-warmable too.
+        opponentVideoUrl: opponentVariantPick?.isNotEmpty == true
+            ? opponentVariantPick!
+            : (opponentFallback.isNotEmpty ? opponentFallback : opponentHls),
         opponentThumbnailUrl: (c['topResponseThumbnailUrl'] as String?) ?? '',
         opponentUsername: (c['topResponseUsername'] as String?) ?? '',
         opponentLeague: (c['topResponseLeague'] as String?) ?? '',
@@ -1656,22 +1683,22 @@ class _ReelItem implements _FeedEntry {
     final mp4Url =
         variantPick?.isNotEmpty == true ? variantPick! : c.videoUrl;
     final chosenVideoUrl =
-        c.hlsManifestUrl.isNotEmpty ? c.hlsManifestUrl : mp4Url;
+        mp4Url.isNotEmpty ? mp4Url : c.hlsManifestUrl;
     return _ReelItem(
       id: c.id,
       type: 'challenge',
       videoUrl: chosenVideoUrl,
-      fallbackVideoUrl: c.hlsManifestUrl.isNotEmpty ? mp4Url : '',
+      fallbackVideoUrl: mp4Url.isNotEmpty ? c.hlsManifestUrl : '',
       thumbnailUrl: c.thumbnailUrl ?? '',
       caption: c.title,
       creatorId: c.creatorId,
       creatorUsername: c.creatorUsername,
       creatorLeague: c.creatorLeague,
       opponentResponseId: c.topResponseId,
-      opponentVideoUrl: c.topResponseHlsManifestUrl.isNotEmpty
-          ? c.topResponseHlsManifestUrl
-          : (opponentVariantPick?.isNotEmpty == true
-              ? opponentVariantPick!
+      opponentVideoUrl: opponentVariantPick?.isNotEmpty == true
+          ? opponentVariantPick!
+          : (c.topResponseHlsManifestUrl.isNotEmpty
+              ? c.topResponseHlsManifestUrl
               : c.topResponseVideoUrl),
       opponentThumbnailUrl: c.topResponseThumbnailUrl,
       opponentUsername: c.topResponseUsername,

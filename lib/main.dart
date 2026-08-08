@@ -14,6 +14,7 @@ import 'package:myapp/services/connection_prewarm_service.dart';
 import 'package:myapp/services/device_capabilities.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/network_quality_service.dart';
+import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
@@ -100,6 +101,13 @@ Future<void> main() async {
   // populated lazily on first feed fetch from the URLs it sees).
   // ignore: discarded_futures
   ConnectionPrewarmService.instance.start();
+  // Resolve the reel byte-cache directory and sweep anything a previous
+  // run left half-written. This is what lets a swipe open a LOCAL file
+  // instead of paying a network round-trip — see VideoCacheService.
+  // Fire-and-forget: until it resolves the feed simply streams, which is
+  // the pre-cache behaviour.
+  // ignore: discarded_futures
+  VideoCacheService.instance.init();
 
   // Crash + uncaught-error reporting via Sentry. The SDK installs:
   //   * FlutterError.onError handler   — catches framework errors

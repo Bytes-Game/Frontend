@@ -48,6 +48,13 @@ class NetworkQualityService {
   /// Current cached classification. Safe to call before [start].
   NetworkQuality get current => _current;
 
+  /// Force the classification. Tests need this because the 1080p problem
+  /// only appears on a HIGH-quality link — on `unknown` the preference
+  /// order already puts 720p first, so a cap test that doesn't set this
+  /// passes whether or not the cap exists.
+  @visibleForTesting
+  void debugSetQuality(NetworkQuality q) => _current = q;
+
   /// Hot stream of changes. UI can listen and animate transitions
   /// (e.g. re-pick a higher variant when wifi reconnects mid-feed).
   Stream<NetworkQuality> get stream => _controller.stream;
@@ -145,10 +152,25 @@ class NetworkQualityService {
   /// it's empty (legacy challenge created before multi-bitrate landed)
   /// the caller should fall back to ChallengeModel.videoUrl — we
   /// signal that by returning null.
-  String? pickVariantUrl(Map<String, String> variants) {
+  /// Hard ceiling for the reels feed, independent of RAM or bandwidth.
+  ///
+  /// The RAM tiers below answer "what can this device survive decoding?".
+  /// That is the wrong question for a full-screen vertical reel, where
+  /// the right question is "what can the viewer actually SEE?" — and on
+  /// a phone the answer is nothing above 720p. A 7.1 GB device was
+  /// therefore picking 1080p on wifi and paying roughly double the
+  /// decode cost for pixels that never reach the eye; device logs showed
+  /// 1920x1080 decoder sessions and render intervals in the seconds.
+  ///
+  /// Surfaces where the extra detail is genuinely visible (a full-screen
+  /// detail view on a tablet, say) can pass a higher [maxLabel].
+  static const String reelsMaxLabel = '720p';
+
+  String? pickVariantUrl(Map<String, String> variants,
+      {String? maxLabel = reelsMaxLabel}) {
     if (variants.isEmpty) return null;
     final ramGb = DeviceCapabilities.instance.ramGb;
-    final order = _preferenceOrder(_current, ramGb);
+    final order = _preferenceOrder(_current, ramGb, maxLabel);
     for (final label in order) {
       final url = variants[label];
       if (url != null && url.isNotEmpty) return url;
@@ -164,21 +186,28 @@ class NetworkQualityService {
   /// Device tier caps the maximum: low-RAM phones never get 1080p
   /// even on great wifi, because decoding it costs more Java heap than
   /// they can spare (MediaCodec frame queues scale with resolution²).
-  List<String> _preferenceOrder(NetworkQuality q, double ramGb) {
+  List<String> _preferenceOrder(
+      NetworkQuality q, double ramGb, String? maxLabel) {
     // Device ceiling — never offer above this on this device.
     //   < 3 GB  → 480p ceiling   (entry tier)
     //   < 5 GB  → 720p ceiling   (mid tier — most users)
     //   ≥ 5 GB  → 1080p          (flagship)
-    final cap = ramGb < 3.0
+    final deviceCap = ramGb < 3.0
         ? '480p'
         : ramGb < 5.0
             ? '720p'
             : '1080p';
 
+    const rank = {'480p': 0, '720p': 1, '1080p': 2};
+
+    // Take the LOWER of the device ceiling and the caller's ceiling. The
+    // device cap protects against OOM; the caller's cap reflects what is
+    // worth decoding for the surface being rendered.
+    var capRank = rank[deviceCap] ?? 2;
+    final requested = rank[maxLabel];
+    if (requested != null && requested < capRank) capRank = requested;
+
     List<String> trim(List<String> order) {
-      // Filter out anything higher than the device ceiling.
-      const rank = {'480p': 0, '720p': 1, '1080p': 2};
-      final capRank = rank[cap] ?? 2;
       return order
           .where((label) => (rank[label] ?? 99) <= capRank)
           .toList(growable: false);
