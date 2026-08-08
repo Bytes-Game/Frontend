@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/reel_diagnostics.dart';
 
 /// A tiny HTTP server on loopback that lets the player start a reel from
 /// bytes we already hold, then transparently back-fills the rest from the
@@ -79,7 +80,7 @@ class LocalMediaServer {
         cancelOnError: false,
       );
       _server = s;
-      if (kDebugMode) debugPrint('LocalMediaServer on ${s.port}');
+      ReelDiagnostics.instance.log('proxy listening on 127.0.0.1:${s.port}');
       return true;
     } catch (e) {
       _demote('bind failed: $e');
@@ -130,7 +131,7 @@ class LocalMediaServer {
 
   void _noteFailure(String why) {
     _failures++;
-    if (kDebugMode) debugPrint('LocalMediaServer failure $_failures: $why');
+    ReelDiagnostics.instance.log('proxy failure $_failures/$maxFailuresBeforeDemote: $why');
     if (_failures >= maxFailuresBeforeDemote) _demote(why);
   }
 
@@ -139,10 +140,8 @@ class LocalMediaServer {
     if (_demoted) return;
     _demoted = true;
     demotionReason = why;
-    if (kDebugMode) {
-      debugPrint('LocalMediaServer DEMOTED ($why) — reverting to direct '
-          'playback for the rest of this session');
-    }
+    ReelDiagnostics.instance.log('proxy DEMOTED ($why) — reverting to direct '
+        'playback for the rest of this session');
   }
 
   Future<void> _handle(HttpRequest req) async {
