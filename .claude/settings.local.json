@@ -152,7 +152,9 @@
       "Bash(find F:/flutter/flutter_cache/hosted/pub.dev -maxdepth 2 -type d -name \"sentry_flutter*\" 2>&1 | head -5)",
       "mcp__Claude_Code_Remote__send_later",
       "mcp__Claude_Code_Remote__add_repo",
-      "mcp__Claude_Code_Remote__update_trigger"
+      "mcp__Claude_Code_Remote__update_trigger",
+      "mcp__Claude_Code_Remote__delete_trigger",
+      "mcp__Claude_Code_Remote__unsubscribe_pr_activity"
     ]
   }
 }
