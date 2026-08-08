@@ -710,8 +710,16 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     }
     void swap() {
       if (!mounted || item.videoUrl == item.fallbackVideoUrl) return;
-      debugPrint(
-          'reel ${item.id}: HLS source failed, falling back to MP4');
+      // Name the actual direction. This used to read "HLS source failed,
+      // falling back to MP4", which is backwards for the common case: MP4 is
+      // the PRIMARY whenever one exists and HLS is the fallback, so the usual
+      // meaning of this line is the opposite of what it claimed. The wrong
+      // message cost a real misdiagnosis — a device log was read as proof that
+      // MP4-first had missed a path, when it had not. Derive the labels rather
+      // than hardcode them so this cannot drift again.
+      String kind(String u) => u.contains('.m3u8') ? 'HLS' : 'MP4';
+      debugPrint('reel ${item.id}: ${kind(item.videoUrl)} source failed, '
+          'falling back to ${kind(item.fallbackVideoUrl)}');
       item.videoUrl = item.fallbackVideoUrl;
       // Drop every player state bound to the dead manifest — indices can
       // shift under trimming, so match by URL rather than position.
