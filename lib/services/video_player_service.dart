@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:video_player/video_player.dart';
 
 import 'package:myapp/services/video_cache_service.dart';
+import 'package:myapp/services/reel_diagnostics.dart';
 
 /// Tier-matched pool sizing. Set once at app start by
 /// [DeviceCapabilities.probe] based on physical RAM, and read by both
@@ -208,14 +209,19 @@ class VideoPlayerService {
     // with no network round-trip, which is the whole point.
     final proxied = VideoCacheService.instance.playbackUrlFor(url);
     if (proxied != url) {
+      ReelDiagnostics.instance.recordProxiedStart();
       return VideoPlayerController.networkUrl(Uri.parse(proxied));
     }
     // Then a whole file, if we're in the fallback mode that fetches them.
     final cached = VideoCacheService.instance.pathFor(url);
     if (cached != null) {
+      ReelDiagnostics.instance.recordWholeFileStart();
       return VideoPlayerController.file(File(cached));
     }
-    // Otherwise stream from origin — the pre-cache behaviour.
+    // Otherwise stream from origin — the pre-cache behaviour. Counted so a
+    // profile log shows at a glance whether the cache is actually carrying
+    // the feed or whether every reel is still going to the network.
+    ReelDiagnostics.instance.recordOriginStart();
     return VideoPlayerController.networkUrl(Uri.parse(url));
   }
 

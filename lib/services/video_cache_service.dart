@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/local_media_server.dart';
 import 'package:myapp/services/network_quality_service.dart';
+import 'package:myapp/services/reel_diagnostics.dart';
 
 /// Downloads upcoming reels to disk BEFORE the user swipes to them, so a
 /// swipe starts a player against a local file instead of the network.
@@ -129,6 +130,9 @@ class VideoCacheService {
       // Bring the proxy up. If it refuses to bind we simply stay in
       // whole-file mode for the session — nothing else changes.
       await LocalMediaServer.instance.start();
+      ReelDiagnostics.instance.log(
+          'cache ready: mode=${_prefixMode ? "prefix (sliver)" : "whole-file"} '
+          'depth=$prefetchDepth');
       unawaited(_enforceSizeCap());
     } catch (e) {
       if (kDebugMode) debugPrint('video cache init failed: $e');
@@ -301,9 +305,11 @@ class VideoCacheService {
         totalLength: total,
       );
       _prefixed.add(d.url);
+      ReelDiagnostics.instance.recordPrefixWarmed();
       unawaited(_enforceSizeCap());
       return true;
     } catch (e) {
+      ReelDiagnostics.instance.recordPrefixFailed();
       if (kDebugMode) debugPrint('prefix warm failed for ${d.url}: $e');
       await _safeDelete(prefixPath);
       return false;
