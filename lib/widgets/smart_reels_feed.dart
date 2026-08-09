@@ -2152,11 +2152,30 @@ class _ReelTileState extends State<_ReelTile>
   /// Skipped on small pools. A 2-slot pool holds the active reel and one
   /// spare; taking a third live decoder there is how the low-RAM tiers
   /// OOM, and those devices keep the old create-on-flip behaviour.
+  /// DEFERRED TO AFTER THE FRAME, and that is not optional. Both callers —
+  /// initState and didUpdateWidget — run DURING the build phase, and the
+  /// path below reaches VideoPlayerService.getController, which calls
+  /// setVolume on a promoted pooled controller. setVolume notifies the
+  /// controller's listeners; every ValueListenableBuilder bound to it then
+  /// calls setState, mid-build, and Flutter throws:
+  ///
+  ///   setState() or markNeedsBuild() called during build.
+  ///   #6  VideoPlayerController.setVolume
+  ///   #7  VideoPlayerService.getController
+  ///   #8  _ReelTileState._ensureOpponentState
+  ///
+  /// Seen on device the first time a battle scrolled into view. The
+  /// re-checks inside the callback are the price of deferring: a fast
+  /// scroller can move on, or the tile can be disposed, before it runs.
   void _maybePrewarmOpponent() {
     if (!widget.item.isBattle) return;
     if (_opponentState != null) return;
     if (VideoPlayerService.instance.config.maxPoolSize < 3) return;
-    _ensureOpponentState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !widget.isActive) return;
+      if (_opponentState != null || !widget.item.isBattle) return;
+      _ensureOpponentState();
+    });
   }
 
   /// Lazily build the opponent controller. Mirrors the parent's
