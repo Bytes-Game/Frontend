@@ -871,29 +871,39 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     final backCount = cfg.prefetchBack;
 
     // A battle has TWO videos and the user can flip to the second one at
-    // any moment, with no swipe to give us warning. Warming only the
-    // challenger meant the opponent always opened stone cold — the flip
-    // showed a poster and spun while its first bytes were fetched. So
-    // every battle in the window contributes BOTH of its urls, paired
-    // immediately after each other rather than in a second sweep, so a
-    // nearer battle is fully warm before a farther reel is touched.
-    final upcoming = <String>[];
+    // any moment, with no swipe to give us warning, so opponents have to be
+    // warmed too. But WHERE they sit in the queue decides how the feed
+    // feels, because only maxConcurrentDownloads fetches run at once.
+    //
+    // Pairing each opponent directly behind its own challenger (the first
+    // version of this) halves the forward reach in REELS on a
+    // battle-heavy page: the two download slots go to reel+1's challenger
+    // and reel+1's opponent, and reel+2 is not touched until one of them
+    // finishes. On-device diagnostics after that change showed warming
+    // improving per-file but network starts going UP, 65% -> 80%, on a
+    // fast-scrolling session — the warmer could no longer stay ahead of
+    // the thumb.
+    //
+    // Swipes massively outnumber flips, so challengers come first, all of
+    // them, nearest first. The one exception is the CURRENT reel's
+    // opponent, which is genuinely one gesture away right now; it sits at
+    // position 2, behind only the next reel (which a forward swipe needs
+    // first, and which owns the single live spare controller). Everything
+    // else's opponent is warmed after every challenger in the window.
+    final challengers = <String>[];
+    final opponents = <String>[];
     for (int i = _currentIndex + 1;
         i < _items.length && i <= _currentIndex + aheadCount;
         i++) {
       final entry = _items[i];
       if (entry is! _ReelItem) continue; // skip cards
       final u = entry.videoUrl;
-      if (u.isNotEmpty) upcoming.add(u);
+      if (u.isNotEmpty) challengers.add(u);
       final opp = entry.opponentVideoUrl;
-      if (opp.isNotEmpty) upcoming.add(opp);
+      if (opp.isNotEmpty) opponents.add(opp);
     }
 
-    // The CURRENT reel's opponent is one gesture away — closer, in
-    // practice, than the next reel's second video. It goes in at
-    // position 2: behind the next reel (which owns the single live
-    // spare controller, and which a forward swipe needs first) but
-    // ahead of everything else in the window.
+    final upcoming = <String>[...challengers, ...opponents];
     final current = _currentIndex >= 0 && _currentIndex < _items.length
         ? _items[_currentIndex]
         : null;
