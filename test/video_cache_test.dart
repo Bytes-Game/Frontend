@@ -316,6 +316,54 @@ void main() {
           reason: 'cheap slivers are what make a deeper window affordable; '
               'without them a deep window would just waste bandwidth');
     });
+
+    test('an oversized reel still gets a sliver', () async {
+      // Found in production: the feed carried legacy uploads of 57 MB,
+      // 72 MB and one 249 MB clip. Every one of them was refused a prefix
+      // because the total exceeded maxPrefetchBytes — a WHOLE-FILE budget
+      // being applied to a fixed-size sliver — so the slowest videos in
+      // the app were the only ones that opened with no warming at all.
+      // Diagnostics showed it plainly: 20 reel starts, 1 prefix warmed.
+      const huge = 249 * 1024 * 1024;
+      expect(huge, greaterThan(VideoCacheService.maxPrefetchBytes));
+
+      var servedBytes = 0;
+      ApiService.useClient(MockClient.streaming((req, _) async {
+        final range = rangeOf(req);
+        rangesSeen.add(range);
+        final m = RegExp(r'bytes=(\d+)-(\d+)').firstMatch(range ?? '');
+        if (m == null) {
+          // Whole-file path. It is right to refuse a 249 MB download, so
+          // this must never be reached for the warm to be counted a win.
+          return http.StreamedResponse(const Stream.empty(), 200,
+              contentLength: huge);
+        }
+        final s = int.parse(m.group(1)!);
+        final e = int.parse(m.group(2)!);
+        final len = e - s + 1;
+        servedBytes += len;
+        return http.StreamedResponse(
+            Stream.value(List.filled(len, 1)), 206,
+            contentLength: len,
+            headers: {'content-range': 'bytes $s-$e/$huge'});
+      }));
+
+      await LocalMediaServer.instance.start();
+      VideoCacheService.instance.warm(['https://cdn/movie.mp4']);
+
+      expect(
+          await eventually(() =>
+              LocalMediaServer.instance.localUrlFor('https://cdn/movie.mp4') !=
+              null),
+          isTrue,
+          reason: 'size gates the whole-file download, not the sliver — the '
+              'first 768 KB of a 249 MB file costs exactly what the first '
+              '768 KB of a 2 MB file costs, and buys far more');
+
+      expect(servedBytes, lessThanOrEqualTo(VideoCacheService.prefixBytes),
+          reason: 'warming a huge reel must stay a sliver, not creep toward '
+              "the file's real size");
+    });
   });
 
   _capTests();
