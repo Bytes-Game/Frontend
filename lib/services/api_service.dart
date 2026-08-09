@@ -105,6 +105,40 @@ class UpdateProfileResult {
 /// every request 401s.
 enum TokenRefresh { refreshed, rejected, unreachable }
 
+/// Why a login or signup attempt did not succeed.
+///
+/// This exists because collapsing every failure into a single null made the
+/// app accuse people of typing their password wrong when the real problem was
+/// that the server was asleep. The backend runs on a free Render tier that
+/// suspends after inactivity and takes the better part of a minute to wake, so
+/// "request timed out" is a routine event — and reporting it as bad
+/// credentials sends someone off resetting a password that was never wrong.
+enum AuthFailure {
+  /// The server answered and refused the credentials. The password really is
+  /// wrong.
+  rejected,
+
+  /// The server could not be reached, or took too long. Says nothing about
+  /// whether the credentials are valid — most often a cold start.
+  unreachable,
+
+  /// The server answered with an error of its own (5xx). Also says nothing
+  /// about the credentials.
+  serverError,
+}
+
+/// Outcome of a login or signup attempt: the session payload on success, or
+/// the reason it failed.
+class AuthResult {
+  const AuthResult.success(this.data) : failure = null;
+  const AuthResult.failed(this.failure) : data = null;
+
+  final Map<String, dynamic>? data;
+  final AuthFailure? failure;
+
+  bool get ok => data != null;
+}
+
 class ApiService {
   ApiService._();
 
@@ -133,23 +167,8 @@ class ApiService {
   /// POST /signup → same shape as /login ({user, token, allUsers}).
   /// Returns null on failure; [error] via the second element when the
   /// server gave a usable message (taken username, weak password).
-  static Future<Map<String, dynamic>?> signup(
-      String username, String password) async {
-    try {
-      final res = await _authHttp.post(
-        Uri.parse('$_base/signup'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({'username': username, 'password': password}),
-      );
-      if (res.statusCode == 201) {
-        final data = json.decode(res.body) as Map<String, dynamic>;
-        authToken = data['token'] as String?;
-        return data;
-      }
-      return null;
-    } catch (_) {
-      return null;
-    }
+  static Future<AuthResult> signup(String username, String password) async {
+    return _authenticate('$_base/signup', username, password);
   }
 
   /// GET /signup/available — live availability for the signup form.
@@ -213,23 +232,38 @@ class ApiService {
   // —— Auth —————————————————————————————————————————————————————————————
 
   /// POST /login →{ user:{...}, token: "...", allUsers: [...] }
-  static Future<Map<String, dynamic>?> login(
-      String username, String password) async {
+  static Future<AuthResult> login(String username, String password) async {
+    return _authenticate('$_base/login', username, password);
+  }
+
+  /// Shared by [login] and [signup] — both post credentials and both need the
+  /// same distinction between "refused" and "never got an answer".
+  static Future<AuthResult> _authenticate(
+      String url, String username, String password) async {
     try {
       final res = await _authHttp.post(
-        Uri.parse('$_base/login'),
+        Uri.parse(url),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'username': username, 'password': password}),
       );
-      if (res.statusCode == 200) {
+      // login answers 200, signup answers 201.
+      if (res.statusCode == 200 || res.statusCode == 201) {
         final data = json.decode(res.body) as Map<String, dynamic>;
         // Capture the session token so every subsequent request is authorized.
         authToken = data['token'] as String?;
-        return data;
+        return AuthResult.success(data);
       }
-      return null;
-      } catch (_) {
-      return null;
+      // Only a 4xx from the server is a statement about the credentials.
+      if (res.statusCode >= 400 && res.statusCode < 500) {
+        return const AuthResult.failed(AuthFailure.rejected);
+      }
+      // 5xx, a proxy error, or a Render cold-start holding page: the server is
+      // unwell and has told us nothing about the password.
+      return const AuthResult.failed(AuthFailure.serverError);
+    } catch (_) {
+      // Timeout, DNS, connection refused, malformed body. Never evidence that
+      // the credentials were wrong.
+      return const AuthResult.failed(AuthFailure.unreachable);
     }
   }
 

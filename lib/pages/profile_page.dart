@@ -294,6 +294,21 @@ class _ProfilePageState extends State<ProfilePage>
       target: 'settings_menu_open',
       pageName: pageName,
     );
+    // Read the provider HERE, not inside the sheet's builder. The builder
+    // captured this page's `context` and ran a provider lookup on every
+    // rebuild of the sheet — and an inherited-widget lookup against an
+    // element that is no longer mounted returns null, which Provider reports
+    // as "Could not find the correct Provider<DataProvider> above this
+    // ProfilePage Widget". That is the crash seen on device: the message
+    // points at a missing provider, but the provider is installed above
+    // MaterialApp and was never missing; the context had simply gone away.
+    // Resolving the value up front means the sheet holds a plain bool and
+    // cannot outlive anything.
+    final twoFactorEnabled =
+        Provider.of<DataProvider>(context, listen: false)
+                .user
+                ?.twoFactorEnabled ==
+            true;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -302,11 +317,7 @@ class _ProfilePageState extends State<ProfilePage>
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) => _SettingsSheet(
-        twoFactorEnabled:
-            Provider.of<DataProvider>(context, listen: false)
-                    .user
-                    ?.twoFactorEnabled ==
-                true,
+        twoFactorEnabled: twoFactorEnabled,
         onEditProfile: () {
           Navigator.pop(ctx);
           _openEditProfile();

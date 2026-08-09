@@ -90,18 +90,35 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     final auth = Provider.of<AuthProvider>(context, listen: false);
-    final ok = _signupMode
+    final failure = _signupMode
         ? await auth.signup(context, user, pass)
         : await auth.login(context, user, pass);
 
     if (!mounted) return;
-    if (!ok) {
+    if (failure != null) {
       setState(() {
         _isLoading = false;
-        _error = _signupMode
-            ? 'Signup failed — username may be taken.'
-            : 'Invalid username or password.';
+        _error = _messageFor(failure);
       });
+    }
+  }
+
+  /// Say what actually went wrong. Reporting an unreachable server as bad
+  /// credentials is worse than unhelpful — it sends someone off resetting a
+  /// password that was never the problem, which is exactly what happened
+  /// when the backend was mid-cold-start.
+  String _messageFor(AuthFailure failure) {
+    switch (failure) {
+      case AuthFailure.rejected:
+        return _signupMode
+            ? 'Signup failed — that username may be taken.'
+            : 'Invalid username or password.';
+      case AuthFailure.unreachable:
+        return "Couldn't reach the server. It may be waking up — "
+            'wait a few seconds and try again.';
+      case AuthFailure.serverError:
+        return 'The server had a problem. Your details are probably fine — '
+            'please try again in a moment.';
     }
   }
 
