@@ -59,9 +59,17 @@ class VideoCacheService {
   /// hundred of them and is trivial next to a photo library.
   static const int maxCacheBytes = 300 * 1024 * 1024;
 
-  /// Refuse to cache anything larger than this. A reel is seconds long;
-  /// anything this big is a mis-tagged upload or a legacy full-length
+  /// Refuse to download a WHOLE file larger than this. A reel is seconds
+  /// long; anything this big is a mis-tagged upload or a legacy full-length
   /// video, and pulling it would blow the user's data for one swipe.
+  ///
+  /// Deliberately NOT applied to prefix warming. A prefix is
+  /// [prefixBytes] no matter how big the file behind it is, so the
+  /// cost of warming a 250 MB video is identical to warming a 2 MB one —
+  /// and the big one is precisely the one that cannot afford a cold
+  /// start. Gating the prefix on total size meant every oversized reel
+  /// got no warming at all and opened straight against the network,
+  /// which is the slowest possible outcome for the slowest content.
   static const int maxPrefetchBytes = 40 * 1024 * 1024;
 
   /// How many downloads may run at once. More than this and the warming
@@ -273,7 +281,10 @@ class VideoCacheService {
       final total = _totalFromContentRange(
           response.headers[HttpHeaders.contentRangeHeader.toLowerCase()] ??
               response.headers['content-range']);
-      if (total <= 0 || total > maxPrefetchBytes) return false;
+      // Only the total's *validity* matters here, not its size. We keep
+      // exactly prefixBytes on disk either way; the proxy back-fills the
+      // rest from origin as the player asks for it. See maxPrefetchBytes.
+      if (total <= 0) return false;
 
       final file = File(prefixPath);
       sink = file.openWrite();
