@@ -23,26 +23,31 @@ class AuthProvider with ChangeNotifier {
   bool get restoring => _restoring;
 
   /// Attempts login. Returns true on success.
-  Future<bool> login(
+  /// Returns null on success, or WHY it failed. The reason matters: the
+  /// backend sleeps on Render's free tier and takes the better part of a
+  /// minute to wake, so an unreachable server is routine — and telling
+  /// someone their password is wrong when the server simply never answered
+  /// sends them off resetting a password that was fine.
+  Future<AuthFailure?> login(
       BuildContext context, String username, String password) async {
     final result = await ApiService.login(username, password);
-    if (result == null) return false;
+    if (!result.ok) return result.failure ?? AuthFailure.unreachable;
     // ignore: use_build_context_synchronously
-    await _completeAuth(context, result);
-    return true;
+    await _completeAuth(context, result.data!);
+    return null;
   }
 
   /// Attempts signup. On success the user is authenticated immediately
   /// (the backend response mirrors /login) and flagged for onboarding.
-  Future<bool> signup(
+  Future<AuthFailure?> signup(
       BuildContext context, String username, String password) async {
     final result = await ApiService.signup(username, password);
-    if (result == null) return false;
+    if (!result.ok) return result.failure ?? AuthFailure.unreachable;
     // ignore: use_build_context_synchronously
-    await _completeAuth(context, result);
+    await _completeAuth(context, result.data!);
     _needsOnboarding = true;
     notifyListeners();
-    return true;
+    return null;
   }
 
   /// Marks the interest-picker step done (completed OR skipped).
