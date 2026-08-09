@@ -870,6 +870,13 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
         : cacheDepth;
     final backCount = cfg.prefetchBack;
 
+    // A battle has TWO videos and the user can flip to the second one at
+    // any moment, with no swipe to give us warning. Warming only the
+    // challenger meant the opponent always opened stone cold — the flip
+    // showed a poster and spun while its first bytes were fetched. So
+    // every battle in the window contributes BOTH of its urls, paired
+    // immediately after each other rather than in a second sweep, so a
+    // nearer battle is fully warm before a farther reel is touched.
     final upcoming = <String>[];
     for (int i = _currentIndex + 1;
         i < _items.length && i <= _currentIndex + aheadCount;
@@ -878,6 +885,21 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       if (entry is! _ReelItem) continue; // skip cards
       final u = entry.videoUrl;
       if (u.isNotEmpty) upcoming.add(u);
+      final opp = entry.opponentVideoUrl;
+      if (opp.isNotEmpty) upcoming.add(opp);
+    }
+
+    // The CURRENT reel's opponent is one gesture away — closer, in
+    // practice, than the next reel's second video. It goes in at
+    // position 2: behind the next reel (which owns the single live
+    // spare controller, and which a forward swipe needs first) but
+    // ahead of everything else in the window.
+    final current = _currentIndex >= 0 && _currentIndex < _items.length
+        ? _items[_currentIndex]
+        : null;
+    if (current is _ReelItem && current.opponentVideoUrl.isNotEmpty) {
+      upcoming.remove(current.opponentVideoUrl);
+      upcoming.insert(upcoming.isEmpty ? 0 : 1, current.opponentVideoUrl);
     }
     // Also warm a small back-buffer. TikTok-style scrubbing is bi-
     // directional — users often flick back to the previous reel right
@@ -1940,11 +1962,18 @@ class _ReelTileState extends State<_ReelTile>
     // finger drags and animated via animateTo (which supplies its own
     // duration) on release, so no fixed duration is configured here.
     _cubeCtl = AnimationController(vsync: this, value: 0.0);
+
+    // The very first tile of a feed is BUILT already active, so
+    // didUpdateWidget never fires for it. Without this the opening reel
+    // of every session — the one first impressions are made on — would be
+    // the only battle that still stalls on its first flip.
+    if (widget.isActive) _maybePrewarmOpponent();
   }
 
   @override
   void didUpdateWidget(covariant _ReelTile old) {
     super.didUpdateWidget(old);
+    if (!old.isActive && widget.isActive) _maybePrewarmOpponent();
     // Reset to the primary video whenever this tile loses focus, so the
     // user always re-enters a battle on the challenger's side. Avoids the
     // confusing "opponent video frozen + primary audio playing" race that
@@ -2098,6 +2127,27 @@ class _ReelTileState extends State<_ReelTile>
   /// default, opponent when the user has swiped left on a battle.
   _ReelPlayerState get _activeState =>
       _showingOpponent && _opponentState != null ? _opponentState! : widget.state;
+
+  /// Build the opponent's player as soon as this battle becomes the active
+  /// reel, rather than waiting for the flip.
+  ///
+  /// The cube turn is a few hundred milliseconds and renders BOTH faces as
+  /// live video. A controller created at the START of the turn is still
+  /// opening when the turn ends, which is the stall on the first flip of
+  /// every battle. Created here it gets the entire time the user spends
+  /// watching the challenger to open — and its bytes are already being
+  /// warmed, because _prefetchUpcomingVideos now puts the active reel's
+  /// opponent near the front of the window.
+  ///
+  /// Skipped on small pools. A 2-slot pool holds the active reel and one
+  /// spare; taking a third live decoder there is how the low-RAM tiers
+  /// OOM, and those devices keep the old create-on-flip behaviour.
+  void _maybePrewarmOpponent() {
+    if (!widget.item.isBattle) return;
+    if (_opponentState != null) return;
+    if (VideoPlayerService.instance.config.maxPoolSize < 3) return;
+    _ensureOpponentState();
+  }
 
   /// Lazily build the opponent controller. Mirrors the parent's
   /// _getPlayerState so the same VideoPlayerService cache is shared.
