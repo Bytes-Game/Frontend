@@ -387,9 +387,22 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
           refresh: refresh,
         );
       case FeedKind.following:
+        // No refresh argument to pass: /feed/following/v2 does not read a
+        // refresh flag, so pulling down here re-requests page 1 and the
+        // server's seen-content filter hands back what it handed back
+        // before. Making refresh work on this tab needs a backend change,
+        // not a client one.
         return ApiService.getFollowingFeedV2(widget.userId, page: page);
       case FeedKind.explore:
-        return ApiService.getExploreFeed(widget.userId, page: page);
+        // Explore honours refresh on both sides — the endpoint reads it
+        // and getExploreFeed forwards it — but this call used to drop it,
+        // so pull-to-refresh cleared the list, re-requested page 1 with
+        // the seen-content filter still armed, and rebuilt the same feed.
+        return ApiService.getExploreFeed(
+          widget.userId,
+          page: page,
+          refresh: refresh,
+        );
     }
   }
 
