@@ -677,9 +677,13 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     if (url.isEmpty) return null;
 
     final cached = _playerStates[index];
+    // Identity, not URL. Checking by URL leaves a hole: the pool can
+    // evict this state's controller and then create a NEW controller for
+    // the same URL, and the URL check reports "alive" while `cached`
+    // still points at the disposed one.
     if (cached != null &&
         cached.url == url &&
-        VideoPlayerService.instance.hasController(url)) {
+        VideoPlayerService.instance.isLive(cached.controller)) {
       return cached;
     }
 
@@ -2368,6 +2372,29 @@ class _ReelTileState extends State<_ReelTile>
             valueListenable: st.controller,
             builder: (context, value, _) {
               if (!value.isInitialized) return const SizedBox.shrink();
+              // The pool can LRU-evict — and dispose — this controller at
+              // any time. `st` was captured when the PARENT built, but
+              // this builder re-runs on its own (every controller value
+              // tick, every frame of a cube turn), so by the time it runs
+              // the native player behind `st.controller` may already be
+              // released. Handing that to VideoPlayer throws
+              //
+              //   Bad state: No active player with ID 5.
+              //   #0 AndroidVideoPlayer._playerWith
+              //   #1 AndroidVideoPlayer.buildViewWithOptions
+              //   #2 _VideoPlayerState.build
+              //
+              // from inside build(), which replaces the reel with an
+              // error box and then floods the log with follow-on
+              // "Another exception was thrown" lines. Seen on device.
+              //
+              // Falling back to SizedBox.shrink leaves the poster
+              // underneath showing, and the parent's _getPlayerState
+              // rebuilds a live controller on its next pass — so a reel
+              // that hits this recovers instead of dying.
+              if (!VideoPlayerService.instance.isLive(st.controller)) {
+                return const SizedBox.shrink();
+              }
               return SizedBox.expand(
                 child: FittedBox(
                   key: ValueKey(

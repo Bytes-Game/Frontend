@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -256,6 +257,67 @@ class VideoPlayerService {
     if (_prefetchedUrls.contains(next)) return;
     if (_pool.any((e) => e.url == next)) return;
 
+    // Already warm: open it now, against the proxy.
+    if (VideoCacheService.instance.isReady(next)) {
+      _pendingSpare = null;
+      ReelDiagnostics.instance.recordSpareWarm();
+      _openSpare(next);
+      return;
+    }
+
+    // Cold — and this is the case that used to quietly defeat the whole
+    // cache. warm() above only ENQUEUES a download; it returns long
+    // before any byte arrives. Opening the spare on the next line
+    // therefore asked playbackUrlFor() a question whose answer could not
+    // yet be anything but "origin", so the reel most likely to be
+    // watched next — the one a single swipe away — was the one reel
+    // guaranteed to open against the network. Worse, its opening slice
+    // then finished downloading into a proxy registration that nothing
+    // would ever read, because the controller was already bound to the
+    // origin URL. Device logs showed the shape of it: proxy=4 (40%),
+    // network=6 (60%), with only 3 prefixes warmed in the whole session.
+    //
+    // So wait for the slice, briefly, and open against the proxy when it
+    // lands. If it does not land inside the grace we open cold anyway —
+    // never having a spare would be worse than having a cold one.
+    if (_pendingSpare == next) return; // already waiting on this reel
+    _pendingSpare = next;
+    unawaited(
+      VideoCacheService.instance.awaitReady(next, spareWarmGrace).then((warm) {
+        // Re-check everything: a grace is long enough for the user to
+        // swipe, for the window to move on, or for the tile itself to
+        // have opened this URL directly.
+        if (_pendingSpare != next) return;
+        _pendingSpare = null;
+        if (_prefetchedUrls.contains(next)) return;
+        if (_pool.any((e) => e.url == next)) return;
+        if (warm) {
+          ReelDiagnostics.instance.recordSpareWarm();
+        } else {
+          ReelDiagnostics.instance.recordSpareCold();
+        }
+        _openSpare(next);
+      }),
+    );
+  }
+
+  /// How long [prefetch] holds the live spare back while that reel's
+  /// opening slice is still downloading.
+  ///
+  /// Covers a first-byte time plus [VideoCacheService.prefixBytes] on a
+  /// normal connection, and stays well inside the time a user spends on
+  /// a reel before swiping. It is a judgement call, not a measurement —
+  /// the spare warm/cold counters in the diagnostics summary are there
+  /// so the next profile run can say whether it is set right.
+  static const Duration spareWarmGrace = Duration(milliseconds: 1500);
+
+  /// The URL [prefetch] is currently holding a deferred spare for, so a
+  /// wait that resolves after the user has moved on is dropped instead
+  /// of opening a player for a reel that has left the window.
+  String? _pendingSpare;
+
+  /// Create the single live spare controller for [next] and pool it.
+  void _openSpare(String next) {
     // Never let the spare crowd out the active reel's slot.
     if (_pool.length >= _config.maxPoolSize - 1) {
       final evictable = _pool
@@ -327,6 +389,23 @@ class VideoPlayerService {
     if (url.isEmpty) return false;
     return _pool.any((e) => e.url == url);
   }
+
+  /// Whether THIS EXACT controller is still in the pool.
+  ///
+  /// [hasController] answers the same question by URL, which is not
+  /// enough for a widget that is holding a controller reference: the
+  /// pool can evict (and dispose) the controller for a URL and then
+  /// build a fresh one for that same URL, at which point the URL check
+  /// says "alive" while the captured reference is dead. Identity is the
+  /// only question a caller with a reference actually has.
+  ///
+  /// Check this immediately before handing a captured controller to
+  /// VideoPlayer. Building a platform view for a released native player
+  /// throws `Bad state: No active player with ID N` out of
+  /// AndroidVideoPlayer.buildViewWithOptions, and because that happens
+  /// inside build() it takes the whole reel tile down with it.
+  bool isLive(VideoPlayerController controller) =>
+      _pool.any((e) => identical(e.controller, controller));
 
   /// Drop every prefetched (non-active) controller. Called from the
   /// memory-pressure handler when Android signals it needs RAM back.

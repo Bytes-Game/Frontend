@@ -106,6 +106,13 @@ class VideoCacheService {
   /// URLs whose opening slice is cached and registered with the proxy.
   final Set<String> _prefixed = <String>{};
 
+  /// Callers parked in [awaitReady], one completer per URL. Signalled by
+  /// [_signalWarm] on every path a URL can leave the warming pipeline —
+  /// warmed, failed, cancelled, or dropped from the window — so a waiter
+  /// is never left sitting out its whole timeout for work that has
+  /// already stopped.
+  final Map<String, Completer<void>> _warmWaiters = {};
+
   /// Resolve the cache directory and adopt anything a previous run left
   /// behind. Safe to call repeatedly; only the first call does work.
   Future<void> init() async {
@@ -192,6 +199,34 @@ class VideoCacheService {
   bool isReady(String url) =>
       pathFor(url) != null || LocalMediaServer.instance.localUrlFor(url) != null;
 
+  /// Resolves once [url] can start without a network round-trip, or when
+  /// [timeout] elapses — whichever lands first. The value is simply
+  /// [isReady] at that moment, so the caller can choose between opening
+  /// against the proxy and opening cold.
+  ///
+  /// The timeout is not an error path. A reel that never warms still has
+  /// to get a player, or a slow connection would lose the ready-ahead
+  /// controller entirely and every swipe would pay a full cold open —
+  /// strictly worse than what it replaced.
+  Future<bool> awaitReady(String url, Duration timeout) async {
+    if (url.isEmpty) return false;
+    if (isReady(url)) return true;
+    final waiter = _warmWaiters.putIfAbsent(url, Completer<void>.new);
+    try {
+      await waiter.future.timeout(timeout);
+    } catch (_) {
+      // Timed out, or warming ended without producing anything playable.
+      // Either way the answer is whatever isReady says below.
+    }
+    return isReady(url);
+  }
+
+  /// Wake anything parked on [url].
+  void _signalWarm(String url) {
+    final waiter = _warmWaiters.remove(url);
+    if (waiter != null && !waiter.isCompleted) waiter.complete();
+  }
+
   /// The URL the player should actually open for [url].
   ///
   /// Prefers the proxy (instant start from the cached opening), then a
@@ -219,7 +254,14 @@ class VideoCacheService {
     for (final url in _active.keys.toList()) {
       if (!wantedSet.contains(url)) _cancel(url);
     }
-    _queue.removeWhere((u) => !wantedSet.contains(u));
+    // Dequeued without ever running, so nothing downstream will signal
+    // it — wake its waiter here or that caller waits out the full
+    // timeout for a download that is no longer going to happen.
+    _queue.removeWhere((u) {
+      final drop = !wantedSet.contains(u);
+      if (drop) _signalWarm(u);
+      return drop;
+    });
 
     for (final url in wanted) {
       if (_ready.contains(url)) continue;
@@ -249,6 +291,11 @@ class VideoCacheService {
     _active[url] = download;
     unawaited(_run(download).whenComplete(() {
       _active.remove(url);
+      // One signal that covers success, failure and cancellation alike.
+      // _runPrefix also signals the moment it registers with the proxy,
+      // which is earlier — this is the guarantee that every download
+      // ends in exactly one wake-up no matter which way it ended.
+      _signalWarm(url);
       _pump();
     }));
   }
@@ -316,6 +363,10 @@ class VideoCacheService {
         totalLength: total,
       );
       _prefixed.add(d.url);
+      // Signal before the size sweep — a waiting spare should get its
+      // proxy URL the instant the registration lands, not after disk
+      // housekeeping.
+      _signalWarm(d.url);
       ReelDiagnostics.instance.recordPrefixWarmed();
       unawaited(_enforceSizeCap());
       return true;
@@ -388,6 +439,7 @@ class VideoCacheService {
       // final name is, by construction, complete and playable.
       await part.rename(_fileFor(d.url));
       _ready.add(d.url);
+      _signalWarm(d.url);
       unawaited(_enforceSizeCap());
     } catch (e) {
       if (kDebugMode) debugPrint('video cache miss for ${d.url}: $e');
@@ -474,6 +526,9 @@ class VideoCacheService {
   Future<void> clear() async {
     for (final url in _active.keys.toList()) {
       _cancel(url);
+    }
+    for (final url in [..._queue, ..._warmWaiters.keys]) {
+      _signalWarm(url);
     }
     _queue.clear();
     _ready.clear();

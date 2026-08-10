@@ -132,13 +132,20 @@ class _SearchPageState extends State<SearchPage>
   /// they share an algorithm. We just filter to challenge entries here.
   ///
   /// When [refresh] is true, the backend treats this as a pull-to-refresh
-  /// (clears the seen-set, jitters scores, demotes the previous refresh's
-  /// top-3) so the grid visibly changes.
+  /// (jitters scores, demotes the previous refresh's top-3, resets session
+  /// dedup) so the grid visibly changes.
+  ///
+  /// This request deliberately does NOT record impressions. A grid of 30
+  /// thumbnails, refetched every time the tab is opened, is not evidence that
+  /// the user watched 30 videos — and stamping them as watched is what let a
+  /// couple of visits mark the entire catalog as seen, which then pushed every
+  /// other feed surface onto already-watched content.
   Future<void> _loadExploreChallenges({bool refresh = false}) async {
     debugPrint('[search_page] _loadExploreChallenges(refresh: $refresh) fired');
     final dp = Provider.of<DataProvider>(context, listen: false);
     final userId = dp.user?.id ?? '';
-    final list = await ApiService.getExploreChallenges(userId, limit: 30, refresh: refresh);
+    final list = await ApiService.getExploreChallenges(
+      userId, limit: 30, refresh: refresh, markShown: false);
     debugPrint('[search_page] got ${list.length} explore items back');
     if (mounted) {
       setState(() => _exploreChallenges = list);
