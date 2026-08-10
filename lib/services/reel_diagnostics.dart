@@ -39,6 +39,8 @@ class ReelDiagnostics {
   int _origin = 0;
   int _prefixWarmed = 0;
   int _prefixFailed = 0;
+  int _spareWarm = 0;
+  int _spareCold = 0;
   int _sinceSummary = 0;
 
   /// One-off diagnostic line. Prefixed so it can be grepped out of the very
@@ -64,6 +66,22 @@ class ReelDiagnostics {
     _prefixFailed++;
   }
 
+  /// The read-ahead spare controller was opened with its opening slice
+  /// already cached, so it starts against the proxy.
+  void recordSpareWarm() {
+    if (!_visible) return;
+    _spareWarm++;
+  }
+
+  /// The spare was opened before its slice arrived and went to the
+  /// network. Some of these are unavoidable (first reel of a session, a
+  /// genuinely slow connection); a high ratio means
+  /// [VideoPlayerService.spareWarmGrace] is too short for real devices.
+  void recordSpareCold() {
+    if (!_visible) return;
+    _spareCold++;
+  }
+
   void _record(void Function() bump) {
     if (!_visible) return;
     bump();
@@ -80,13 +98,15 @@ class ReelDiagnostics {
     String pct(int n) => '${(n * 100 / starts).round()}%';
     return 'starts=$starts  proxy=$_proxied (${pct(_proxied)})  '
         'file=$_wholeFile (${pct(_wholeFile)})  network=$_origin (${pct(_origin)})  '
-        '| prefixes warmed=$_prefixWarmed failed=$_prefixFailed';
+        '| prefixes warmed=$_prefixWarmed failed=$_prefixFailed  '
+        '| spare warm=$_spareWarm cold=$_spareCold';
   }
 
   @visibleForTesting
   void debugReset() {
     _proxied = _wholeFile = _origin = 0;
     _prefixWarmed = _prefixFailed = 0;
+    _spareWarm = _spareCold = 0;
     _sinceSummary = 0;
   }
 

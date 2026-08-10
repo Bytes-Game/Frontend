@@ -414,4 +414,129 @@ void _capTests() {
       expect(url, 'https://cdn/480.mp4');
     });
   });
+
+  // awaitReady exists so VideoPlayerService can hold its read-ahead spare
+  // back until that reel's opening slice has actually landed. Before it,
+  // prefetch() enqueued the warm and opened the player on the very next
+  // line, so the answer to "is this cached?" could not yet be anything but
+  // no — the one reel a single swipe away was the one reel guaranteed to
+  // open against the network, and the slice it later downloaded was never
+  // read by anyone.
+  //
+  // Two properties matter and both are timing-shaped, which is exactly the
+  // kind of thing that rots silently:
+  //   * it resolves as soon as the slice lands, not on a fixed delay
+  //   * it never leaves a caller parked longer than warming can help
+  group('awaitReady', () {
+    const fileSize = 2 * 1024 * 1024;
+
+    /// Long enough that a warm cannot land inside the short timeouts below,
+    /// short enough that the stalled downloads release their slots before
+    /// the next test needs them. maxConcurrentDownloads is a global, so a
+    /// test that parks both slots for half a minute starves whatever runs
+    /// after it — which is exactly how this group first failed.
+    const stall = Duration(milliseconds: 800);
+
+    tearDown(() async {
+      await LocalMediaServer.instance.stop();
+      LocalMediaServer.instance.debugReset();
+    });
+
+    /// A range-capable origin that stalls [delay] before answering, so a
+    /// test can put the warm on a known side of the grace period.
+    void useSlowOrigin(Duration delay) {
+      ApiService.useClient(MockClient.streaming((req, _) async {
+        await Future<void>.delayed(delay);
+        final len = VideoCacheService.prefixBytes;
+        return http.StreamedResponse(
+          Stream.value(List.filled(len, 1)),
+          206,
+          contentLength: len,
+          headers: {'content-range': 'bytes 0-${len - 1}/$fileSize'},
+        );
+      }));
+    }
+
+    test('resolves as soon as the sliver lands, well inside the grace',
+        () async {
+      LocalMediaServer.instance.debugReset();
+      await LocalMediaServer.instance.start();
+      useSlowOrigin(const Duration(milliseconds: 60));
+
+      final started = DateTime.now();
+      VideoCacheService.instance.warm(['https://cdn/slow.mp4']);
+      final ready = await VideoCacheService.instance
+          .awaitReady('https://cdn/slow.mp4', const Duration(seconds: 5));
+      final waited = DateTime.now().difference(started);
+
+      expect(ready, isTrue);
+      // The point of the whole change: the caller is released by the
+      // download finishing, not by the timeout expiring. If this ever
+      // starts waiting out the full grace, the spare goes back to opening
+      // cold and the proxy percentage collapses again.
+      expect(waited, lessThan(const Duration(seconds: 2)));
+      expect(VideoCacheService.instance.playbackUrlFor('https://cdn/slow.mp4'),
+          startsWith('http://127.0.0.1:'));
+    });
+
+    test('gives up at the timeout rather than holding the spare forever',
+        () async {
+      LocalMediaServer.instance.debugReset();
+      await LocalMediaServer.instance.start();
+      useSlowOrigin(stall); // never lands inside the 150ms timeout below
+
+      VideoCacheService.instance.warm(['https://cdn/stalled.mp4']);
+      final ready = await VideoCacheService.instance
+          .awaitReady('https://cdn/stalled.mp4', const Duration(milliseconds: 150));
+
+      // False, not a hang and not a throw. A reel that will not warm still
+      // has to get a player — a cold spare beats no spare.
+      expect(ready, isFalse);
+    });
+
+    test('a url dropped from the window wakes its waiter immediately',
+        () async {
+      LocalMediaServer.instance.debugReset();
+      await LocalMediaServer.instance.start();
+      useSlowOrigin(stall);
+
+      VideoCacheService.instance.warm(['https://cdn/a.mp4', 'https://cdn/b.mp4']);
+      // b is queued behind a (maxConcurrentDownloads is 2, so give it a
+      // third to be sure it is parked rather than running).
+      VideoCacheService.instance
+          .warm(['https://cdn/a.mp4', 'https://cdn/b.mp4', 'https://cdn/c.mp4']);
+
+      final started = DateTime.now();
+      final wait = VideoCacheService.instance
+          .awaitReady('https://cdn/c.mp4', const Duration(seconds: 10));
+
+      // The user scrolls; c leaves the window entirely.
+      VideoCacheService.instance.warm(['https://cdn/a.mp4']);
+
+      expect(await wait, isFalse);
+      // Without the dequeue signal this sits out the full ten seconds for
+      // a download that is never going to run.
+      expect(DateTime.now().difference(started),
+          lessThan(const Duration(seconds: 2)));
+    });
+
+    test('an already-warm url resolves without waiting at all', () async {
+      ApiService.useClient(
+          MockClient((_) async => http.Response.bytes(List.filled(1024, 3), 200)));
+
+      VideoCacheService.instance.warm(['https://cdn/warm.mp4']);
+      expect(
+          await eventually(
+              () => VideoCacheService.instance.isReady('https://cdn/warm.mp4')),
+          isTrue);
+
+      final started = DateTime.now();
+      expect(
+          await VideoCacheService.instance
+              .awaitReady('https://cdn/warm.mp4', const Duration(seconds: 10)),
+          isTrue);
+      expect(DateTime.now().difference(started),
+          lessThan(const Duration(milliseconds: 500)));
+    });
+  });
 }
