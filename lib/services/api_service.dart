@@ -972,22 +972,11 @@ class ApiService {
   /// user follows. Returns the same JSON shape as the smart and explore feeds
   /// so the SmartReelsFeed widget can parse all three with one parser.
   static Future<Map<String, dynamic>> getFollowingFeedV2(
-      String userId,
-      {int page = 1,
-      int limit = 20,
-      String sessionId = '',
-      bool refresh = false}) async {
+      String userId, {int page = 1, int limit = 20}) async {
     try {
-      var url =
-          '$_base/api/v1/feed/following/v2?userId=$userId&page=$page&limit=$limit';
-      if (sessionId.isNotEmpty) url += '&sessionId=$sessionId';
-      // Pull-to-refresh signal — the backend drops the seen-content set,
-      // which is what the Following feed's seen-aware ordering keys off.
-      // Without it, a user who has watched what their follows posted gets
-      // the identical order back on every pull.
-      if (refresh) url += '&refresh=true';
-      final res =
-          await _authHttp.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
+      final res = await _authHttp.get(Uri.parse(
+        '$_base/api/v1/feed/following/v2?userId=$userId&page=$page&limit=$limit',
+      )).timeout(const Duration(seconds: 30));
       if (res.statusCode == 200) {
         final body = json.decode(res.body) as Map<String, dynamic>;
         if (body['items'] == null) body['items'] = [];
