@@ -376,6 +376,13 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
 
   /// Dispatches to the right backend endpoint based on widget.kind. Each
   /// endpoint runs a different ranking algorithm — see FeedKind doc.
+  // Every branch must forward `refresh`. Two of them silently did not,
+  // and the symptom was invisible from here: pull-to-refresh cleared the
+  // list and re-requested page 1, the request went out looking exactly
+  // like an ordinary page 1, and the server's seen-content filter handed
+  // back the order it had just handed back. The feed looked frozen while
+  // every part of the mechanism reported success. Adding a feed kind
+  // means wiring refresh through its endpoint too.
   Future<Map<String, dynamic>> _fetchPage(int page, String sessionId,
       {bool refresh = false}) {
     switch (widget.kind) {
@@ -387,17 +394,13 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
           refresh: refresh,
         );
       case FeedKind.following:
-        // No refresh argument to pass: /feed/following/v2 does not read a
-        // refresh flag, so pulling down here re-requests page 1 and the
-        // server's seen-content filter hands back what it handed back
-        // before. Making refresh work on this tab needs a backend change,
-        // not a client one.
-        return ApiService.getFollowingFeedV2(widget.userId, page: page);
+        return ApiService.getFollowingFeedV2(
+          widget.userId,
+          page: page,
+          sessionId: sessionId,
+          refresh: refresh,
+        );
       case FeedKind.explore:
-        // Explore honours refresh on both sides — the endpoint reads it
-        // and getExploreFeed forwards it — but this call used to drop it,
-        // so pull-to-refresh cleared the list, re-requested page 1 with
-        // the seen-content filter still armed, and rebuilt the same feed.
         return ApiService.getExploreFeed(
           widget.userId,
           page: page,
