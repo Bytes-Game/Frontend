@@ -1001,8 +1001,14 @@ class ApiService {
   /// drop non-video items (e.g. suggested-account cards) so the surface
   /// stays a pure video grid. No new backend algorithm required.
   static Future<List<ChallengeModel>> getExploreChallenges(
-      String userId, {int page = 1, int limit = 30, bool refresh = false}) async {
-    final body = await getExploreFeed(userId, page: page, limit: limit, refresh: refresh);
+      String userId, {
+      int page = 1,
+      int limit = 30,
+      bool refresh = false,
+      bool markShown = false,
+      }) async {
+    final body = await getExploreFeed(
+      userId, page: page, limit: limit, refresh: refresh, markShown: markShown);
     final items = (body['items'] as List? ?? []);
     final out = <ChallengeModel>[];
     for (final raw in items) {
@@ -1025,14 +1031,28 @@ class ApiService {
   /// bandit, hour-routing. Surfaces realtime-trending + recent content with
   /// aggressive diversity (MMR lambda=0.40) and always sprinkles wildcards.
   /// Used for the "Explore" tab.
+  ///
+  /// [markShown] records an impression against every item in the response, so
+  /// later feeds treat them as already-watched. True for a surface the user
+  /// actually watches; FALSE for a grid that merely renders thumbnails, where
+  /// counting all 30 tiles as watched on every visit would burn through the
+  /// catalog in a couple of taps and push every later feed onto re-watches.
   static Future<Map<String, dynamic>> getExploreFeed(
-      String userId, {int page = 1, int limit = 20, bool refresh = false}) async {
+      String userId, {
+      int page = 1,
+      int limit = 20,
+      bool refresh = false,
+      bool markShown = true,
+      }) async {
     try {
       var url = '$_base/api/v1/feed/explore?userId=$userId&page=$page&limit=$limit';
-      // Pull-to-refresh signal — backend clears the seen-content filter,
-      // resets session dedup, jitters scores, and demotes the previous
-      // refresh's top-3 so the head of the feed reliably changes.
+      // Pull-to-refresh signal — backend resets session dedup, jitters
+      // scores, and demotes the previous refresh's top-3 so the head of the
+      // feed reliably changes. It does NOT forget what you've watched:
+      // unseen content still leads, and anything already watched backfills
+      // the tail only once there is nothing new left to show.
       if (refresh) url += '&refresh=true';
+      if (!markShown) url += '&markShown=false';
       final res = await _authHttp.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
       if (res.statusCode == 200) {
         final body = json.decode(res.body) as Map<String, dynamic>;
