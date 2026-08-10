@@ -39,6 +39,13 @@ param(
 # is exactly the output this script exists to capture.
 $ErrorActionPreference = 'Continue'
 
+# Read the tool's output as UTF-8. Windows PowerShell otherwise decodes a
+# native command's bytes using the console's legacy OEM code page, which
+# renders flutter's "Built ..." check mark as three unrelated symbols and
+# mangles every other non-ASCII character in the log.
+$previousOutputEncoding = [Console]::OutputEncoding
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 # Run from the project root no matter where the script was launched from,
 # so double-clicking it from Explorer works the same as calling it from the
 # terminal. The root is this script's parent folder.
@@ -85,10 +92,24 @@ try {
     # would expand into several lines of PowerShell diagnostics, so flatten
     # every item to its own text first. Tee-Object then writes to the file
     # and passes the line through to the screen.
+    #
+    # Read the message off the exception rather than calling ToString() on
+    # the record: a blank line on stderr produces a record with an empty
+    # message, and ToString() falls back to printing the exception's type
+    # name, so every blank line in the log came out as a wall of
+    # "System.Management.Automation.RemoteException".
     & flutter @flutterArgs 2>&1 |
-        ForEach-Object { $_.ToString() } |
+        ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) {
+                $_.Exception.Message
+            } else {
+                "$_"
+            }
+        } |
         Tee-Object -FilePath $LogFile -Append
 } finally {
+    [Console]::OutputEncoding = $previousOutputEncoding
+
     Write-Host ""
     Write-Host "Full log saved to $LogFile" -ForegroundColor Cyan
 
