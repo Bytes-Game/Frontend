@@ -4,6 +4,9 @@
 # Android logcat dumps captured while debugging (can be hundreds of MB —
 # GitHub rejects files >100 MB, so never let these get committed).
 logcat.txt
+# Run logs captured by tools/run_profile.ps1 when it falls back to writing
+# inside the project folder.
+logs.txt
 *.pyc
 *.swp
 .DS_Store
