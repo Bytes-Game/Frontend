@@ -13,6 +13,7 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/connection_prewarm_service.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/feed_paging.dart';
 import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/video_cache_service.dart';
@@ -120,6 +121,11 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
 
   // How close to the end before we pre-fetch the next page.
   static const int _prefetchPagesWhenLeft = 3;
+
+  // Items requested per page. Passed explicitly rather than left to the
+  // endpoint defaults, because [_loadNextPage] infers end-of-feed from a
+  // short page and that inference is wrong the moment the two disagree.
+  static const int _pageLimit = 20;
 
   // Max items we keep in memory before trimming the *head* of the list so
   // long infinite scroll sessions don't balloon RAM. Keep well above the
@@ -345,12 +351,18 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       existingKeys.add(key);
       parsed.add(item);
     }
-    _logPageComposition(nextPage, parsed);
+    final more = FeedPaging.hasMoreAfter(
+      declared: data['hasMore'],
+      rawCount: raw.length,
+      newItems: parsed.length,
+      limit: _pageLimit,
+    );
+    _logPageComposition(nextPage, parsed, raw.length, data['hasMore'], more);
     final errorMsg = (data['_ok'] == false) ? data['_error'] as String? : null;
     setState(() {
       _items.addAll(parsed);
       _page = nextPage;
-      _hasMore = data['hasMore'] == true;
+      _hasMore = more;
       _loadingMore = false;
       // Only set error if this is the first page AND we got nothing.
       // Subsequent page errors don't blank the existing feed.
@@ -397,7 +409,14 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   ///     `mine` undercount (and silently disable the owner-only delete
   ///     affordance), so a non-zero value invalidates the `mine` reading
   ///     rather than confirming it.
-  void _logPageComposition(int page, List<_FeedEntry> parsed) {
+  ///
+  /// Plus the paging trio, which says whether a feed that stopped growing
+  /// was out of content or gave up early: `raw` is what arrived before
+  /// dedup, `said` is the server's own `hasMore` (`null` when it sent
+  /// none), and `more` is what this widget concluded — see
+  /// [_decideHasMore].
+  void _logPageComposition(int page, List<_FeedEntry> parsed, int rawCount,
+      Object? declaredHasMore, bool hasMore) {
     var battles = 0;
     var shorts = 0;
     var mine = 0;
@@ -417,7 +436,8 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     }
     ReelDiagnostics.instance.log(
       'feed ${widget.kind.name} page $page: ${parsed.length} items  '
-      'battles=$battles shorts=$shorts  mine=$mine noCreatorId=$noCreatorId',
+      'battles=$battles shorts=$shorts  mine=$mine noCreatorId=$noCreatorId  '
+      'raw=$rawCount/$_pageLimit said=$declaredHasMore more=$hasMore',
     );
   }
 
@@ -430,13 +450,16 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
         return ApiService.getSmartFeed(
           widget.userId,
           page: page,
+          limit: _pageLimit,
           sessionId: sessionId,
           refresh: refresh,
         );
       case FeedKind.following:
-        return ApiService.getFollowingFeedV2(widget.userId, page: page);
+        return ApiService.getFollowingFeedV2(widget.userId,
+            page: page, limit: _pageLimit);
       case FeedKind.explore:
-        return ApiService.getExploreFeed(widget.userId, page: page);
+        return ApiService.getExploreFeed(widget.userId,
+            page: page, limit: _pageLimit);
     }
   }
 

@@ -74,15 +74,21 @@ class VideoCacheService {
   /// which is the slowest possible outcome for the slowest content.
   static const int maxPrefetchBytes = 40 * 1024 * 1024;
 
-  /// How many downloads may run at once. More than this and the warming
-  /// downloads start competing with the reel the user is actually
-  /// watching for bandwidth — which makes the app feel slower, not
-  /// faster.
-  static const int maxConcurrentDownloads = 2;
+  /// How many downloads may run at once with nothing playing against
+  /// origin. More than this and the warming downloads start competing
+  /// with the reel the user is actually watching for bandwidth — which
+  /// makes the app feel slower, not faster.
+  static const int maxConcurrentDownloads = 3;
 
-  /// The same ceiling while a reel on screen is still pulling bytes from
-  /// origin. See [_downloadSlots].
-  static const int maxConcurrentDownloadsDuringBackfill = 1;
+  /// The ceiling while a reel on screen is still pulling bytes from
+  /// origin AND warming is fetching prefixes. See [_downloadSlots].
+  static const int maxConcurrentDownloadsDuringBackfill = 2;
+
+  /// The ceiling while a reel is back-filling and warming is fetching
+  /// WHOLE files. A whole file is unbounded up to [maxPrefetchBytes], so
+  /// one of them alongside a playing reel is already as much as the
+  /// connection should carry.
+  static const int maxConcurrentWholeFileDownloadsDuringBackfill = 1;
 
   /// How much of a reel to warm in prefix mode. Sized to cover roughly
   /// the first two seconds at the 720p bitrate the feed now caps at
@@ -90,6 +96,18 @@ class VideoCacheService {
   /// to open, decode a first frame, and start rendering before the
   /// back-fill from origin catches up.
   static const int prefixBytes = 768 * 1024;
+
+  /// A prefix fetch this far along is finished instead of cancelled when
+  /// its reel leaves the window.
+  ///
+  /// Cancelling is meant to stop wasted work, but past the halfway mark
+  /// it starts causing it: the bytes already on the wire are thrown away,
+  /// and the reel — which the user may well scroll back to — has to be
+  /// fetched from scratch later. A device log showed the failure mode
+  /// plainly, with far more cancellations than completed downloads and
+  /// barely a third of the feed ever warmed. The remaining bytes here are
+  /// at most [prefixBytes] / 2, so finishing is bounded and cheap.
+  static const int cancelGraceBytes = prefixBytes ~/ 2;
 
   /// True while the loopback proxy is usable. When it stops being usable
   /// — never bound, or demoted after repeated failures — warming falls
@@ -124,16 +142,19 @@ class VideoCacheService {
   /// slot without ever warming anything.
   int _cancelled = 0;
 
+  /// Cancellations declined because the prefix was nearly complete. See
+  /// [cancelGraceBytes]. Read against `cancelled`: it is the share of
+  /// abandoned work the grace period is now converting into warm reels.
+  int _spared = 0;
+
   /// Instantaneous state of the warming pipeline, appended to the
   /// diagnostics summary. See [ReelDiagnostics.setPipelineProbe].
   ///
-  /// `active=n/m` is the slot count, and m is the answer to whether
-  /// back-fill pressure is holding warming down to a single slot: it
-  /// reads 1 while a reel on screen is still pulling from origin, 2
-  /// otherwise.
+  /// `active=n/m` is the slot count, and m answers how far back-fill
+  /// pressure is holding warming down — see [_downloadSlots].
   String _pipelineSnapshot() =>
       'queue=${_queue.length} active=${_active.length}/$_downloadSlots '
-      'urls=${_seen.length} cancelled=$_cancelled';
+      'urls=${_seen.length} cancelled=$_cancelled spared=$_spared';
 
   /// Callers parked in [awaitReady], one completer per URL. Signalled by
   /// [_signalWarm] on every path a URL can leave the warming pipeline —
@@ -321,15 +342,29 @@ class VideoCacheService {
   /// third of the bandwidth while two reels nobody has asked for take
   /// the rest.
   ///
-  /// So warming stands down — to one slot, never to zero. Stopping
-  /// outright would be the same mistake in the other direction: a long
-  /// reel back-fills for its whole duration, and a feed that only warms
-  /// between reels is a feed with no warm reels, which is what the cache
-  /// exists to prevent. One slot keeps the pipeline moving on whatever
-  /// bandwidth the playing reel is not using.
-  int get _downloadSlots => LocalMediaServer.instance.backfillsInFlight > 0
-      ? maxConcurrentDownloadsDuringBackfill
-      : maxConcurrentDownloads;
+  /// So warming stands down — but how far depends on what a warm costs.
+  ///
+  /// In prefix mode a warm is [prefixBytes] and no more, whatever the
+  /// video weighs: two of them together are about 1.5 MB, which is a
+  /// rounding error against a reel streaming for its whole duration. The
+  /// original single slot was sized for the whole-file era, when one warm
+  /// could be tens of megabytes, and it throttled the wrong thing once
+  /// prefixes shipped. A device log made the cost of that concrete —
+  /// five URLs queued behind a single slot that back-fill pressure never
+  /// released, so most reels opened cold while the cache sat idle.
+  ///
+  /// Whole-file mode keeps the one slot, because there the old reasoning
+  /// still holds. Neither mode stands down to zero: a long reel
+  /// back-fills for its whole duration, and a feed that only warms
+  /// between reels is a feed with no warm reels.
+  int get _downloadSlots {
+    if (LocalMediaServer.instance.backfillsInFlight == 0) {
+      return maxConcurrentDownloads;
+    }
+    return _prefixMode
+        ? maxConcurrentDownloadsDuringBackfill
+        : maxConcurrentWholeFileDownloadsDuringBackfill;
+  }
 
   /// Start downloads until the concurrency limit is reached.
   void _pump() {
@@ -370,6 +405,8 @@ class VideoCacheService {
   Future<bool> _runPrefix(_Download d) async {
     final prefixPath = '${_fileFor(d.url)}.prefix';
     IOSink? sink;
+    d.isPrefix = true;
+    d.written = 0;
     try {
       final request = http.Request('GET', Uri.parse(d.url))
         ..headers[HttpHeaders.rangeHeader] = 'bytes=0-${prefixBytes - 1}';
@@ -396,11 +433,11 @@ class VideoCacheService {
 
       final file = File(prefixPath);
       sink = file.openWrite();
-      var written = 0;
       final done = Completer<void>();
+      d.done = done;
       d.subscription = response.stream.listen(
         (chunk) {
-          written += chunk.length;
+          d.written += chunk.length;
           sink!.add(chunk);
         },
         onDone: () => done.isCompleted ? null : done.complete(),
@@ -412,7 +449,7 @@ class VideoCacheService {
       await sink.close();
       sink = null;
 
-      if (d.cancelled || written <= 0) {
+      if (d.cancelled || d.written <= 0) {
         ReelDiagnostics.instance
             .recordPrefixBailed(d.cancelled ? 'cancelled' : 'empty');
         await _safeDelete(prefixPath);
@@ -422,7 +459,7 @@ class VideoCacheService {
       LocalMediaServer.instance.register(
         originUrl: d.url,
         prefixPath: prefixPath,
-        prefixLength: written,
+        prefixLength: d.written,
         totalLength: total,
       );
       _prefixed.add(d.url);
@@ -458,6 +495,11 @@ class VideoCacheService {
   Future<void> _runWholeFile(_Download d) async {
     final partPath = '${_fileFor(d.url)}.part';
     IOSink? sink;
+    // A failed prefix falls through to here on the same download, so the
+    // byte count starts again and the cancel grace stops applying — a
+    // whole file has no bounded "nearly done".
+    d.isPrefix = false;
+    d.written = 0;
     try {
       final request = http.Request('GET', Uri.parse(d.url));
       // Raw client, NOT the authed wrapper: media lives on R2 behind
@@ -469,13 +511,13 @@ class VideoCacheService {
 
       final part = File(partPath);
       sink = part.openWrite();
-      var written = 0;
       final done = Completer<void>();
+      d.done = done;
 
       d.subscription = response.stream.listen(
         (chunk) {
-          written += chunk.length;
-          if (written > maxPrefetchBytes) {
+          d.written += chunk.length;
+          if (d.written > maxPrefetchBytes) {
             // Server lied about (or omitted) content-length. Stop
             // rather than let one video eat the cache.
             if (!done.isCompleted) done.completeError(StateError('too large'));
@@ -518,10 +560,32 @@ class VideoCacheService {
 
   void _cancel(String url) {
     final d = _active[url];
-    if (d == null) return;
+    // Already cancelled: the download stays in [_active] until it unwinds,
+    // so the window can sweep past it several times. Counting each sweep
+    // reported more cancellations than there were downloads.
+    if (d == null || d.cancelled) return;
+
+    if (d.isPrefix && d.written >= cancelGraceBytes) {
+      if (!d.spared) {
+        d.spared = true;
+        _spared++;
+      }
+      return;
+    }
+
     _cancelled++;
     d.cancelled = true;
     unawaited(d.subscription?.cancel());
+
+    // A cancelled subscription fires neither onDone nor onError, so the
+    // download's `await done.future` would wait forever — holding its
+    // slot, and with it the whole queue, for the rest of the session.
+    // The device log that prompted this read `queue=5 active=1/1` with
+    // fourteen cancellations: one cancel was enough to wedge warming
+    // permanently, because during back-fill there was only ever the one
+    // slot to lose.
+    final done = d.done;
+    if (done != null && !done.isCompleted) done.complete();
   }
 
   /// Evict least-recently-used files until the cache fits in
@@ -614,11 +678,37 @@ class VideoCacheService {
 
   @visibleForTesting
   Set<String> get debugReady => _ready;
+
+  /// Downloads still unwinding. [clear] cancels them but cannot wait for
+  /// them, so a test that measures concurrency has to let the previous
+  /// one's downloads drain or it measures the leftovers too.
+  @visibleForTesting
+  int get debugActive => _active.length;
 }
 
 class _Download {
   _Download(this.url);
   final String url;
   bool cancelled = false;
+
+  /// True while this download is fetching an opening slice rather than a
+  /// whole file. Only a prefix has a bounded size, so only a prefix can
+  /// be judged "nearly done" — see [VideoCacheService.cancelGraceBytes].
+  bool isPrefix = false;
+
+  /// Bytes received so far, reset when the prefix path falls through to
+  /// the whole-file path.
+  int written = 0;
+
+  /// Set once when a cancellation was declined, so the tally counts the
+  /// download rather than the number of times the window moved past it.
+  bool spared = false;
+
   StreamSubscription<List<int>>? subscription;
+
+  /// Completed when the body stream ends, errors, or is cancelled. The
+  /// download's `await` on this is the only thing holding its slot, so
+  /// every one of those three has to complete it — see
+  /// [VideoCacheService._cancel].
+  Completer<void>? done;
 }

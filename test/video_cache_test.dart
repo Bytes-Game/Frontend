@@ -556,6 +556,11 @@ void _capTests() {
     /// each request open, and reports the most downloads ever in flight
     /// at the same time.
     Future<int> peakConcurrency(List<String> urls) async {
+      // A previous test's cancelled downloads can still be unwinding, and
+      // they hold slots while they do — measure with those still in
+      // flight and the reading is of the residue, not of the limit.
+      await eventually(() => VideoCacheService.instance.debugActive == 0);
+
       var live = 0;
       var peak = 0;
       final started = <String>{};
@@ -590,14 +595,39 @@ void _capTests() {
       );
     });
 
-    test('warming stands down to one slot while a reel is back-filling',
+    test('whole-file warming stands down to one slot while a reel back-fills',
         () async {
+      // No proxy bound, so warming fetches whole files. One of those is
+      // unbounded up to maxPrefetchBytes, which alongside a playing reel
+      // is already as much as the connection should carry.
+      expect(LocalMediaServer.instance.healthy, isFalse);
       LocalMediaServer.instance.debugSetBackfills(1);
       expect(
         await peakConcurrency(
             ['https://cdn/b1.mp4', 'https://cdn/b2.mp4', 'https://cdn/b3.mp4']),
-        VideoCacheService.maxConcurrentDownloadsDuringBackfill,
+        VideoCacheService.maxConcurrentWholeFileDownloadsDuringBackfill,
         reason: 'the reel on screen has a deadline; these do not',
+      );
+    });
+
+    test('prefix warming keeps two slots while a reel back-fills', () async {
+      // A prefix is prefixBytes and no more, whatever the video weighs,
+      // so two of them are a rounding error against a reel streaming for
+      // its whole duration. Standing down to one slot here was throttling
+      // the wrong thing: a device log showed five URLs queued behind that
+      // single slot with most reels still opening cold.
+      await LocalMediaServer.instance.start();
+      addTearDown(() async {
+        await LocalMediaServer.instance.stop();
+        LocalMediaServer.instance.debugReset();
+      });
+      expect(LocalMediaServer.instance.healthy, isTrue);
+
+      LocalMediaServer.instance.debugSetBackfills(1);
+      expect(
+        await peakConcurrency(
+            ['https://cdn/p1.mp4', 'https://cdn/p2.mp4', 'https://cdn/p3.mp4']),
+        VideoCacheService.maxConcurrentDownloadsDuringBackfill,
       );
     });
 
@@ -618,6 +648,141 @@ void _capTests() {
             VideoCacheService.instance.isReady('https://cdn/q2.mp4')),
         isTrue,
         reason: 'both must still finish, just one at a time',
+      );
+    });
+  });
+
+  group('finishing work that is nearly done', () {
+    // Cancelling a warm that has left the window is meant to stop wasted
+    // work. Past the halfway mark it starts causing it instead: the bytes
+    // already fetched are thrown away, and a scroll back to that reel
+    // pays for the whole prefix again. A device log showed the shape of
+    // it — 14 cancellations against 8 downloads, and only 6 of 14 reels
+    // ever warmed.
+
+    setUp(() async {
+      LocalMediaServer.instance.debugReset();
+      await LocalMediaServer.instance.start();
+    });
+
+    tearDown(() async {
+      await LocalMediaServer.instance.stop();
+      LocalMediaServer.instance.debugReset();
+    });
+
+    /// An origin that honours ranges and hands over [head] bytes, then
+    /// holds the connection open until [release] completes.
+    void serveThenHold(int head, Future<void> release) {
+      ApiService.useClient(MockClient.streaming((req, _) async {
+        final controller = StreamController<List<int>>();
+        controller.add(List.filled(head, 1));
+        unawaited(release.then((_) async {
+          controller.add(List.filled(VideoCacheService.prefixBytes - head, 2));
+          await controller.close();
+        }));
+        return http.StreamedResponse(
+          controller.stream,
+          HttpStatus.partialContent,
+          headers: {
+            'content-range':
+                'bytes 0-${VideoCacheService.prefixBytes - 1}/9000000',
+          },
+        );
+      }));
+    }
+
+    test('a prefix past the halfway mark finishes instead of being dropped',
+        () async {
+      final release = Completer<void>();
+      serveThenHold(VideoCacheService.cancelGraceBytes + 1024, release.future);
+
+      VideoCacheService.instance.warm(['https://cdn/g1.mp4']);
+      expect(await eventually(() => VideoCacheService.instance.debugActive == 1),
+          isTrue);
+      // Let the head arrive so the download is past the grace threshold.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      // The reel leaves the window.
+      VideoCacheService.instance.warm(['https://cdn/other.mp4']);
+      release.complete();
+
+      expect(
+        await eventually(
+            () => VideoCacheService.instance.isReady('https://cdn/g1.mp4')),
+        isTrue,
+        reason: 'the remaining bytes cost less than fetching it all again',
+      );
+    });
+
+    test('a prefix barely started is still dropped', () async {
+      final release = Completer<void>();
+      serveThenHold(1024, release.future);
+
+      VideoCacheService.instance.warm(['https://cdn/g2.mp4']);
+      expect(await eventually(() => VideoCacheService.instance.debugActive == 1),
+          isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      VideoCacheService.instance.warm(['https://cdn/other.mp4']);
+      release.complete();
+
+      expect(
+        await eventually(
+            () => VideoCacheService.instance.debugActive == 0),
+        isTrue,
+      );
+      expect(VideoCacheService.instance.isReady('https://cdn/g2.mp4'), isFalse,
+          reason: 'nothing worth keeping had arrived yet');
+    });
+
+    test('a cancelled download releases its slot instead of wedging the queue',
+        () async {
+      // The bug this pins: cancelling a subscription fires neither onDone
+      // nor onError, so the download sat forever on a future that would
+      // never complete, still holding its slot. During back-fill there
+      // was only one slot, so a single cancellation — which happens on
+      // any ordinary scroll — stopped warming for the rest of the
+      // session. On device that read `queue=5 active=1/1`, with the
+      // queue never draining again.
+      LocalMediaServer.instance.debugSetBackfills(1);
+      addTearDown(() => LocalMediaServer.instance.debugSetBackfills(0));
+
+      final started = <String>{};
+      ApiService.useClient(MockClient.streaming((req, _) async {
+        started.add(req.url.toString());
+        // Never completes: every download stays in flight until cancelled,
+        // so a slot can only come back by being released.
+        return http.StreamedResponse(
+          StreamController<List<int>>().stream,
+          HttpStatus.partialContent,
+          headers: {
+            'content-range':
+                'bytes 0-${VideoCacheService.prefixBytes - 1}/9000000',
+          },
+        );
+      }));
+
+      // Fill every slot, then queue one more behind them.
+      final hogs = List.generate(
+          VideoCacheService.maxConcurrentDownloadsDuringBackfill,
+          (i) => 'https://cdn/hog$i.mp4');
+      const behind = 'https://cdn/behind.mp4';
+      VideoCacheService.instance.warm([...hogs, behind]);
+      expect(
+          await eventually(
+              () => VideoCacheService.instance.debugActive == hogs.length),
+          isTrue);
+      expect(started, isNot(contains(behind)),
+          reason: 'it should be queued behind the hogs, not running');
+
+      // The window moves past every hog. Their slots must come back, and
+      // the reel waiting behind them must get one.
+      VideoCacheService.instance.warm([behind]);
+
+      expect(
+        await eventually(() => started.contains(behind)),
+        isTrue,
+        reason: 'a cancelled download must not hold its slot forever',
       );
     });
   });
