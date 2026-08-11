@@ -43,6 +43,7 @@ class ReelDiagnostics {
   final Map<String, int> _prefixBailed = <String, int>{};
   int _spareWarm = 0;
   int _spareCold = 0;
+  int _retired = 0;
   int _sinceSummary = 0;
 
   /// Live view of the warming pipeline, installed by `VideoCacheService`.
@@ -126,6 +127,21 @@ class ReelDiagnostics {
     _spareCold++;
   }
 
+  /// A pooled player was shut down and released.
+  ///
+  /// `starts` counts players opened, so this counts the other end, and
+  /// the pair is the only direct read on decoder churn. Every open/retire
+  /// cycle is a hardware video decoder plus an audio decoder created and
+  /// torn down — expensive enough that a device log showing far more of
+  /// them than there are distinct reels is itself the finding. A healthy
+  /// session retires roughly one player per reel LEFT BEHIND; retires
+  /// keeping pace with starts on a short feed means the pool is
+  /// rebuilding players it already had.
+  void recordPlayerRetired() {
+    if (!_visible) return;
+    _retired++;
+  }
+
   void _record(void Function() bump) {
     if (!_visible) return;
     bump();
@@ -147,7 +163,8 @@ class ReelDiagnostics {
         'file=$_wholeFile (${pct(_wholeFile)})  network=$_origin (${pct(_origin)})  '
         '| downloads=$_downloads prefixes warmed=$_prefixWarmed '
         'failed=$_prefixFailed$bailed  '
-        '| spare warm=$_spareWarm cold=$_spareCold${_pipeline()}';
+        '| spare warm=$_spareWarm cold=$_spareCold '
+        '| players retired=$_retired${_pipeline()}';
   }
 
   /// The pipeline snapshot, or nothing if no probe is installed.
@@ -173,9 +190,19 @@ class ReelDiagnostics {
     _prefixWarmed = _prefixFailed = 0;
     _prefixBailed.clear();
     _spareWarm = _spareCold = 0;
+    _retired = 0;
     _sinceSummary = 0;
     _pipelineProbe = null;
   }
+
+  @visibleForTesting
+  int get debugRetired => _retired;
+
+  @visibleForTesting
+  int get debugSpareWarm => _spareWarm;
+
+  @visibleForTesting
+  int get debugSpareCold => _spareCold;
 
   @visibleForTesting
   int get debugProxied => _proxied;

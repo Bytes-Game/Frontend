@@ -120,6 +120,11 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
+  # Pulled in transitively by video_player, but the player-pool tests
+  # implement VideoPlayerPlatform directly to stand in for ExoPlayer, so
+  # it is a first-class test dependency and is declared as one.
+  video_player_platform_interface: ^6.6.0
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
