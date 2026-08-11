@@ -539,4 +539,86 @@ void _capTests() {
           lessThan(const Duration(milliseconds: 500)));
     });
   });
+
+  group('yielding bandwidth to the reel on screen', () {
+    // Warming is speculative — it is for reels the user has not swiped to
+    // and may never swipe to. A back-fill is not: it is feeding a decoder
+    // rendering to the screen this instant. They share one connection to
+    // the CDN and so one congestion window, so treating them as equals
+    // hands the watched reel a third of the bandwidth while two reels
+    // nobody asked for take the rest, and the watched one stutters.
+
+    tearDown(() {
+      LocalMediaServer.instance.debugSetBackfills(0);
+    });
+
+    /// Runs [urls] through the warm pipeline against an origin that holds
+    /// each request open, and reports the most downloads ever in flight
+    /// at the same time.
+    Future<int> peakConcurrency(List<String> urls) async {
+      var live = 0;
+      var peak = 0;
+      final started = <String>{};
+
+      ApiService.useClient(MockClient.streaming((req, _) async {
+        live++;
+        if (live > peak) peak = live;
+        started.add(req.url.toString());
+        // Long enough that a second download would overlap this one if
+        // the limit allowed it, short enough to keep the suite quick.
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+        live--;
+        return http.StreamedResponse(
+          Stream.value(List.filled(512, 1)), 200, contentLength: 512,
+        );
+      }));
+
+      VideoCacheService.instance.warm(urls);
+      await eventually(() => started.length == urls.length,
+          limit: const Duration(seconds: 5));
+      return peak;
+    }
+
+    test('two warms run side by side when nothing is playing', () async {
+      // The control. Without this the test below proves only that the
+      // pipeline is slow, not that it stood down.
+      LocalMediaServer.instance.debugSetBackfills(0);
+      expect(
+        await peakConcurrency(
+            ['https://cdn/i1.mp4', 'https://cdn/i2.mp4', 'https://cdn/i3.mp4']),
+        VideoCacheService.maxConcurrentDownloads,
+      );
+    });
+
+    test('warming stands down to one slot while a reel is back-filling',
+        () async {
+      LocalMediaServer.instance.debugSetBackfills(1);
+      expect(
+        await peakConcurrency(
+            ['https://cdn/b1.mp4', 'https://cdn/b2.mp4', 'https://cdn/b3.mp4']),
+        VideoCacheService.maxConcurrentDownloadsDuringBackfill,
+        reason: 'the reel on screen has a deadline; these do not',
+      );
+    });
+
+    test('but never to zero — the queue keeps moving', () async {
+      // Standing down completely would be the same mistake in the other
+      // direction: a long reel back-fills for its whole duration, so a
+      // feed that only warms between reels is a feed with no warm reels.
+      LocalMediaServer.instance.debugSetBackfills(1);
+      ApiService.useClient(
+          MockClient((_) async => http.Response.bytes(List.filled(512, 9), 200)));
+
+      VideoCacheService.instance
+          .warm(['https://cdn/q1.mp4', 'https://cdn/q2.mp4']);
+
+      expect(
+        await eventually(() =>
+            VideoCacheService.instance.isReady('https://cdn/q1.mp4') &&
+            VideoCacheService.instance.isReady('https://cdn/q2.mp4')),
+        isTrue,
+        reason: 'both must still finish, just one at a time',
+      );
+    });
+  });
 }

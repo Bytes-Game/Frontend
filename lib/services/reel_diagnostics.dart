@@ -37,8 +37,10 @@ class ReelDiagnostics {
   int _proxied = 0;
   int _wholeFile = 0;
   int _origin = 0;
+  int _downloads = 0;
   int _prefixWarmed = 0;
   int _prefixFailed = 0;
+  final Map<String, int> _prefixBailed = <String, int>{};
   int _spareWarm = 0;
   int _spareCold = 0;
   int _sinceSummary = 0;
@@ -54,6 +56,17 @@ class ReelDiagnostics {
   void recordWholeFileStart() => _record(() => _wholeFile++);
   void recordOriginStart() => _record(() => _origin++);
 
+  /// A queued URL was dequeued and its download actually began.
+  ///
+  /// Separates the two ways warming can produce nothing: the prefetch
+  /// never ran at all (downloads=0), versus it ran on every reel and gave
+  /// up each time (downloads high, warmed 0). Those need opposite fixes,
+  /// and without this counter the summary reads identically for both.
+  void recordDownloadStarted() {
+    if (!_visible) return;
+    _downloads++;
+  }
+
   /// A reel's opening slice was fetched and handed to the proxy.
   void recordPrefixWarmed() {
     if (!_visible) return;
@@ -64,6 +77,18 @@ class ReelDiagnostics {
   void recordPrefixFailed() {
     if (!_visible) return;
     _prefixFailed++;
+  }
+
+  /// The prefix fetch gave up before registering with the proxy, without
+  /// throwing — the origin refused the range, sent an unusable
+  /// Content-Range, or the body arrived empty. These paths are the quiet
+  /// majority of "warming did nothing": they are neither `warmed` nor
+  /// `failed`, so a summary reading `warmed=0 failed=0` says only that
+  /// the prefix path produced nothing, never which of the three reasons.
+  /// [reason] is a short tag, tallied so one line names the culprit.
+  void recordPrefixBailed(String reason) {
+    if (!_visible) return;
+    _prefixBailed[reason] = (_prefixBailed[reason] ?? 0) + 1;
   }
 
   /// The read-ahead spare controller was opened with its opening slice
@@ -96,16 +121,22 @@ class ReelDiagnostics {
     final starts = _proxied + _wholeFile + _origin;
     if (starts == 0) return 'no reels played yet';
     String pct(int n) => '${(n * 100 / starts).round()}%';
+    final bailed = _prefixBailed.isEmpty
+        ? ''
+        : ' bailed{${_prefixBailed.entries.map((e) => '${e.key}:${e.value}').join(',')}}';
     return 'starts=$starts  proxy=$_proxied (${pct(_proxied)})  '
         'file=$_wholeFile (${pct(_wholeFile)})  network=$_origin (${pct(_origin)})  '
-        '| prefixes warmed=$_prefixWarmed failed=$_prefixFailed  '
+        '| downloads=$_downloads prefixes warmed=$_prefixWarmed '
+        'failed=$_prefixFailed$bailed  '
         '| spare warm=$_spareWarm cold=$_spareCold';
   }
 
   @visibleForTesting
   void debugReset() {
     _proxied = _wholeFile = _origin = 0;
+    _downloads = 0;
     _prefixWarmed = _prefixFailed = 0;
+    _prefixBailed.clear();
     _spareWarm = _spareCold = 0;
     _sinceSummary = 0;
   }

@@ -17,6 +17,7 @@
 //   * repeated failure must DEMOTE the proxy so playback falls back
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -302,6 +303,157 @@ void main() {
     });
   });
 
+  group('running ahead of the player', () {
+    // The two properties that stop a reel freezing a couple of seconds in.
+    // Neither is about which bytes come out — the tests above cover that —
+    // so both are written as questions about TIMING: what is the proxy
+    // doing while the player is not reading? Under the old code the answer
+    // to both was "nothing", and "nothing" is what the decoder logged as
+    // `Input time interval reaches ~1000ms`.
+
+    test('the origin fetch is issued while the cached head is still going out',
+        () async {
+      // A prefix far larger than any socket buffer, and a client that
+      // reads none of it, so handing the prefix over genuinely blocks.
+      // The old order — write the whole prefix, THEN ask origin — cannot
+      // get a request out under those conditions at all. That is the
+      // round-trip that used to be spent at the seam instead of before
+      // it, and it is why a reel started fine and stuck at ~2s.
+      const bigPrefix = 8 * 1024 * 1024;
+      const bigTotal = bigPrefix + 1024;
+      final bigFile = File('${tmp.path}/big.prefix')
+        ..writeAsBytesSync(Uint8List(bigPrefix));
+
+      final asked = Completer<String>();
+      ApiService.useClient(MockClient.streaming((req, _) async {
+        if (!asked.isCompleted) {
+          asked.complete(req.headers[HttpHeaders.rangeHeader] ?? '');
+        }
+        return http.StreamedResponse(
+          Stream.value(List.filled(1024, 3)),
+          206,
+          contentLength: 1024,
+          headers: {
+            'content-range': 'bytes $bigPrefix-${bigTotal - 1}/$bigTotal'
+          },
+        );
+      }));
+
+      LocalMediaServer.instance.register(
+        originUrl: 'https://cdn/big.mp4',
+        prefixPath: bigFile.path,
+        prefixLength: bigPrefix,
+        totalLength: bigTotal,
+      );
+      final url = LocalMediaServer.instance.localUrlFor('https://cdn/big.mp4')!;
+
+      final client = HttpClient();
+      final res = await (await client.getUrl(Uri.parse(url))).close();
+
+      expect(
+        await asked.future.timeout(const Duration(seconds: 5)),
+        'bytes=$bigPrefix-${bigTotal - 1}',
+        reason: 'the origin round-trip must overlap the cached head, not '
+            'queue up behind it',
+      );
+
+      await res.drain<void>();
+      client.close();
+    });
+
+    test('origin runs ahead of a stalled player, up to the cap', () async {
+      // Read-ahead as a property, tested against a sink that is genuinely
+      // not draining. `out.addStream(origin)` — what this replaced —
+      // welds the download rate to the player's read rate, so the moment
+      // the player stops reading the download stops too, the connection
+      // idles, and TCP shrinks the window; the cushion the player needs
+      // for its next slow patch never gets built. Decoupled, the download
+      // keeps going and banks bytes for exactly that moment.
+      //
+      // The cap matters as much as the running-ahead: unbounded, a player
+      // that stalls on a long reel would pull the whole file into memory.
+      const chunk = 64 * 1024;
+      final gate = Completer<void>();
+      final written = <int>[];
+      var pulled = 0;
+      var sourceDone = false;
+
+      // A sink that accepts writes but never finishes a flush until the
+      // test says so — a socket whose reader has gone away.
+      final sink = _StalledSink(gate.future, written);
+
+      Stream<List<int>> counted() async* {
+        // Comfortably more than the cap, so the pause is what stops it.
+        for (var i = 0; i < 96; i++) {
+          yield List.filled(chunk, i % 251);
+          pulled += chunk;
+        }
+        sourceDone = true;
+      }
+
+      final piping =
+          LocalMediaServer.instance.debugPipeReadAhead(counted(), sink);
+
+      // Let it run as far as it is going to.
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+
+      // Coupled to the sink, this stops after roughly one chunk.
+      expect(pulled, greaterThanOrEqualTo(LocalMediaServer.readAheadBytes ~/ 2),
+          reason: 'the download must keep going while the player is stalled '
+              '— that cushion is the entire point');
+      // And unbounded, a stalled player on a long reel would pull the
+      // whole file into memory.
+      expect(pulled, lessThanOrEqualTo(LocalMediaServer.readAheadBytes + 4 * chunk),
+          reason: 'but it must stop at the cap, not buffer the whole reel');
+      expect(sourceDone, isFalse);
+
+      // The player starts reading again; everything banked flows through.
+      gate.complete();
+      await piping.timeout(const Duration(seconds: 5));
+
+      expect(sourceDone, isTrue);
+      expect(written.length, 96 * chunk,
+          reason: 'nothing may be dropped on the way through the buffer');
+    });
+
+    test('a live back-fill is visible to the cache tier, and clears after',
+        () async {
+      // VideoCacheService reads this to stand its speculative warming
+      // down while a reel on screen needs the bandwidth. A counter that
+      // leaked would pin warming at one slot for the rest of the session;
+      // one that never rose would leave the contention in place.
+      final holding = Completer<void>();
+      final piping = Completer<void>();
+
+      ApiService.useClient(MockClient.streaming((req, _) async {
+        Stream<List<int>> gated() async* {
+          yield full.sublist(prefixLen, prefixLen + 10);
+          if (!piping.isCompleted) piping.complete();
+          await holding.future;
+          yield full.sublist(prefixLen + 10);
+        }
+
+        return http.StreamedResponse(gated(), 206,
+            contentLength: total - prefixLen,
+            headers: {'content-range': 'bytes $prefixLen-${total - 1}/$total'});
+      }));
+
+      expect(LocalMediaServer.instance.backfillsInFlight, 0);
+
+      final url = LocalMediaServer.instance.localUrlFor('https://cdn/clip.mp4')!;
+      final pending = get(url).then(bytesOf);
+
+      await piping.future.timeout(const Duration(seconds: 5));
+      expect(LocalMediaServer.instance.backfillsInFlight, 1,
+          reason: 'a reel pulling from origin right now must be visible');
+
+      holding.complete();
+      expect(await pending, full);
+      expect(LocalMediaServer.instance.backfillsInFlight, 0,
+          reason: 'and must not stay visible once it has finished');
+    });
+  });
+
   group('self-demotion', () {
     test('stops handing out proxy urls once demoted', () {
       expect(LocalMediaServer.instance.localUrlFor('https://cdn/clip.mp4'),
@@ -337,4 +489,49 @@ void main() {
           reason: 'sustained origin failure must trip the fallback');
     });
   });
+}
+
+/// An [IOSink] that accepts writes but never finishes a flush until the
+/// test releases it — a socket whose reader has stopped reading.
+class _StalledSink implements IOSink {
+  _StalledSink(this._release, this._written);
+
+  final Future<void> _release;
+  final List<int> _written;
+
+  @override
+  void add(List<int> data) => _written.addAll(data);
+
+  @override
+  Future<void> flush() => _release;
+
+  @override
+  Future<void> close() async {}
+
+  @override
+  Future<void> get done => Future<void>.value();
+
+  @override
+  void addError(Object error, [StackTrace? stackTrace]) {}
+
+  /// Deliberately backpressure-free. Nothing under test calls this; it is
+  /// here so that a regression to `out.addStream(origin)` compiles and
+  /// then fails the cap assertion, rather than failing to build.
+  @override
+  Future<void> addStream(Stream<List<int>> stream) => stream.forEach(add);
+
+  @override
+  Encoding encoding = utf8;
+
+  @override
+  void write(Object? object) {}
+
+  @override
+  void writeAll(Iterable<dynamic> objects, [String separator = '']) {}
+
+  @override
+  void writeCharCode(int charCode) {}
+
+  @override
+  void writeln([Object? object = '']) {}
 }

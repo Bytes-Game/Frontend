@@ -78,6 +78,10 @@ class VideoCacheService {
   /// faster.
   static const int maxConcurrentDownloads = 2;
 
+  /// The same ceiling while a reel on screen is still pulling bytes from
+  /// origin. See [_downloadSlots].
+  static const int maxConcurrentDownloadsDuringBackfill = 1;
+
   /// How much of a reel to warm in prefix mode. Sized to cover roughly
   /// the first two seconds at the 720p bitrate the feed now caps at
   /// (2.5 Mbps ≈ 310 KB/s), which is comfortably enough for the player
@@ -278,9 +282,30 @@ class VideoCacheService {
     _pump();
   }
 
+  /// How many warms may run right now.
+  ///
+  /// Every download here is speculative: it is for a reel the user has
+  /// not swiped to and may never swipe to. A back-fill is not — it is
+  /// feeding a decoder that is rendering to the screen this instant, and
+  /// if it loses the race the user sees a freeze. They share one
+  /// connection to the CDN and therefore one congestion window, so
+  /// "equal priority" in practice means the reel being watched gets a
+  /// third of the bandwidth while two reels nobody has asked for take
+  /// the rest.
+  ///
+  /// So warming stands down — to one slot, never to zero. Stopping
+  /// outright would be the same mistake in the other direction: a long
+  /// reel back-fills for its whole duration, and a feed that only warms
+  /// between reels is a feed with no warm reels, which is what the cache
+  /// exists to prevent. One slot keeps the pipeline moving on whatever
+  /// bandwidth the playing reel is not using.
+  int get _downloadSlots => LocalMediaServer.instance.backfillsInFlight > 0
+      ? maxConcurrentDownloadsDuringBackfill
+      : maxConcurrentDownloads;
+
   /// Start downloads until the concurrency limit is reached.
   void _pump() {
-    while (_active.length < maxConcurrentDownloads && _queue.isNotEmpty) {
+    while (_active.length < _downloadSlots && _queue.isNotEmpty) {
       final url = _queue.removeAt(0);
       _start(url);
     }
@@ -289,6 +314,7 @@ class VideoCacheService {
   void _start(String url) {
     final download = _Download(url);
     _active[url] = download;
+    ReelDiagnostics.instance.recordDownloadStarted();
     unawaited(_run(download).whenComplete(() {
       _active.remove(url);
       // One signal that covers success, failure and cancellation alike.
@@ -323,7 +349,11 @@ class VideoCacheService {
       // No 206 means the origin ignored the range and is about to send
       // the whole file — not what we asked for, so let the whole-file
       // path own it rather than half-handling it here.
-      if (response.statusCode != HttpStatus.partialContent) return false;
+      if (response.statusCode != HttpStatus.partialContent) {
+        ReelDiagnostics.instance
+            .recordPrefixBailed('status${response.statusCode}');
+        return false;
+      }
 
       final total = _totalFromContentRange(
           response.headers[HttpHeaders.contentRangeHeader.toLowerCase()] ??
@@ -331,7 +361,10 @@ class VideoCacheService {
       // Only the total's *validity* matters here, not its size. We keep
       // exactly prefixBytes on disk either way; the proxy back-fills the
       // rest from origin as the player asks for it. See maxPrefetchBytes.
-      if (total <= 0) return false;
+      if (total <= 0) {
+        ReelDiagnostics.instance.recordPrefixBailed('noTotal');
+        return false;
+      }
 
       final file = File(prefixPath);
       sink = file.openWrite();
@@ -352,6 +385,8 @@ class VideoCacheService {
       sink = null;
 
       if (d.cancelled || written <= 0) {
+        ReelDiagnostics.instance
+            .recordPrefixBailed(d.cancelled ? 'cancelled' : 'empty');
         await _safeDelete(prefixPath);
         return false;
       }

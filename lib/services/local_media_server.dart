@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -37,6 +38,9 @@ import 'package:myapp/services/reel_diagnostics.dart';
 ///     access pattern of a reels feed — is served from it; a seek past
 ///     the prefix is proxied straight through. No block map, no
 ///     bookkeeping to get wrong.
+///   * **The origin fetch overlaps the cached head, and runs ahead of
+///     the player.** See [_handle] and [_pipeReadAhead]. Together these
+///     are what stop a reel from freezing a couple of seconds in.
 ///   * **Loopback only.** Bound to 127.0.0.1 with an ephemeral port, and
 ///     it will only serve ids it has been explicitly handed, so it can
 ///     never act as an open proxy.
@@ -52,15 +56,36 @@ class LocalMediaServer {
   /// the rest of the session.
   static const int maxFailuresBeforeDemote = 3;
 
+  /// How far the back-fill is allowed to run ahead of the player, in
+  /// bytes held in memory. See [_pipeReadAhead] for why running ahead is
+  /// the point; this constant is only about the ceiling.
+  ///
+  /// At the feed's 720p bitrate (~310 KB/s) this is roughly 13 seconds of
+  /// cushion, which covers a slow patch of network or a busy isolate
+  /// without being a meaningful allocation next to a decoder's own buffer
+  /// pool. It is a per-response cap and only one or two responses are
+  /// ever live at once, since VideoPlayerService keeps one player plus a
+  /// spare.
+  static const int readAheadBytes = 4 * 1024 * 1024;
+
   HttpServer? _server;
   final Map<String, _Entry> _byId = {};
   final Map<String, String> _idByOrigin = {};
   int _failures = 0;
   bool _demoted = false;
   bool _starting = false;
+  int _backfills = 0;
 
   /// True when the proxy is bound and has not demoted itself.
   bool get healthy => _server != null && !_demoted;
+
+  /// How many responses are streaming origin bytes right now.
+  ///
+  /// A back-fill belongs to a reel that is on screen *at this moment*, so
+  /// it is the one download in the app with a hard deadline. The cache
+  /// tier reads this to stand down its speculative warming while one is
+  /// running — see [VideoCacheService.maxConcurrentDownloads].
+  int get backfillsInFlight => _backfills;
 
   /// Why the proxy stopped being used, for logging/diagnostics.
   String? demotionReason;
@@ -146,6 +171,10 @@ class LocalMediaServer {
 
   Future<void> _handle(HttpRequest req) async {
     final res = req.response;
+    // Hoisted out of the try so the catch below can release an origin
+    // response we opened but never got around to reading.
+    Future<http.StreamedResponse>? tail;
+    var tailConsumed = false;
     try {
       final segments = req.uri.pathSegments;
       final entry =
@@ -170,6 +199,77 @@ class LocalMediaServer {
       final end = range?.end ?? total - 1;
       final length = end - start + 1;
 
+      // Work out how much of this range the cached head actually covers
+      // BEFORE a single byte goes out. Two things depend on the answer,
+      // and both want it up front: the Content-Length we are about to
+      // promise, and — the reason this is hoisted — whether we need
+      // origin at all.
+      //
+      // Trust the file on disk over the length we recorded at
+      // registration. If they disagree we would otherwise promise the
+      // player Content-Length bytes and then deliver fewer, which does
+      // not surface as an error — the player just waits forever for a
+      // response that already ended.
+      File? prefixFile;
+      var prefixEnd = -1; // last byte index we can serve from disk
+      if (start < entry.prefixLength) {
+        final file = File(entry.prefixPath);
+        final onDisk = file.existsSync() ? file.lengthSync() : 0;
+        final usable = onDisk < entry.prefixLength ? onDisk : entry.prefixLength;
+        if (usable > start) {
+          prefixFile = file;
+          prefixEnd = (end < usable - 1) ? end : usable - 1;
+        }
+        // Otherwise the prefix is gone or unusable, and the whole range
+        // comes from origin — exactly what an uncached reel does.
+        //
+        // Deliberately NOT a failure and deliberately NOT an unregister.
+        // Not a failure because a vanished cache file is the cache tier
+        // doing its job, and spending the demotion budget on it would
+        // let one sweep turn the feature off for the session. Not an
+        // unregister because a player that is already mid-reel holds
+        // this URL and will issue more range requests against it; drop
+        // the entry and those 404, which breaks playback outright
+        // instead of merely making it slower.
+      }
+      final tailStart = prefixEnd < 0 ? start : prefixEnd + 1;
+
+      // THE OVERLAP.
+      //
+      // This request used to be issued only after the last cached byte
+      // had been handed over. That put a full origin round-trip — DNS,
+      // possibly TLS, and the edge's time-to-first-byte — in series
+      // *after* the prefix, on every single reel. The cushion that was
+      // supposed to absorb network latency was instead spent waiting for
+      // it to start, and a slow TTFB landed as a freeze a couple of
+      // seconds into playback, right where the cached head ran out.
+      //
+      // Firing it here costs nothing and hides that entire round-trip
+      // under the ~2s of cached video we are about to deliver anyway. By
+      // the time the player has swallowed the prefix, the origin bytes
+      // are already arriving.
+      //
+      // Only when the range genuinely extends past the cached head: a
+      // read that lands wholly inside the prefix must still cost no
+      // network at all.
+      if (tailStart <= end) {
+        tail = _openOrigin(entry.originUrl, tailStart, end);
+        // Park a listener on it immediately. If writing the prefix throws,
+        // nothing below ever awaits this future, and an origin error with
+        // no listener becomes an unhandled async error that takes down the
+        // zone — the failure worth reporting is the one the catch block is
+        // about to see, not this one.
+        //
+        // Note this deliberately does NOT touch `tail`'s stream. The
+        // prefix write above is an await, so this callback can run while
+        // we are still inside it; reading the stream here would consume a
+        // response the code below is about to legitimately read, and a
+        // streamed response can only be listened to once. Releasing an
+        // abandoned connection is the catch block's job, where "abandoned"
+        // is actually known.
+        unawaited(tail.then((_) {}, onError: (_) {}));
+      }
+
       res.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
       res.headers.contentType = ContentType('video', 'mp4');
       res.headers.set(HttpHeaders.contentLengthHeader, '$length');
@@ -184,38 +284,25 @@ class LocalMediaServer {
       // Head of the response that we already hold locally. This is the
       // part that makes the swipe feel instant: it goes out with no
       // network round-trip at all.
-      var cursor = start;
-      if (cursor < entry.prefixLength) {
-        final file = File(entry.prefixPath);
-        // Trust the file on disk over the length we recorded at
-        // registration. If they disagree we would otherwise promise the
-        // player Content-Length bytes and then deliver fewer, which does
-        // not surface as an error — the player just waits forever for a
-        // response that already ended.
-        final onDisk = file.existsSync() ? file.lengthSync() : 0;
-        final usable = onDisk < entry.prefixLength ? onDisk : entry.prefixLength;
-        if (usable <= cursor) {
-          // Prefix gone or unusable. Fall through and serve the whole
-          // range from origin — exactly what an uncached reel does.
-          //
-          // Deliberately NOT a failure and deliberately NOT an unregister.
-          // Not a failure because a vanished cache file is the cache tier
-          // doing its job, and spending the demotion budget on it would
-          // let one sweep turn the feature off for the session. Not an
-          // unregister because a player that is already mid-reel holds
-          // this URL and will issue more range requests against it; drop
-          // the entry and those 404, which breaks playback outright
-          // instead of merely making it slower.
-        } else {
-          final prefixEnd = (end < usable - 1) ? end : usable - 1;
-          await res.addStream(file.openRead(cursor, prefixEnd + 1));
-          cursor = prefixEnd + 1;
-        }
+      if (prefixFile != null) {
+        await res.addStream(prefixFile.openRead(start, prefixEnd + 1));
       }
 
-      // Remainder straight from origin.
-      if (cursor <= end) {
-        await _pipeOrigin(entry.originUrl, cursor, end, res);
+      // Remainder from origin, already in flight.
+      if (tail != null) {
+        final origin = await tail;
+        if (origin.statusCode != HttpStatus.partialContent &&
+            origin.statusCode != HttpStatus.ok) {
+          // Left unconsumed on purpose: the catch block drains it.
+          throw HttpException('origin returned ${origin.statusCode}');
+        }
+        tailConsumed = true;
+        _backfills++;
+        try {
+          await _pipeReadAhead(origin.stream, res);
+        } finally {
+          _backfills--;
+        }
       }
 
       await res.close();
@@ -226,6 +313,18 @@ class LocalMediaServer {
       // real error here, so we count it and rely on the fact that
       // successful responses reset the counter. Only sustained failure
       // demotes.
+      //
+      // If we opened an origin response and never read it — the prefix
+      // write threw, or the origin answered with a status we refuse —
+      // drain it now. Overlapping the fetch means we can be holding a
+      // live connection at this point, and dropping it on the floor
+      // would leak a socket out of the pool on every failure.
+      if (tail != null && !tailConsumed) {
+        unawaited(tail.then(
+          (r) => r.stream.drain<void>().catchError((_) {}),
+          onError: (_) {},
+        ));
+      }
       _noteFailure('$e');
       try {
         await res.close();
@@ -233,16 +332,107 @@ class LocalMediaServer {
     }
   }
 
-  Future<void> _pipeOrigin(
-      String url, int start, int end, HttpResponse out) async {
+  Future<http.StreamedResponse> _openOrigin(String url, int start, int end) {
     final request = http.Request('GET', Uri.parse(url))
       ..headers[HttpHeaders.rangeHeader] = 'bytes=$start-$end';
-    final response = await ApiService.httpClient.send(request);
-    if (response.statusCode != HttpStatus.partialContent &&
-        response.statusCode != HttpStatus.ok) {
-      throw HttpException('origin returned ${response.statusCode}');
+    return ApiService.httpClient.send(request);
+  }
+
+  /// Copy [source] to [out], pulling from origin as fast as it will go
+  /// rather than only as fast as the player happens to be reading.
+  ///
+  /// Why not `out.addStream(source)`
+  /// ------------------------------
+  /// That is one line and it is what this replaced, but it welds the two
+  /// rates together: `addStream` pauses the origin subscription whenever
+  /// the loopback socket is momentarily full, so the download stops every
+  /// time the player pauses for breath. On a phone those pauses are
+  /// constant — a busy isolate, a decoder flush mid-swipe, the player's
+  /// own buffer briefly topping out — and each one idles the connection.
+  /// TCP punishes an idle connection by collapsing the congestion window,
+  /// so throughput after the resume is worse than before it, and the
+  /// stall compounds instead of recovering. That is the shape of the
+  /// device logs: `queueInputBuffer: Input time interval reaches ~1000ms`
+  /// over and over, a decoder asleep waiting for bytes rather than one
+  /// struggling to keep up.
+  ///
+  /// So the two rates are decoupled by a buffer. Origin fills it at full
+  /// speed; the player drains it at its own pace; only when the player
+  /// falls [readAheadBytes] behind does backpressure finally reach the
+  /// socket. The cushion is what the player spends during the next slow
+  /// patch, which is the whole point — read-ahead is only useful if it
+  /// was allowed to get ahead.
+  Future<void> _pipeReadAhead(Stream<List<int>> source, IOSink out) {
+    final done = Completer<void>();
+    final queue = Queue<List<int>>();
+    var queued = 0;
+    var paused = false;
+    var ended = false;
+    var draining = false;
+    Object? sourceError;
+    late StreamSubscription<List<int>> sub;
+
+    void finish([Object? e]) {
+      if (done.isCompleted) return;
+      if (e != null) {
+        done.completeError(e);
+      } else {
+        done.complete();
+      }
     }
-    await out.addStream(response.stream);
+
+    Future<void> drain() async {
+      if (draining) return; // a drain loop is already running
+      draining = true;
+      try {
+        while (queue.isNotEmpty) {
+          final chunk = queue.removeFirst();
+          queued -= chunk.length;
+          // Resume well before empty. Waiting for the buffer to drain
+          // fully would leave the socket idle exactly when the player is
+          // consuming fastest.
+          if (paused && queued <= readAheadBytes ~/ 2) {
+            paused = false;
+            sub.resume();
+          }
+          out.add(chunk);
+          await out.flush();
+        }
+      } catch (e) {
+        // The player hung up (a swipe) or the socket broke. Stop pulling
+        // bytes nobody will read.
+        await sub.cancel();
+        finish(e);
+        return;
+      } finally {
+        draining = false;
+      }
+      if (ended) finish(sourceError);
+    }
+
+    sub = source.listen(
+      (chunk) {
+        queue.add(chunk);
+        queued += chunk.length;
+        if (!paused && queued >= readAheadBytes) {
+          paused = true;
+          sub.pause();
+        }
+        unawaited(drain());
+      },
+      onError: (Object e) {
+        ended = true;
+        sourceError = e;
+        unawaited(drain());
+      },
+      onDone: () {
+        ended = true;
+        unawaited(drain());
+      },
+      cancelOnError: true,
+    );
+
+    return done.future;
   }
 
   /// Parse a single `bytes=start-end` range. Multi-range requests (which
@@ -291,10 +481,27 @@ class LocalMediaServer {
   @visibleForTesting
   void debugDemote(String why) => _demote(why);
 
+  /// Pretend [n] reels are back-filling, so the cache tier's response to
+  /// a live back-fill can be tested without standing up a playback.
+  @visibleForTesting
+  void debugSetBackfills(int n) => _backfills = n;
+
+  /// The read-ahead pipe on its own, against a sink the caller controls.
+  ///
+  /// Through a real socket this property is untestable: loopback buffers
+  /// megabytes, so a stalled reader still absorbs everything a test can
+  /// reasonably produce and the coupled and decoupled pipes look
+  /// identical. A sink that is genuinely not draining is the only way to
+  /// see the difference.
+  @visibleForTesting
+  Future<void> debugPipeReadAhead(Stream<List<int>> source, IOSink out) =>
+      _pipeReadAhead(source, out);
+
   @visibleForTesting
   void debugReset() {
     _failures = 0;
     _demoted = false;
+    _backfills = 0;
     demotionReason = null;
   }
 }
