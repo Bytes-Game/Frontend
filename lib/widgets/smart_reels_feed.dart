@@ -14,6 +14,7 @@ import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/connection_prewarm_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/network_quality_service.dart';
+import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/widgets/feed_action_bar.dart'
@@ -344,6 +345,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       existingKeys.add(key);
       parsed.add(item);
     }
+    _logPageComposition(nextPage, parsed);
     final errorMsg = (data['_ok'] == false) ? data['_error'] as String? : null;
     setState(() {
       _items.addAll(parsed);
@@ -372,6 +374,51 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
         }
       });
     }
+  }
+
+  /// Print what a freshly-parsed page actually contained.
+  ///
+  /// This widget applies no filtering of its own — every item the backend
+  /// returns is rendered — so when the feed "looks wrong" there is no way
+  /// to tell from the client logs whether the server sent the wrong set or
+  /// the client dropped something. These four counters settle it:
+  ///
+  ///   * `mine`   — challenges whose creator is the signed-in user. Own
+  ///     content is supposed to be excluded server-side, so anything above
+  ///     0 is a backend filter miss, not a rendering bug. Note this counts
+  ///     only the CREATOR side: your video also appears as the opponent
+  ///     leg of a battle you responded to, and that item legitimately
+  ///     belongs to whoever created the challenge, so it is not counted.
+  ///   * `shorts` — challenges with no top response, i.e. the plain-short
+  ///     case. Near-zero means the ranker is returning battles almost
+  ///     exclusively; nothing was filtered out on the way in.
+  ///   * `battles` — the complement, for the ratio.
+  ///   * `noCreatorId` — payloads that omitted `creatorId`. Those make
+  ///     `mine` undercount (and silently disable the owner-only delete
+  ///     affordance), so a non-zero value invalidates the `mine` reading
+  ///     rather than confirming it.
+  void _logPageComposition(int page, List<_FeedEntry> parsed) {
+    var battles = 0;
+    var shorts = 0;
+    var mine = 0;
+    var noCreatorId = 0;
+    for (final e in parsed) {
+      if (e is! _ReelItem || e.type != 'challenge') continue;
+      if (e.isBattle) {
+        battles++;
+      } else {
+        shorts++;
+      }
+      if (e.creatorId.isEmpty) {
+        noCreatorId++;
+      } else if (e.creatorId == widget.userId) {
+        mine++;
+      }
+    }
+    ReelDiagnostics.instance.log(
+      'feed ${widget.kind.name} page $page: ${parsed.length} items  '
+      'battles=$battles shorts=$shorts  mine=$mine noCreatorId=$noCreatorId',
+    );
   }
 
   /// Dispatches to the right backend endpoint based on widget.kind. Each
