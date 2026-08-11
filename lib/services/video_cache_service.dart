@@ -314,6 +314,7 @@ class VideoCacheService {
   void _start(String url) {
     final download = _Download(url);
     _active[url] = download;
+    ReelDiagnostics.instance.recordDownloadStarted();
     unawaited(_run(download).whenComplete(() {
       _active.remove(url);
       // One signal that covers success, failure and cancellation alike.
@@ -348,7 +349,11 @@ class VideoCacheService {
       // No 206 means the origin ignored the range and is about to send
       // the whole file — not what we asked for, so let the whole-file
       // path own it rather than half-handling it here.
-      if (response.statusCode != HttpStatus.partialContent) return false;
+      if (response.statusCode != HttpStatus.partialContent) {
+        ReelDiagnostics.instance
+            .recordPrefixBailed('status${response.statusCode}');
+        return false;
+      }
 
       final total = _totalFromContentRange(
           response.headers[HttpHeaders.contentRangeHeader.toLowerCase()] ??
@@ -356,7 +361,10 @@ class VideoCacheService {
       // Only the total's *validity* matters here, not its size. We keep
       // exactly prefixBytes on disk either way; the proxy back-fills the
       // rest from origin as the player asks for it. See maxPrefetchBytes.
-      if (total <= 0) return false;
+      if (total <= 0) {
+        ReelDiagnostics.instance.recordPrefixBailed('noTotal');
+        return false;
+      }
 
       final file = File(prefixPath);
       sink = file.openWrite();
@@ -377,6 +385,8 @@ class VideoCacheService {
       sink = null;
 
       if (d.cancelled || written <= 0) {
+        ReelDiagnostics.instance
+            .recordPrefixBailed(d.cancelled ? 'cancelled' : 'empty');
         await _safeDelete(prefixPath);
         return false;
       }
