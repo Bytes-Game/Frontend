@@ -45,6 +45,25 @@ class ReelDiagnostics {
   int _spareCold = 0;
   int _sinceSummary = 0;
 
+  /// Live view of the warming pipeline, installed by `VideoCacheService`.
+  ///
+  /// Every counter above is cumulative, which is what makes them cheap —
+  /// but a cumulative count cannot tell a stalled pipeline from a finished
+  /// one. `downloads` stuck at 7 while `starts` climbs to 30 reads
+  /// identically whether warming ran out of new URLs to fetch (a short
+  /// feed the user scrolled back over, nothing wrong) or whether its one
+  /// download slot is wedged behind a fetch that never completes (a real
+  /// stall, with a queue piling up behind it). Only the instantaneous
+  /// depths separate those, and they live in the cache — so the cache
+  /// offers them here rather than this class reaching across for them.
+  String Function()? _pipelineProbe;
+
+  /// Register the snapshot appended to every [summary].
+  void setPipelineProbe(String Function() probe) {
+    if (!_visible) return;
+    _pipelineProbe = probe;
+  }
+
   /// One-off diagnostic line. Prefixed so it can be grepped out of the very
   /// noisy Android media logs: `flutter run --profile | grep "\[reel\]"`.
   void log(String message) {
@@ -128,7 +147,23 @@ class ReelDiagnostics {
         'file=$_wholeFile (${pct(_wholeFile)})  network=$_origin (${pct(_origin)})  '
         '| downloads=$_downloads prefixes warmed=$_prefixWarmed '
         'failed=$_prefixFailed$bailed  '
-        '| spare warm=$_spareWarm cold=$_spareCold';
+        '| spare warm=$_spareWarm cold=$_spareCold${_pipeline()}';
+  }
+
+  /// The pipeline snapshot, or nothing if no probe is installed.
+  ///
+  /// A probe that throws must not cost us the summary. The whole line is
+  /// the only window into the cache during a profile run, and losing it to
+  /// a fault in the observation code would be the same class of mistake as
+  /// the one this file exists to fix.
+  String _pipeline() {
+    final probe = _pipelineProbe;
+    if (probe == null) return '';
+    try {
+      return '  | ${probe()}';
+    } catch (_) {
+      return '  | pipeline unavailable';
+    }
   }
 
   @visibleForTesting
@@ -139,6 +174,7 @@ class ReelDiagnostics {
     _prefixBailed.clear();
     _spareWarm = _spareCold = 0;
     _sinceSummary = 0;
+    _pipelineProbe = null;
   }
 
   @visibleForTesting

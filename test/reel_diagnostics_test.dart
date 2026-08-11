@@ -68,6 +68,30 @@ void main() {
     expect(d.summary(), contains('warmed=2 failed=1'));
   });
 
+  test('the summary carries the live pipeline snapshot', () {
+    // The counters are cumulative, so they cannot distinguish "warming has
+    // nothing left to fetch" from "warming is wedged with a queue behind
+    // it" — both read as a download count that stopped climbing. The
+    // snapshot is what separates them, so it has to reach the line.
+    final d = ReelDiagnostics.instance;
+    d.setPipelineProbe(() => 'queue=3 active=1/1 urls=15 cancelled=4');
+    d.recordProxiedStart();
+
+    expect(d.summary(), contains('queue=3 active=1/1 urls=15 cancelled=4'));
+  });
+
+  test('a probe that throws costs a snapshot, not the summary', () {
+    // Losing the whole line to a fault in the observation code would be
+    // the same class of mistake this file exists to fix.
+    final d = ReelDiagnostics.instance;
+    d.setPipelineProbe(() => throw StateError('probe blew up'));
+    d.recordProxiedStart();
+
+    final s = d.summary();
+    expect(s, contains('starts=1'));
+    expect(s, contains('pipeline unavailable'));
+  });
+
   test('counting is not disabled outright', () {
     final d = ReelDiagnostics.instance;
     d.recordProxiedStart();

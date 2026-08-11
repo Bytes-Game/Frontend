@@ -51,7 +51,9 @@ import 'package:myapp/services/reel_diagnostics.dart';
 /// exactly the behaviour that shipped before any of this existed. There
 /// is no state in which a cache problem stops a video from playing.
 class VideoCacheService {
-  VideoCacheService._();
+  VideoCacheService._() {
+    ReelDiagnostics.instance.setPipelineProbe(_pipelineSnapshot);
+  }
   static final VideoCacheService instance = VideoCacheService._();
 
   /// Total bytes of cached video we keep on disk before evicting the
@@ -109,6 +111,29 @@ class VideoCacheService {
 
   /// URLs whose opening slice is cached and registered with the proxy.
   final Set<String> _prefixed = <String>{};
+
+  /// Every distinct URL [warm] has ever been asked for. This is the
+  /// denominator `downloads` was missing: if the feed only ever offered
+  /// fifteen URLs, a download count that stops climbing is warming having
+  /// nothing left to fetch, not warming being stuck.
+  final Set<String> _seen = <String>{};
+
+  /// Downloads killed mid-flight because their reel left the window. High
+  /// against a low `downloads` means warming is churning — starting work
+  /// and abandoning it as the user scrolls past — which spends the one
+  /// slot without ever warming anything.
+  int _cancelled = 0;
+
+  /// Instantaneous state of the warming pipeline, appended to the
+  /// diagnostics summary. See [ReelDiagnostics.setPipelineProbe].
+  ///
+  /// `active=n/m` is the slot count, and m is the answer to whether
+  /// back-fill pressure is holding warming down to a single slot: it
+  /// reads 1 while a reel on screen is still pulling from origin, 2
+  /// otherwise.
+  String _pipelineSnapshot() =>
+      'queue=${_queue.length} active=${_active.length}/$_downloadSlots '
+      'urls=${_seen.length} cancelled=$_cancelled';
 
   /// Callers parked in [awaitReady], one completer per URL. Signalled by
   /// [_signalWarm] on every path a URL can leave the warming pipeline —
@@ -254,6 +279,9 @@ class VideoCacheService {
     }
     final wanted = urls.where((u) => u.isNotEmpty).toList();
     final wantedSet = wanted.toSet();
+    // Diagnostics only, and it grows with every reel the session sees, so
+    // release builds — which never print the summary — don't carry it.
+    if (!kReleaseMode) _seen.addAll(wanted);
 
     for (final url in _active.keys.toList()) {
       if (!wantedSet.contains(url)) _cancel(url);
@@ -491,6 +519,7 @@ class VideoCacheService {
   void _cancel(String url) {
     final d = _active[url];
     if (d == null) return;
+    _cancelled++;
     d.cancelled = true;
     unawaited(d.subscription?.cancel());
   }
