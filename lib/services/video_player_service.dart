@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:video_player/video_player.dart';
 
 import 'package:myapp/services/video_cache_service.dart';
@@ -138,13 +138,37 @@ class VideoPlayerService {
   /// The volume an ACTIVE (visible, playing) controller should get.
   double get activeVolume => feedMuted.value ? 0.0 : 1.0;
 
+  /// The reel currently on screen, as last declared by [pauseAllExcept].
+  ///
+  /// Two things need this. Eviction needs it so the pool can never
+  /// dispose the player the user is watching. And [_volumeFor] needs it
+  /// because "is this controller allowed to make noise?" is a question
+  /// about the reel on screen, not about how the controller was created.
+  String? _activeUrl;
+
+  /// The volume a freshly-initialised controller for [url] should take.
+  ///
+  /// Every controller used to come up at [activeVolume] on the theory
+  /// that the feed would mute the prefetched ones afterwards. That is a
+  /// race, and it loses in the ordinary case: a controller finishes
+  /// initialising SOME time after it was created, and [pauseAllExcept]
+  /// has usually already run by then, so the mute lands before the thing
+  /// it was meant to mute exists. The result is an off-screen player
+  /// sitting at full volume — audible in a battle flip, and on Android an
+  /// extra claimant on an exclusive AudioFocus.
+  ///
+  /// Deciding from [_activeUrl] at the moment initialisation completes
+  /// removes the ordering question entirely: a controller is audible if
+  /// and only if it is the reel on screen right then.
+  double _volumeFor(String url) => url == _activeUrl ? activeVolume : 0.0;
+
   /// Set the runtime pool config. Safe to call after the app is
   /// already running — if the new maxPoolSize is smaller, excess
   /// entries are evicted immediately.
   void configure(VideoPoolConfig config) {
     _config = config;
     while (_pool.length > config.maxPoolSize) {
-      _evictLru();
+      if (!_evictOldest()) break;
     }
   }
 
@@ -159,11 +183,11 @@ class VideoPlayerService {
     final existing = _pool.where((e) => e.url == url).firstOrNull;
     if (existing != null) {
       existing.lastUsed = DateTime.now();
-      // Promote: once a prefetched entry has been requested as the
-      // active controller, it's no longer a "spare" — the LRU eviction
-      // sorter prefers killing prefetch entries first, so leaving this
-      // flag set would make the just-watched reel the FIRST thing
-      // evicted on the next prefetch, defeating instant scroll-back.
+      // Promote: this entry is no longer a read-ahead spare, it is a reel
+      // someone asked for by name. The flag now only records how the
+      // entry was created — eviction goes by recency — but keeping it
+      // accurate matters for [trimPrefetched], which drops spares under
+      // memory pressure and must not drop a reel that has been watched.
       existing.isPrefetch = false;
       _prefetchedUrls.remove(url);
       // Restore audible volume on promotion. Prefetched controllers
@@ -173,9 +197,9 @@ class VideoPlayerService {
       return existing.controller;
     }
 
-    // If pool is full, evict LRU before creating a new entry.
+    // If pool is full, make room before creating a new entry.
     if (_pool.length >= _config.maxPoolSize) {
-      _evictLru();
+      _evictOldest(keep: url);
     }
 
     final controller = _controllerFor(url);
@@ -186,8 +210,17 @@ class VideoPlayerService {
     // flight.
     // ignore: discarded_futures
     controller.initialize().then((_) {
-      // Default to audible; reels feed will mute prefetch via prefetch().
-      controller.setVolume(activeVolume);
+      // Audible only if this is still the reel on screen — see
+      // [_volumeFor]. The reels PageView builds its neighbours, so this
+      // path runs for tiles the user cannot see yet, and those must come
+      // up silent rather than relying on a later sweep to quieten them.
+      controller.setVolume(_volumeFor(url));
+      // And stopped. A tile can call play() on its controller before
+      // initialisation lands — the feed does exactly that in
+      // _playCurrent — and video_player replays that request the moment
+      // the player is ready. If the user swiped on in the meantime, that
+      // deferred play would start an off-screen reel decoding.
+      if (url != _activeUrl) controller.pause();
     }).catchError((_) {
       // Swallowed — caller can inspect controller.value.hasError when
       // they actually try to use the controller. Throwing here would
@@ -260,8 +293,7 @@ class VideoPlayerService {
     // Already warm: open it now, against the proxy.
     if (VideoCacheService.instance.isReady(next)) {
       _pendingSpare = null;
-      ReelDiagnostics.instance.recordSpareWarm();
-      _openSpare(next);
+      _openSpare(next, warm: true);
       return;
     }
 
@@ -291,12 +323,7 @@ class VideoPlayerService {
         _pendingSpare = null;
         if (_prefetchedUrls.contains(next)) return;
         if (_pool.any((e) => e.url == next)) return;
-        if (warm) {
-          ReelDiagnostics.instance.recordSpareWarm();
-        } else {
-          ReelDiagnostics.instance.recordSpareCold();
-        }
-        _openSpare(next);
+        _openSpare(next, warm: warm);
       }),
     );
   }
@@ -317,19 +344,34 @@ class VideoPlayerService {
   String? _pendingSpare;
 
   /// Create the single live spare controller for [next] and pool it.
-  void _openSpare(String next) {
+  ///
+  /// [warm] says whether [next]'s opening slice was already cached, and is
+  /// recorded here rather than at the call sites because only this method
+  /// knows whether a spare was actually opened.
+  void _openSpare(String next, {required bool warm}) {
     // Never let the spare crowd out the active reel's slot.
+    //
+    // This used to look for a PREFETCH entry to evict and give up when it
+    // found none — which is the state the pool reaches within a few
+    // swipes, because every spare the user swipes onto is promoted out of
+    // prefetch by getController. Three promoted entries and a pool of
+    // four meant `evictable` was empty on every subsequent prefetch, so
+    // the app quietly stopped opening spares for the rest of the session
+    // and every reel paid a cold open. The counters did not show it:
+    // spare warm/cold were recorded by the caller BEFORE this method ran,
+    // so a session that opened no spares at all still reported them.
+    //
+    // Stale watched reels are exactly what should make way for the reel
+    // one swipe ahead, so evict by age and let the active reel be the
+    // only thing that is off limits.
     if (_pool.length >= _config.maxPoolSize - 1) {
-      final evictable = _pool
-          .where((e) => e.isPrefetch && e.url != next)
-          .toList()
-        ..sort((a, b) => a.lastUsed.compareTo(b.lastUsed));
-      if (evictable.isEmpty) return;
-      final victim = evictable.first;
-      _pool.remove(victim);
-      _prefetchedUrls.remove(victim.url);
-      // ignore: discarded_futures
-      victim.controller.dispose();
+      if (!_evictOldest(keep: next)) return;
+    }
+
+    if (warm) {
+      ReelDiagnostics.instance.recordSpareWarm();
+    } else {
+      ReelDiagnostics.instance.recordSpareCold();
     }
 
     final controller = _controllerFor(next);
@@ -337,7 +379,9 @@ class VideoPlayerService {
     controller.initialize().then((_) {
       // The spare is silent. AudioFocus on Android is exclusive — an
       // unmuted spare fights the active reel and chops its audio. The
-      // promote path in getController restores volume.
+      // promote path in getController restores volume. No pause needed:
+      // nothing ever calls play() on a spare, and video_player leaves a
+      // controller that was not playing paused once it initialises.
       controller.setVolume(0);
     }).catchError((_) {
       // Surfaced when the caller actually tries to use this URL.
@@ -355,6 +399,11 @@ class VideoPlayerService {
   /// controller that somehow autoplays during init doesn't bleed audio
   /// onto the active reel.
   void pauseAllExcept(String activeUrl) {
+    // The authoritative "this reel is on screen" signal. Eviction reads
+    // it to keep the watched player alive, and [_volumeFor] reads it so a
+    // controller that finishes initialising later comes up at the right
+    // volume instead of racing this sweep.
+    _activeUrl = activeUrl;
     for (final entry in _pool) {
       if (entry.url != activeUrl) {
         entry.controller.pause();
@@ -417,8 +466,7 @@ class VideoPlayerService {
     for (final entry in _pool) {
       if (entry.isPrefetch) {
         _prefetchedUrls.remove(entry.url);
-        // ignore: discarded_futures
-        entry.controller.dispose();
+        _retire(entry.controller);
       } else {
         survivors.add(entry);
       }
@@ -430,31 +478,114 @@ class VideoPlayerService {
 
   /// Dispose all controllers — call on app shutdown or logout.
   Future<void> disposeAll() async {
+    // Shutdown, so there is no next frame to wait for and no widget left
+    // to detach a texture — pause each player and release it here.
     for (final entry in _pool) {
+      // ignore: discarded_futures
+      entry.controller.pause();
+      ReelDiagnostics.instance.recordPlayerRetired();
       await entry.controller.dispose();
     }
     _pool.clear();
     _prefetchedUrls.clear();
+    _activeUrl = null;
+    _pendingSpare = null;
   }
 
-  /// Evict the least recently used, non-active controller. Prefetch
-  /// entries are preferred for eviction so user-visible playback is
-  /// never disturbed by a background prefetch decision.
-  void _evictLru() {
-    if (_pool.isEmpty) return;
-    _pool.sort((a, b) {
-      if (a.isPrefetch && !b.isPrefetch) return -1;
-      if (!a.isPrefetch && b.isPrefetch) return 1;
-      return a.lastUsed.compareTo(b.lastUsed);
-    });
-    final evicted = _pool.removeAt(0);
-    _prefetchedUrls.remove(evicted.url);
-    // Fire-and-forget dispose — the controller is no longer reachable
-    // from any caller and there's nothing useful to do with the
-    // returned Future here.
-    // ignore: discarded_futures
-    evicted.controller.dispose();
+  /// Evict the least recently used controller that isn't the reel on
+  /// screen. Returns false when nothing was eligible.
+  ///
+  /// The old rule sorted every prefetch entry ahead of every non-prefetch
+  /// one, so the spare for the NEXT reel — the single likeliest thing the
+  /// pool will be asked for — was always the first victim, while a reel
+  /// watched five swipes ago survived. Each swipe therefore threw away
+  /// the player it was about to need and built a fresh one, which is a
+  /// hardware decoder created and destroyed per swipe for no gain.
+  ///
+  /// Recency alone already encodes what the prefetch flag was reaching
+  /// for. A spare is opened at the moment it is wanted, so it sorts
+  /// newest; the previous reel sorts one swipe old, which is what keeps
+  /// back-swipe instant; genuinely stale reels sort oldest and go first.
+  bool _evictOldest({String? keep}) {
+    _pool.sort((a, b) => a.lastUsed.compareTo(b.lastUsed));
+    final victim = _pool
+        .where((e) => e.url != _activeUrl && e.url != keep)
+        .firstOrNull;
+    if (victim == null) return false;
+    _pool.remove(victim);
+    _prefetchedUrls.remove(victim.url);
+    _retire(victim.controller);
+    return true;
   }
+
+  /// Shut a controller down in the order the platform expects, then
+  /// release it one frame later.
+  ///
+  /// Disposing straight out of the pool tears the native player down
+  /// while its surface is still attached to a mounted `VideoPlayer`,
+  /// which is what fills the device log with
+  ///
+  ///     E/GraphicsTracker: cannot deallocate due to being stopped
+  ///     W/Codec2-GraphicBufferAllocator: deallocate() ... was not successful
+  ///
+  /// on every eviction: Codec2 hands its graphic buffers back to a
+  /// BufferQueue that the release already abandoned.
+  ///
+  /// Removing the entry from [_pool] is what makes [isLive] false, and the
+  /// reel tile checks [isLive] before handing the controller to
+  /// `VideoPlayer` — so by the end of the next frame the widget tree has
+  /// already dropped the texture. Waiting for that frame lets the surface
+  /// detach before the decoder goes away. Pausing first stops the decoder
+  /// feeding buffers into a surface that is on its way out.
+  void _retire(VideoPlayerController controller) {
+    // ignore: discarded_futures
+    controller.pause();
+    // ignore: discarded_futures
+    controller.setVolume(0);
+    ReelDiagnostics.instance.recordPlayerRetired();
+    deferRelease(() {
+      // ignore: discarded_futures
+      controller.dispose();
+    });
+  }
+
+  /// Runs [release] once the current frame has been presented.
+  ///
+  /// Seam, not indirection for its own sake: a `testWidgets` body runs in
+  /// a fake-async zone where `VideoPlayerController.dispose()` never
+  /// completes against a fake platform, so the frame-accurate behaviour
+  /// cannot be exercised there — and the thing worth testing is the
+  /// ORDER (out of the pool first, released after), not who owns the
+  /// clock. Tests swap this for a queue they drain by hand.
+  @visibleForTesting
+  static void Function(VoidCallback release) deferRelease = _afterNextFrame;
+
+  static void _afterNextFrame(VoidCallback release) {
+    final binding = WidgetsBinding.instance;
+    binding.addPostFrameCallback((_) => release());
+    // Dropping a pool entry does not itself dirty the tree, so without
+    // this the callback above could wait for a frame that nothing else
+    // asks for — and the controller would leak instead of merely
+    // lingering.
+    binding.scheduleFrame();
+  }
+
+  /// Open the read-ahead spare directly.
+  ///
+  /// [prefetch] reaches this through [VideoCacheService], whose warm path
+  /// needs a temp directory, a mock HTTP client and the loopback proxy —
+  /// none of which say anything about the question these tests ask, which
+  /// is purely "does the pool make room for the spare". This seam keeps
+  /// that question separable from how the bytes got there.
+  @visibleForTesting
+  void debugOpenSpare(String url, {required bool warm}) =>
+      _openSpare(url, warm: warm);
+
+  @visibleForTesting
+  int get debugPoolSize => _pool.length;
+
+  @visibleForTesting
+  List<String> get debugPoolUrls => _pool.map((e) => e.url).toList();
 }
 
 class _PoolEntry {
