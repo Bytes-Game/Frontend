@@ -57,14 +57,21 @@ void main() {
   });
 
   group('dwell', () {
-    test('outlasts a pass-through but not a look', () {
-      // The feed counts under 800ms on a reel as a skip. The delay has to
-      // sit above that or a scrolled-past battle still allocates, which
-      // is the whole failure being fixed; and it has to stay well inside
-      // the time a user spends deciding to flip, or the first cube turn
-      // starts on a poster.
-      expect(ReelPrewarmPolicy.dwell.inMilliseconds, greaterThan(800));
-      expect(ReelPrewarmPolicy.dwell.inMilliseconds, lessThan(2000));
+    test('outlasts a fling but closes before anyone could flip', () {
+      // Both bounds are load-bearing and they pull opposite ways.
+      //
+      // Floor: a fling passes a reel in 200-400ms. Below that the battles
+      // in a fling start allocating a decoder pair again, which is the
+      // entire failure this exists to stop — and zero is literally the
+      // old behaviour.
+      //
+      // Ceiling: human reaction time. Nobody sees a battle arrive,
+      // decides to flip, and gets a drag moving inside ~250ms plus the
+      // gesture. Staying under that means the one case that costs
+      // anything — a cube turn that starts on a poster because the
+      // opponent is still opening — is not reachable by a real user.
+      expect(ReelPrewarmPolicy.dwell.inMilliseconds, greaterThanOrEqualTo(400));
+      expect(ReelPrewarmPolicy.dwell.inMilliseconds, lessThanOrEqualTo(600));
     });
   });
 }
