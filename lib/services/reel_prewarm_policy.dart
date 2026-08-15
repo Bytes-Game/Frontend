@@ -35,13 +35,27 @@ class ReelPrewarmPolicy {
   /// How long a battle must be the active reel before its opponent gets a
   /// player.
   ///
-  /// Longer than a pass-through (the feed treats under 800ms as a skip)
-  /// and shorter than the time it takes to read a battle's caption and
-  /// decide to flip. Wrong in the slow direction costs one cube turn that
-  /// starts on a poster; wrong in the fast direction costs a decoder pair
-  /// on every battle the user scrolls past, which is the failure this
-  /// exists to stop.
-  static const Duration dwell = Duration(milliseconds: 1200);
+  /// The ceiling is human reaction time, and that is what sets this value.
+  /// A user cannot see a battle arrive, decide to flip it, and get a
+  /// horizontal drag moving in less than roughly 250ms of reaction plus
+  /// the gesture itself. Any delay under that closes before a real person
+  /// could reach the one case that costs anything — a flip that starts
+  /// while the opponent is still opening, which turns the cube onto a
+  /// poster for a moment instead of live video. At half a second there is
+  /// margin on both sides of that, so the lag case should not occur at
+  /// all in practice.
+  ///
+  /// The floor is the failure this exists to stop. A fling passes a reel
+  /// in two to four hundred milliseconds, and the old always-on behaviour
+  /// meant every battle in that fling opened a video decoder and an audio
+  /// decoder nobody would ever see or hear. Going below ~400ms starts
+  /// handing that back. Zero IS the old behaviour.
+  ///
+  /// So this is the short end of the useful range, not the middle of it.
+  /// It was 1200ms when the dwell was introduced; that was chosen against
+  /// the risk of a poster flash, before working out that reaction time
+  /// already rules that out much earlier.
+  static const Duration dwell = Duration(milliseconds: 500);
 
   /// Whether to open the opponent's player at all.
   ///
