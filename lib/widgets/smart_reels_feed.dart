@@ -16,6 +16,7 @@ import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/feed_paging.dart';
 import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
+import 'package:myapp/services/reel_prewarm_policy.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/widgets/feed_action_bar.dart'
@@ -2011,6 +2012,11 @@ class _ReelTileState extends State<_ReelTile>
   bool _showingOpponent = false;
   _ReelPlayerState? _opponentState;
 
+  /// Pending dwell timer for [_maybePrewarmOpponent]. Cancelled the moment
+  /// the tile stops being the active reel, so a battle the user scrolled
+  /// straight past never allocates anything.
+  Timer? _opponentPrewarmTimer;
+
   // 3D cube turn between the challenger and opponent videos — the
   // Instagram-stories cube, around the vertical axis. _cubeCtl.value is
   // the continuous cube position: 0.0 = challenger face front, 1.0 =
@@ -2064,6 +2070,11 @@ class _ReelTileState extends State<_ReelTile>
     // happens if we leave _showingOpponent set while the parent's
     // _playCurrent unconditionally starts the primary URL on re-entry.
     if (old.isActive && !widget.isActive) {
+      // Whatever else happens, this tile is no longer where the user is.
+      // A dwell timer still counting down here is the fast-scroll case
+      // the delay exists for: let it fire and the reel two swipes back
+      // opens a player nobody will look at.
+      _opponentPrewarmTimer?.cancel();
       _cubeDragging = false;
       if (_showingOpponent) {
         _setShowOpponent(false, track: false, animate: false);
@@ -2078,6 +2089,7 @@ class _ReelTileState extends State<_ReelTile>
 
   @override
   void dispose() {
+    _opponentPrewarmTimer?.cancel();
     _opponentState?.dispose();
     _heartCtl.dispose();
     _cubeCtl.dispose();
@@ -2212,23 +2224,22 @@ class _ReelTileState extends State<_ReelTile>
   _ReelPlayerState get _activeState =>
       _showingOpponent && _opponentState != null ? _opponentState! : widget.state;
 
-  /// Build the opponent's player as soon as this battle becomes the active
-  /// reel, rather than waiting for the flip.
+  /// Build the opponent's player once this battle has held the user's
+  /// attention for [ReelPrewarmPolicy.dwell], rather than waiting for the
+  /// flip — or, as it used to, allocating it the instant the reel became
+  /// active.
   ///
   /// The cube turn is a few hundred milliseconds and renders BOTH faces as
-  /// live video. A controller created at the START of the turn is still
-  /// opening when the turn ends, which is the stall on the first flip of
-  /// every battle. Created here it gets the entire time the user spends
-  /// watching the challenger to open — and its bytes are already being
-  /// warmed, because _prefetchUpcomingVideos now puts the active reel's
-  /// opponent near the front of the window.
+  /// live video, so a controller created at the START of the turn is still
+  /// opening when the turn ends. That is the stall on a battle's first
+  /// flip, and it is worth spending a player to avoid — for a user who is
+  /// actually looking at the battle. For one scrolling past it buys
+  /// nothing and costs a decoder pair, audio included, per battle passed.
+  /// See [ReelPrewarmPolicy] for the log that made that visible.
   ///
-  /// Skipped on small pools. A 2-slot pool holds the active reel and one
-  /// spare; taking a third live decoder there is how the low-RAM tiers
-  /// OOM, and those devices keep the old create-on-flip behaviour.
-  /// DEFERRED TO AFTER THE FRAME, and that is not optional. Both callers —
-  /// initState and didUpdateWidget — run DURING the build phase, and the
-  /// path below reaches VideoPlayerService.getController, which calls
+  /// The delay also keeps this off the build phase, which is not optional.
+  /// Both callers — initState and didUpdateWidget — run DURING build, and
+  /// the path below reaches VideoPlayerService.getController, which calls
   /// setVolume on a promoted pooled controller. setVolume notifies the
   /// controller's listeners; every ValueListenableBuilder bound to it then
   /// calls setState, mid-build, and Flutter throws:
@@ -2239,18 +2250,23 @@ class _ReelTileState extends State<_ReelTile>
   ///   #8  _ReelTileState._ensureOpponentState
   ///
   /// Seen on device the first time a battle scrolled into view. The
-  /// re-checks inside the callback are the price of deferring: a fast
-  /// scroller can move on, or the tile can be disposed, before it runs.
+  /// re-check inside the timer is the price of deferring: the user can
+  /// move on, or the tile can be disposed, before it fires.
   void _maybePrewarmOpponent() {
-    if (!widget.item.isBattle) return;
-    if (_opponentState != null) return;
-    if (VideoPlayerService.instance.config.maxPoolSize < 3) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !widget.isActive) return;
-      if (_opponentState != null || !widget.item.isBattle) return;
+    if (!_opponentPrewarmAllowed) return;
+    _opponentPrewarmTimer?.cancel();
+    _opponentPrewarmTimer = Timer(ReelPrewarmPolicy.dwell, () {
+      if (!mounted || !_opponentPrewarmAllowed) return;
       _ensureOpponentState();
     });
   }
+
+  bool get _opponentPrewarmAllowed => ReelPrewarmPolicy.shouldPrewarmOpponent(
+        isBattle: widget.item.isBattle,
+        isActive: widget.isActive,
+        alreadyOpen: _opponentState != null,
+        maxPoolSize: VideoPlayerService.instance.config.maxPoolSize,
+      );
 
   /// Lazily build the opponent controller. Mirrors the parent's
   /// _getPlayerState so the same VideoPlayerService cache is shared.
