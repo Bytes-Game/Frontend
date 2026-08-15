@@ -36,6 +36,14 @@ void main() {
     test('false is honoured even on a full page', () {
       expect(decide(declared: false, rawCount: 20, newItems: 20), isFalse);
     });
+
+    test('true does not override a page that brought back nothing new', () {
+      // The runaway this exists for. A ranker that withholds nothing never
+      // runs out, so it answers true on every page of a small catalog. A
+      // device run took that at its word and requested fifteen pages in
+      // ninety seconds, eleven of which added no items at all.
+      expect(decide(declared: true, rawCount: 15, newItems: 0), isFalse);
+    });
   });
 
   group('the server declared nothing', () {

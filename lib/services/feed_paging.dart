@@ -33,8 +33,23 @@ class FeedPaging {
     required int newItems,
     required int limit,
   }) {
-    if (declared is bool) return declared;
+    // A page that added nothing ends the feed, whatever the server said.
+    //
+    // This check used to sit BELOW the declared branch, where a server
+    // that answered `true` could never reach it. That was fine while the
+    // For You backend reported page-fullness — it said false and the feed
+    // stopped — and became a runaway the moment it started reporting
+    // "candidates left over" instead, which on a small catalog is true on
+    // every page forever. A device run then requested fifteen pages in
+    // ninety seconds, of which pages 4 and 6 through 15 returned nothing
+    // new, each one a full round trip and a re-scoring on the server.
+    //
+    // The ranker is right to keep saying yes: it withholds nothing, so it
+    // never runs out. Knowing when to stop is the client's job, and the
+    // only honest signal it has is that a page brought back nothing it
+    // did not already have.
     if (newItems == 0) return false;
+    if (declared is bool) return declared;
     return rawCount >= limit;
   }
 }
