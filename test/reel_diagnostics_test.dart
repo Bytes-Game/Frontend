@@ -98,6 +98,46 @@ void main() {
     expect(d.debugProxied, 1);
   });
 
+  group('spares are tallied per gesture', () {
+    // One shared warm/cold pair could not answer the question the second
+    // read-ahead lane was added to settle — are FLIPS landing on a ready
+    // player? Swipes vastly outnumber flips, so a single total is
+    // dominated by them and a flip arriving cold every time is invisible
+    // in it.
+    test('each lane keeps its own warm and cold counts', () {
+      final d = ReelDiagnostics.instance;
+      d.debugReset();
+
+      d.recordSpareWarm(SpareLane.nextReel);
+      d.recordSpareWarm(SpareLane.nextReel);
+      d.recordSpareCold(SpareLane.nextReel);
+      d.recordSpareWarm(SpareLane.opponent);
+      d.recordSpareCold(SpareLane.opponent);
+      d.recordSpareCold(SpareLane.opponent);
+      d.recordSpareCold(SpareLane.opponent);
+
+      expect(d.debugSpareWarm(SpareLane.nextReel), 2);
+      expect(d.debugSpareCold(SpareLane.nextReel), 1);
+      expect(d.debugSpareWarm(SpareLane.opponent), 1);
+      expect(d.debugSpareCold(SpareLane.opponent), 3);
+    });
+
+    test('the summary names both lanes, even an empty one', () {
+      final d = ReelDiagnostics.instance;
+      d.debugReset();
+      d.recordProxiedStart();
+      d.recordSpareWarm(SpareLane.nextReel);
+
+      final line = d.summary();
+      expect(line, contains('swipe 1/0'));
+      expect(line, contains('flip 0/0'),
+          reason: 'a lane with nothing in it is the finding, not a row to '
+              'omit — "flip 0/0" on a battle-heavy session says no opponent '
+              'was ever read ahead for, which a missing row cannot say');
+      d.debugReset();
+    });
+  });
+
   test('visibility is gated on release, not on debug', () {
     // The exact regression being guarded: gating on kDebugMode makes every
     // counter a no-op in PROFILE, which is the only build whose numbers are

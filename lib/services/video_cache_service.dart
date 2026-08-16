@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data' show BytesBuilder;
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -7,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/local_media_server.dart';
+import 'package:myapp/services/mp4_layout.dart';
 import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 
@@ -435,9 +437,18 @@ class VideoCacheService {
       sink = file.openWrite();
       final done = Completer<void>();
       d.done = done;
+      // The opening bytes, kept as they stream past so the box order can
+      // be read without going back to disk. Bounded — see
+      // [mp4LayoutProbeBytes].
+      final probe = BytesBuilder(copy: false);
       d.subscription = response.stream.listen(
         (chunk) {
           d.written += chunk.length;
+          if (probe.length < mp4LayoutProbeBytes) {
+            probe.add(chunk.length > mp4LayoutProbeBytes
+                ? chunk.sublist(0, mp4LayoutProbeBytes)
+                : chunk);
+          }
           sink!.add(chunk);
         },
         onDone: () => done.isCompleted ? null : done.complete(),
@@ -452,6 +463,23 @@ class VideoCacheService {
       if (d.cancelled || d.written <= 0) {
         ReelDiagnostics.instance
             .recordPrefixBailed(d.cancelled ? 'cancelled' : 'empty');
+        await _safeDelete(prefixPath);
+        return false;
+      }
+
+      // An index at the end of the file makes this whole path pointless.
+      // The player would read the warmed slice, find no moov in it, and
+      // range-request the tail over the network before it could show a
+      // single frame — and the reel would still have been counted as a
+      // proxy start, so the summary would report it among the fast ones.
+      //
+      // Falling through to whole-file caching is the honest answer: it
+      // costs more bytes up front, but the player needs the tail either
+      // way, and after the first play the file is local. The bail tag
+      // names the file count in the summary so a badly exported clip is
+      // visible as a content fix rather than a mystery slow reel.
+      if (readMp4Layout(probe.toBytes()) == Mp4Layout.moovAtEnd) {
+        ReelDiagnostics.instance.recordPrefixBailed('moovAtEnd');
         await _safeDelete(prefixPath);
         return false;
       }

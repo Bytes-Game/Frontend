@@ -54,11 +54,13 @@ class _FakeVideoPlatform extends VideoPlayerPlatform {
       createdFor.entries.firstWhere((e) => e.value == url).key;
 
   void finishInit(int id) {
-    _events[id]?.add(VideoEvent(
-      eventType: VideoEventType.initialized,
-      size: const Size(16, 9),
-      duration: const Duration(seconds: 3),
-    ));
+    _events[id]?.add(
+      VideoEvent(
+        eventType: VideoEventType.initialized,
+        size: const Size(16, 9),
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   @override
@@ -146,12 +148,14 @@ void main() {
     VideoPlayerService.deferRelease = pendingReleases.add;
     await service.disposeAll();
     ReelDiagnostics.instance.debugReset();
-    service.configure(const VideoPoolConfig(
-      maxPoolSize: 4,
-      prefetchAhead: 2,
-      prefetchAheadBurst: 3,
-      prefetchBack: 1,
-    ));
+    service.configure(
+      const VideoPoolConfig(
+        maxPoolSize: 4,
+        prefetchAhead: 2,
+        prefetchAheadBurst: 3,
+        prefetchBack: 1,
+      ),
+    );
   });
 
   tearDown(() async {
@@ -182,8 +186,11 @@ void main() {
       }
       await presentFrame();
 
-      expect(service.debugPoolUrls, contains(url(0)),
-          reason: 'the watched reel must survive every eviction round');
+      expect(
+        service.debugPoolUrls,
+        contains(url(0)),
+        reason: 'the watched reel must survive every eviction round',
+      );
       expect(service.debugPoolSize, lessThanOrEqualTo(4));
     });
 
@@ -197,11 +204,17 @@ void main() {
       await open(url(4));
       await presentFrame();
 
-      expect(service.debugPoolUrls, isNot(contains(url(0))),
-          reason: 'reel 0 was the least recently used');
+      expect(
+        service.debugPoolUrls,
+        isNot(contains(url(0))),
+        reason: 'reel 0 was the least recently used',
+      );
       expect(service.debugPoolUrls, contains(url(4)));
-      expect(service.debugPoolUrls, contains(url(3)),
-          reason: 'reel 3 is on screen');
+      expect(
+        service.debugPoolUrls,
+        contains(url(3)),
+        reason: 'reel 3 is on screen',
+      );
     });
   });
 
@@ -218,60 +231,83 @@ void main() {
       service.debugOpenSpare(url(99), warm: true);
       await presentFrame();
 
-      expect(service.debugPoolUrls, contains(url(99)),
-          reason: 'a full pool of watched reels must still make room for '
-              'the reel one swipe ahead');
-      expect(service.debugPoolUrls, contains(url(3)),
-          reason: 'and must not take that room from the reel on screen');
+      expect(
+        service.debugPoolUrls,
+        contains(url(99)),
+        reason:
+            'a full pool of watched reels must still make room for '
+            'the reel one swipe ahead',
+      );
+      expect(
+        service.debugPoolUrls,
+        contains(url(3)),
+        reason: 'and must not take that room from the reel on screen',
+      );
     });
 
-    test('survives the next reel opening, rather than being first out',
-        () async {
-      await watch(url(0));
-      await open(url(1));
-      await open(url(2));
+    test(
+      'survives the next reel opening, rather than being first out',
+      () async {
+        await watch(url(0));
+        await open(url(1));
+        await open(url(2));
 
-      // The spare goes in last, so it is the newest entry in the pool.
-      service.debugOpenSpare(url(3), warm: true);
-      await Future<void>.delayed(const Duration(milliseconds: 2));
+        // The spare goes in last, so it is the newest entry in the pool.
+        service.debugOpenSpare(url(3), warm: true);
+        await Future<void>.delayed(const Duration(milliseconds: 2));
 
-      // Fill to capacity, then force one eviction. Reel 2 is now the
-      // stalest thing that isn't on screen; the spare is the freshest.
-      await open(url(4));
-      await open(url(5));
-      await presentFrame();
+        // Fill to capacity, then force one eviction. Reel 2 is now the
+        // stalest thing that isn't on screen; the spare is the freshest.
+        await open(url(4));
+        await open(url(5));
+        await presentFrame();
 
-      expect(service.debugPoolUrls, contains(url(3)),
-          reason: 'the spare is the likeliest next reel; evicting it first '
-              'is what made every swipe rebuild a decoder');
-      expect(service.debugPoolUrls, isNot(contains(url(2))),
-          reason: 'the stale reel is what should have gone instead');
-    });
+        expect(
+          service.debugPoolUrls,
+          contains(url(3)),
+          reason:
+              'the spare is the likeliest next reel; evicting it first '
+              'is what made every swipe rebuild a decoder',
+        );
+        expect(
+          service.debugPoolUrls,
+          isNot(contains(url(2))),
+          reason: 'the stale reel is what should have gone instead',
+        );
+      },
+    );
 
     test('counts a spare only when one was actually opened', () async {
-      expect(ReelDiagnostics.instance.debugSpareWarm, 0);
+      expect(ReelDiagnostics.instance.debugSpareWarm(SpareLane.nextReel), 0);
 
       service.debugOpenSpare(url(1), warm: true);
       await presentFrame();
-      expect(ReelDiagnostics.instance.debugSpareWarm, 1);
+      expect(ReelDiagnostics.instance.debugSpareWarm(SpareLane.nextReel), 1);
 
       // Now a pool with no room to spare: one slot, and the reel on
       // screen is in it. There is nothing to evict, so no spare opens —
       // and nothing may be counted.
-      service.configure(const VideoPoolConfig(
-        maxPoolSize: 1,
-        prefetchAhead: 0,
-        prefetchAheadBurst: 0,
-        prefetchBack: 0,
-      ));
+      service.configure(
+        const VideoPoolConfig(
+          maxPoolSize: 1,
+          prefetchAhead: 0,
+          prefetchAheadBurst: 0,
+          prefetchBack: 0,
+        ),
+      );
       await watch(url(5));
       await presentFrame();
 
-      final before = ReelDiagnostics.instance.debugSpareWarm;
+      final before = ReelDiagnostics.instance.debugSpareWarm(
+        SpareLane.nextReel,
+      );
       service.debugOpenSpare(url(6), warm: true);
       await presentFrame();
 
-      expect(ReelDiagnostics.instance.debugSpareWarm, before);
+      expect(
+        ReelDiagnostics.instance.debugSpareWarm(SpareLane.nextReel),
+        before,
+      );
       expect(service.debugPoolUrls, isNot(contains(url(6))));
     });
   });
@@ -283,36 +319,97 @@ void main() {
   // widget, which is what the tile used to do and what opened a decoder
   // pair for every battle scrolled past.
   group('more than one reel a gesture away', () {
-    test('the feed can name two, and both are targeted', () {
+    test('the feed can name two, and each keeps its own gesture', () {
+      final targets = VideoPlayerService.spareTargets(
+        [url(1), url(2), url(3), url(9)],
+        [(SpareLane.nextReel, url(1)), (SpareLane.opponent, url(9))],
+      );
+
       expect(
-        VideoPlayerService.spareTargets(
-          [url(1), url(2), url(3), url(9)],
-          [url(1), url(9)],
-        ),
+        targets.keys,
         orderedEquals(<String>[url(1), url(9)]),
-        reason: 'the next reel and the opponent are both one gesture away, '
+        reason:
+            'the next reel and the opponent are both one gesture away, '
             'and the order is which wins the last slot',
+      );
+      expect(targets[url(1)], SpareLane.nextReel);
+      expect(
+        targets[url(9)],
+        SpareLane.opponent,
+        reason:
+            'the lane is what lets the summary say whether flips are '
+            'landing warm — one shared counter cannot, because swipes '
+            'outnumber flips and drown them',
       );
     });
 
     test('naming nothing keeps the old single-spare behaviour', () {
+      final targets = VideoPlayerService.spareTargets([
+        url(1),
+        url(2),
+        url(3),
+      ], const []);
+
       expect(
-        VideoPlayerService.spareTargets([url(1), url(2), url(3)], const []),
+        targets.keys,
         orderedEquals(<String>[url(1)]),
-        reason: 'callers that never thought about this — a notification '
+        reason:
+            'callers that never thought about this — a notification '
             'prewarming one url — must not start getting extra players',
+      );
+      expect(
+        targets[url(1)],
+        SpareLane.nextReel,
+        reason: 'the nearest url in a window is a swipe away by definition',
       );
     });
 
-    test('a url named twice is one player', () {
+    test('a url named twice is one player, on the first lane named', () {
       // Reachable: a battle whose opponent video is also the next reel's.
-      expect(
-        VideoPlayerService.spareTargets([url(1)], [url(1), url(1)]),
-        hasLength(1),
+      // It gets one player, and it belongs to the gesture ranked higher —
+      // counting it as a flip would overstate how well flips are served.
+      final shared = VideoPlayerService.spareTargets(
+        [url(1)],
+        [(SpareLane.nextReel, url(1)), (SpareLane.opponent, url(1))],
       );
-      expect(VideoPlayerService.spareTargets([url(1)], ['', url(1)]),
-          orderedEquals(<String>[url(1)]));
+      expect(shared, hasLength(1));
+      expect(shared[url(1)], SpareLane.nextReel);
+
+      expect(
+        VideoPlayerService.spareTargets(
+          [url(1)],
+          [(SpareLane.nextReel, ''), (SpareLane.opponent, url(1))],
+        ),
+        {url(1): SpareLane.opponent},
+        reason:
+            'an empty url is not a target, and must not swallow the lane '
+            'of the one that follows it',
+      );
       expect(VideoPlayerService.spareTargets(const [], const []), isEmpty);
+    });
+
+    test('each spare is counted against the gesture it serves', () async {
+      // The point of the split. One shared counter could not say whether
+      // a flip landed on a ready player, because swipes vastly outnumber
+      // flips and a single total is dominated by them.
+      // Deliberately crossed: the swipe opens COLD and the flip opens
+      // WARM. Matching lane to warmth would let a counter that ignores
+      // the lane entirely still pass.
+      await watch(url(0));
+      service.debugOpenSpare(url(1), warm: false, lane: SpareLane.nextReel);
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      service.debugOpenSpare(url(9),
+          warm: true, lane: SpareLane.opponent, wanted: {url(1), url(9)});
+      await presentFrame();
+
+      final d = ReelDiagnostics.instance;
+      expect(d.debugSpareCold(SpareLane.nextReel), 1);
+      expect(d.debugSpareWarm(SpareLane.nextReel), 0);
+      expect(d.debugSpareWarm(SpareLane.opponent), 1,
+          reason: 'a flip that opened warm has to be visible as a FLIP that '
+              'opened warm, or the summary cannot say whether the read-ahead '
+              'is reaching opponents at all');
+      expect(d.debugSpareCold(SpareLane.opponent), 0);
     });
 
     test('both wanted spares can be live at once', () async {
@@ -326,23 +423,32 @@ void main() {
       service.debugOpenSpare(url(9), warm: true, wanted: wanted);
       await presentFrame();
 
-      expect(service.debugPoolUrls, containsAll(<String>[url(1), url(9)]),
-          reason: 'a flip should land on a ready controller the same way a '
-              'swipe does');
-      expect(service.debugPoolUrls, contains(url(0)),
-          reason: 'and neither may cost the reel on screen');
+      expect(
+        service.debugPoolUrls,
+        containsAll(<String>[url(1), url(9)]),
+        reason:
+            'a flip should land on a ready controller the same way a '
+            'swipe does',
+      );
+      expect(
+        service.debugPoolUrls,
+        contains(url(0)),
+        reason: 'and neither may cost the reel on screen',
+      );
     });
 
     test('the second declines rather than evicting the first', () async {
       // Three slots: the reel on screen, one spare, and _openSpare keeps
       // the last one free. So the opponent arrives to a pool that has
       // nothing left it is allowed to take.
-      service.configure(const VideoPoolConfig(
-        maxPoolSize: 3,
-        prefetchAhead: 1,
-        prefetchAheadBurst: 2,
-        prefetchBack: 1,
-      ));
+      service.configure(
+        const VideoPoolConfig(
+          maxPoolSize: 3,
+          prefetchAhead: 1,
+          prefetchAheadBurst: 2,
+          prefetchBack: 1,
+        ),
+      );
       await watch(url(0));
 
       final wanted = {url(1), url(9)};
@@ -354,11 +460,18 @@ void main() {
       // Order is priority. The next reel went in first because swipes
       // vastly outnumber flips, and buying the opponent a slot by
       // evicting it would trade the common gesture for the rare one.
-      expect(service.debugPoolUrls, contains(url(1)),
-          reason: 'the next reel was named first and must keep its slot');
-      expect(service.debugPoolUrls, isNot(contains(url(9))),
-          reason: 'with no room left the opponent declines; the flip pays a '
-              'cold open, which is cheaper than the swipe paying one');
+      expect(
+        service.debugPoolUrls,
+        contains(url(1)),
+        reason: 'the next reel was named first and must keep its slot',
+      );
+      expect(
+        service.debugPoolUrls,
+        isNot(contains(url(9))),
+        reason:
+            'with no room left the opponent declines; the flip pays a '
+            'cold open, which is cheaper than the swipe paying one',
+      );
     });
 
     test('a spare still evicts a stale reel to get its slot', () async {
@@ -373,8 +486,11 @@ void main() {
       await presentFrame();
 
       expect(service.debugPoolUrls, contains(url(9)));
-      expect(service.debugPoolUrls, isNot(contains(url(1))),
-          reason: 'the stalest reel that is not on screen is the victim');
+      expect(
+        service.debugPoolUrls,
+        isNot(contains(url(1))),
+        reason: 'the stalest reel that is not on screen is the victim',
+      );
     });
   });
 
@@ -453,8 +569,11 @@ void main() {
       platform.finishInit(id);
       await settle();
 
-      expect(platform.paused, contains(id),
-          reason: 'reel 1 is not the reel on screen');
+      expect(
+        platform.paused,
+        contains(id),
+        reason: 'reel 1 is not the reel on screen',
+      );
       expect(platform.volume[id], 0.0);
     });
   });
@@ -471,10 +590,14 @@ void main() {
       // The shutdown half happens immediately, at eviction time.
       for (final id in platform.createdFor.keys) {
         if (service.debugPoolUrls.contains(platform.createdFor[id])) continue;
-        expect(platform.paused, contains(id),
-            reason: 'a decoder still feeding a surface that is being '
-                'released is what floods the log with GraphicsTracker '
-                'deallocate failures');
+        expect(
+          platform.paused,
+          contains(id),
+          reason:
+              'a decoder still feeding a surface that is being '
+              'released is what floods the log with GraphicsTracker '
+              'deallocate failures',
+        );
         expect(platform.volume[id], 0.0);
       }
     });
@@ -490,11 +613,18 @@ void main() {
       }
       await settle();
 
-      expect(platform.disposed, isEmpty,
-          reason: 'nothing may be released before a frame has passed');
-      expect(service.debugPoolSize, lessThanOrEqualTo(4),
-          reason: 'but the entry is already out of the pool, so isLive is '
-              'false and the tile has stopped painting it');
+      expect(
+        platform.disposed,
+        isEmpty,
+        reason: 'nothing may be released before a frame has passed',
+      );
+      expect(
+        service.debugPoolSize,
+        lessThanOrEqualTo(4),
+        reason:
+            'but the entry is already out of the pool, so isLive is '
+            'false and the tile has stopped painting it',
+      );
 
       await presentFrame();
       expect(platform.disposed, isNotEmpty);
@@ -507,9 +637,13 @@ void main() {
       }
       await presentFrame();
 
-      expect(ReelDiagnostics.instance.debugRetired, platform.disposed.length,
-          reason: 'starts counts players opened; this counts the other end, '
-              'and the pair is the only direct read on churn');
+      expect(
+        ReelDiagnostics.instance.debugRetired,
+        platform.disposed.length,
+        reason:
+            'starts counts players opened; this counts the other end, '
+            'and the pair is the only direct read on churn',
+      );
     });
   });
 }

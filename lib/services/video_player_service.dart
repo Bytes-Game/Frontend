@@ -209,23 +209,26 @@ class VideoPlayerService {
     // needs the first frame, the network handshake is already in
     // flight.
     // ignore: discarded_futures
-    controller.initialize().then((_) {
-      // Audible only if this is still the reel on screen — see
-      // [_volumeFor]. The reels PageView builds its neighbours, so this
-      // path runs for tiles the user cannot see yet, and those must come
-      // up silent rather than relying on a later sweep to quieten them.
-      controller.setVolume(_volumeFor(url));
-      // And stopped. A tile can call play() on its controller before
-      // initialisation lands — the feed does exactly that in
-      // _playCurrent — and video_player replays that request the moment
-      // the player is ready. If the user swiped on in the meantime, that
-      // deferred play would start an off-screen reel decoding.
-      if (url != _activeUrl) controller.pause();
-    }).catchError((_) {
-      // Swallowed — caller can inspect controller.value.hasError when
-      // they actually try to use the controller. Throwing here would
-      // crash the fire-and-forget chain.
-    });
+    controller
+        .initialize()
+        .then((_) {
+          // Audible only if this is still the reel on screen — see
+          // [_volumeFor]. The reels PageView builds its neighbours, so this
+          // path runs for tiles the user cannot see yet, and those must come
+          // up silent rather than relying on a later sweep to quieten them.
+          controller.setVolume(_volumeFor(url));
+          // And stopped. A tile can call play() on its controller before
+          // initialisation lands — the feed does exactly that in
+          // _playCurrent — and video_player replays that request the moment
+          // the player is ready. If the user swiped on in the meantime, that
+          // deferred play would start an off-screen reel decoding.
+          if (url != _activeUrl) controller.pause();
+        })
+        .catchError((_) {
+          // Swallowed — caller can inspect controller.value.hasError when
+          // they actually try to use the controller. Throwing here would
+          // crash the fire-and-forget chain.
+        });
     _pool.add(_PoolEntry(controller: controller, url: url));
     return controller;
   }
@@ -292,7 +295,10 @@ class VideoPlayerService {
   /// declines rather than evicting a spare already opened for this same
   /// window, so an earlier entry wins the last slot. Swipes vastly
   /// outnumber flips, so the feed puts the next reel first.
-  void prefetch(List<String> urls, {List<String> live = const []}) {
+  void prefetch(
+    List<String> urls, {
+    List<(SpareLane, String)> live = const [],
+  }) {
     final window = urls.where((u) => u.isNotEmpty).toList();
     if (window.isEmpty) return;
 
@@ -304,12 +310,10 @@ class VideoPlayerService {
     // gesture away has left the window — drop it, so the wait below
     // resolves into nothing instead of opening a player for a reel the
     // user has already scrolled past.
-    _pendingSpares.removeWhere((u) => !wanted.contains(u));
-    _wantedSpares = wanted;
+    _pendingSpares.removeWhere((u, _) => !wanted.containsKey(u));
+    _wantedSpares = wanted.keys.toSet();
 
-    for (final url in wanted) {
-      _requestSpare(url);
-    }
+    wanted.forEach(_requestSpare);
   }
 
   /// Which urls out of a prefetch window get a live player, in priority
@@ -323,24 +327,37 @@ class VideoPlayerService {
   /// An empty [live] means the caller has not thought about it, and gets
   /// the historical behaviour: the nearest url in the window, and nothing
   /// else. Duplicates collapse — a battle whose opponent is also the next
-  /// reel's video is one player, asked for twice.
-  static Set<String> spareTargets(List<String> window, List<String> live) {
-    final chosen = live.where((u) => u.isNotEmpty).toSet();
+  /// reel's video is one player, asked for twice — and the FIRST lane
+  /// named wins it, so a shared url is attributed to the gesture the
+  /// caller ranked higher.
+  ///
+  /// Iteration order is the caller's order, which [_openSpare] treats as
+  /// priority when the pool cannot hold them all.
+  static Map<String, SpareLane> spareTargets(
+    List<String> window,
+    List<(SpareLane, String)> live,
+  ) {
+    final chosen = <String, SpareLane>{};
+    for (final (lane, url) in live) {
+      if (url.isNotEmpty) chosen.putIfAbsent(url, () => lane);
+    }
     if (chosen.isNotEmpty) return chosen;
     final fallback = window.where((u) => u.isNotEmpty);
-    return fallback.isEmpty ? <String>{} : {fallback.first};
+    return fallback.isEmpty
+        ? <String, SpareLane>{}
+        : {fallback.first: SpareLane.nextReel};
   }
 
   /// Open a live spare for [url], now if its opening slice is already
   /// cached and after a short wait if it is not.
-  void _requestSpare(String url) {
+  void _requestSpare(String url, SpareLane lane) {
     if (_prefetchedUrls.contains(url)) return;
     if (_pool.any((e) => e.url == url)) return;
 
     // Already warm: open it now, against the proxy.
     if (VideoCacheService.instance.isReady(url)) {
       _pendingSpares.remove(url);
-      _openSpare(url, warm: true);
+      _openSpare(url, warm: true, lane: lane);
       return;
     }
 
@@ -366,17 +383,19 @@ class VideoPlayerService {
     // ever built for it. That is what makes it safe to hand the opponent
     // the same treatment as the next reel: a battle flown past opens
     // nothing, exactly as a reel flown past opens nothing.
-    if (!_pendingSpares.add(url)) return; // already waiting on this one
+    // already waiting on this one
+    if (_pendingSpares.containsKey(url)) return;
+    _pendingSpares[url] = lane;
     unawaited(
       VideoCacheService.instance.awaitReady(url, spareWarmGrace).then((warm) {
         // Re-check everything: a grace is long enough for the user to
         // swipe, for the window to move on, or for the tile itself to
         // have opened this URL directly. remove() returning false means
         // prefetch already dropped it as out of reach.
-        if (!_pendingSpares.remove(url)) return;
+        if (_pendingSpares.remove(url) == null) return;
         if (_prefetchedUrls.contains(url)) return;
         if (_pool.any((e) => e.url == url)) return;
-        _openSpare(url, warm: warm);
+        _openSpare(url, warm: warm, lane: lane);
       }),
     );
   }
@@ -394,7 +413,7 @@ class VideoPlayerService {
   /// URLs [prefetch] is currently holding a deferred spare for, so a wait
   /// that resolves after the user has moved on is dropped instead of
   /// opening a player for a reel that has left the window.
-  final Set<String> _pendingSpares = {};
+  final Map<String, SpareLane> _pendingSpares = {};
 
   /// URLs the latest [prefetch] declared to be one gesture away.
   ///
@@ -410,7 +429,7 @@ class VideoPlayerService {
   /// [warm] says whether [next]'s opening slice was already cached, and is
   /// recorded here rather than at the call sites because only this method
   /// knows whether a spare was actually opened.
-  void _openSpare(String next, {required bool warm}) {
+  void _openSpare(String next, {required bool warm, required SpareLane lane}) {
     // Never let the spare crowd out the active reel's slot.
     //
     // This used to look for a PREFETCH entry to evict and give up when it
@@ -437,28 +456,27 @@ class VideoPlayerService {
     }
 
     if (warm) {
-      ReelDiagnostics.instance.recordSpareWarm();
+      ReelDiagnostics.instance.recordSpareWarm(lane);
     } else {
-      ReelDiagnostics.instance.recordSpareCold();
+      ReelDiagnostics.instance.recordSpareCold(lane);
     }
 
     final controller = _controllerFor(next);
     // ignore: discarded_futures
-    controller.initialize().then((_) {
-      // The spare is silent. AudioFocus on Android is exclusive — an
-      // unmuted spare fights the active reel and chops its audio. The
-      // promote path in getController restores volume. No pause needed:
-      // nothing ever calls play() on a spare, and video_player leaves a
-      // controller that was not playing paused once it initialises.
-      controller.setVolume(0);
-    }).catchError((_) {
-      // Surfaced when the caller actually tries to use this URL.
-    });
-    _pool.add(_PoolEntry(
-      controller: controller,
-      url: next,
-      isPrefetch: true,
-    ));
+    controller
+        .initialize()
+        .then((_) {
+          // The spare is silent. AudioFocus on Android is exclusive — an
+          // unmuted spare fights the active reel and chops its audio. The
+          // promote path in getController restores volume. No pause needed:
+          // nothing ever calls play() on a spare, and video_player leaves a
+          // controller that was not playing paused once it initialises.
+          controller.setVolume(0);
+        })
+        .catchError((_) {
+          // Surfaced when the caller actually tries to use this URL.
+        });
+    _pool.add(_PoolEntry(controller: controller, url: next, isPrefetch: true));
     _prefetchedUrls.add(next);
   }
 
@@ -655,9 +673,14 @@ class VideoPlayerService {
   /// gesture away, which is what [_openSpare] protects from eviction.
   /// Defaults to just [url], matching a window with a single spare.
   @visibleForTesting
-  void debugOpenSpare(String url, {required bool warm, Set<String>? wanted}) {
+  void debugOpenSpare(
+    String url, {
+    required bool warm,
+    Set<String>? wanted,
+    SpareLane lane = SpareLane.nextReel,
+  }) {
     _wantedSpares = wanted ?? {url};
-    _openSpare(url, warm: warm);
+    _openSpare(url, warm: warm, lane: lane);
   }
 
   @visibleForTesting
