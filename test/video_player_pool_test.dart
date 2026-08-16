@@ -646,4 +646,103 @@ void main() {
       );
     });
   });
+
+  group('the decoder budget', () {
+    // The tiers were sized for the Java heap, which is not what runs out.
+    // A profile run on an 8 GB phone — top tier, pool of 5 — was overruled
+    // by the platform's resource manager reclaiming its decoders.
+    test('caps every RAM tier, however much memory the device has',
+        () async {
+      for (final ramGb in <double>[1.5, 2.5, 4, 6, 12, 24]) {
+        final cfg = VideoPoolConfig.forRam(ramGb);
+        expect(
+          cfg.maxPoolSize,
+          lessThanOrEqualTo(VideoPoolConfig.maxConcurrentDecoders),
+          reason: '${ramGb}GB tier must not exceed the decoder budget',
+        );
+      }
+    });
+
+    test('leaves small-RAM tiers alone', () async {
+      // The clamp is a ceiling, not a floor. A 2 GB phone that should hold
+      // two players must not be talked up to three by it.
+      final low = VideoPoolConfig.forRam(1.5);
+      expect(low.maxPoolSize, 2);
+      expect(low.prefetchAhead, 1);
+      expect(low.prefetchBack, 0);
+    });
+
+    test('keeps a slot for the reel on screen', () async {
+      // Every spare count has to leave room for the active reel, or
+      // _openSpare spends a decision per swipe declining spares the pool
+      // was never able to hold.
+      for (final ramGb in <double>[1.5, 2.5, 4, 6, 12]) {
+        final cfg = VideoPoolConfig.forRam(ramGb);
+        expect(cfg.prefetchAheadBurst, lessThanOrEqualTo(cfg.maxPoolSize - 1),
+            reason: '${ramGb}GB burst window overcommits the pool');
+        expect(cfg.prefetchAhead, lessThanOrEqualTo(cfg.maxPoolSize - 1));
+        expect(cfg.prefetchBack, lessThanOrEqualTo(cfg.maxPoolSize - 1));
+      }
+    });
+
+    test('the startup default is inside the budget too', () async {
+      // This is the config in force while DeviceCapabilities.probe is
+      // still running — i.e. during app start, when the first reel is
+      // opening and the decoder has least room to spare.
+      expect(
+        VideoPoolConfig.fallback.maxPoolSize,
+        lessThanOrEqualTo(VideoPoolConfig.maxConcurrentDecoders),
+      );
+    });
+  });
+
+  group('one spare at a time', () {
+    // Building two spares in the same turn put three players into
+    // MediaCodec's INITIALIZING state at once, which is where the vendor
+    // stack starts handing back reclaims.
+    test('a spare mid-construction holds the gate', () async {
+      platform.holdInit = true;
+      await watch(url(0));
+
+      service.debugOpenSpare(url(1), warm: true);
+      await settle();
+
+      expect(
+        service.debugSpareGateHeld,
+        isTrue,
+        reason: 'the next spare must wait while this one allocates a codec',
+      );
+    });
+
+    test('finishing initialisation releases the gate', () async {
+      platform.holdInit = true;
+      await watch(url(0));
+
+      service.debugOpenSpare(url(1), warm: true);
+      await settle();
+      platform.finishInit(platform.idFor(url(1)));
+      await settle();
+
+      expect(
+        service.debugSpareGateHeld,
+        isFalse,
+        reason: 'a gate that is never released opens no further spares for '
+            'the rest of the session, and no counter would show it',
+      );
+    });
+
+    test('shutdown releases the gate', () async {
+      // Otherwise the first spare of the NEXT session waits out the
+      // timeout behind a player that no longer exists.
+      platform.holdInit = true;
+      await watch(url(0));
+      service.debugOpenSpare(url(1), warm: true);
+      await settle();
+      expect(service.debugSpareGateHeld, isTrue);
+
+      await service.disposeAll();
+
+      expect(service.debugSpareGateHeld, isFalse);
+    });
+  });
 }
