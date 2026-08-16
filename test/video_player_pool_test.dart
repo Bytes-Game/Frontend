@@ -276,6 +276,108 @@ void main() {
     });
   });
 
+  // A battle is two videos, and a horizontal flip reaches its opponent in
+  // exactly the way a vertical swipe reaches the next reel. Both are one
+  // gesture away, so both are named in `live` and both go through this
+  // same path — rather than the opponent getting a lookalike of it in the
+  // widget, which is what the tile used to do and what opened a decoder
+  // pair for every battle scrolled past.
+  group('more than one reel a gesture away', () {
+    test('the feed can name two, and both are targeted', () {
+      expect(
+        VideoPlayerService.spareTargets(
+          [url(1), url(2), url(3), url(9)],
+          [url(1), url(9)],
+        ),
+        orderedEquals(<String>[url(1), url(9)]),
+        reason: 'the next reel and the opponent are both one gesture away, '
+            'and the order is which wins the last slot',
+      );
+    });
+
+    test('naming nothing keeps the old single-spare behaviour', () {
+      expect(
+        VideoPlayerService.spareTargets([url(1), url(2), url(3)], const []),
+        orderedEquals(<String>[url(1)]),
+        reason: 'callers that never thought about this — a notification '
+            'prewarming one url — must not start getting extra players',
+      );
+    });
+
+    test('a url named twice is one player', () {
+      // Reachable: a battle whose opponent video is also the next reel's.
+      expect(
+        VideoPlayerService.spareTargets([url(1)], [url(1), url(1)]),
+        hasLength(1),
+      );
+      expect(VideoPlayerService.spareTargets([url(1)], ['', url(1)]),
+          orderedEquals(<String>[url(1)]));
+      expect(VideoPlayerService.spareTargets(const [], const []), isEmpty);
+    });
+
+    test('both wanted spares can be live at once', () async {
+      await watch(url(0));
+
+      // The next reel and the active reel's opponent, as the feed names
+      // them: nearest swipe first, flip second.
+      final wanted = {url(1), url(9)};
+      service.debugOpenSpare(url(1), warm: true, wanted: wanted);
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      service.debugOpenSpare(url(9), warm: true, wanted: wanted);
+      await presentFrame();
+
+      expect(service.debugPoolUrls, containsAll(<String>[url(1), url(9)]),
+          reason: 'a flip should land on a ready controller the same way a '
+              'swipe does');
+      expect(service.debugPoolUrls, contains(url(0)),
+          reason: 'and neither may cost the reel on screen');
+    });
+
+    test('the second declines rather than evicting the first', () async {
+      // Three slots: the reel on screen, one spare, and _openSpare keeps
+      // the last one free. So the opponent arrives to a pool that has
+      // nothing left it is allowed to take.
+      service.configure(const VideoPoolConfig(
+        maxPoolSize: 3,
+        prefetchAhead: 1,
+        prefetchAheadBurst: 2,
+        prefetchBack: 1,
+      ));
+      await watch(url(0));
+
+      final wanted = {url(1), url(9)};
+      service.debugOpenSpare(url(1), warm: true, wanted: wanted);
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      service.debugOpenSpare(url(9), warm: true, wanted: wanted);
+      await presentFrame();
+
+      // Order is priority. The next reel went in first because swipes
+      // vastly outnumber flips, and buying the opponent a slot by
+      // evicting it would trade the common gesture for the rare one.
+      expect(service.debugPoolUrls, contains(url(1)),
+          reason: 'the next reel was named first and must keep its slot');
+      expect(service.debugPoolUrls, isNot(contains(url(9))),
+          reason: 'with no room left the opponent declines; the flip pays a '
+              'cold open, which is cheaper than the swipe paying one');
+    });
+
+    test('a spare still evicts a stale reel to get its slot', () async {
+      // The protection is for spares of the CURRENT window only — a reel
+      // watched a while ago is still exactly what should make way.
+      await watch(url(0));
+      await open(url(1));
+      await open(url(2));
+      await open(url(3));
+
+      service.debugOpenSpare(url(9), warm: true, wanted: {url(9)});
+      await presentFrame();
+
+      expect(service.debugPoolUrls, contains(url(9)));
+      expect(service.debugPoolUrls, isNot(contains(url(1))),
+          reason: 'the stalest reel that is not on screen is the victim');
+    });
+  });
+
   group('audio', () {
     test('a reel that is not on screen comes up silent', () async {
       platform.holdInit = true;
