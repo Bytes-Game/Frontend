@@ -199,7 +199,7 @@ class VideoPlayerService {
 
     // If pool is full, make room before creating a new entry.
     if (_pool.length >= _config.maxPoolSize) {
-      _evictOldest(keep: url);
+      _evictOldest(protect: {url});
     }
 
     final controller = _controllerFor(url);
@@ -272,58 +272,111 @@ class VideoPlayerService {
   ///   * EVERY url in the window is warmed as BYTES by
   ///     [VideoCacheService] — no player, no decoder, no audio, so the
   ///     window can be much deeper than the old player pool allowed.
-  ///   * Only the very next reel also gets a live controller, so the
-  ///     common single-swipe case still lands on an already-initialised
+  ///   * Only the reels named in [live] also get a live controller, so
+  ///     the common one-gesture case still lands on an already-initialised
   ///     player.
   ///
   /// [urls] is nearest-first; the caller supplies forward reels before
   /// backward ones so the cache prioritises where the user is heading.
-  void prefetch(List<String> urls) {
+  ///
+  /// [live] names the urls a single gesture can reach from where the user
+  /// is standing, in priority order, and defaults to the nearest one in
+  /// the window. The reels feed passes two: the next reel, which a
+  /// vertical swipe reaches, and the active reel's opponent, which a
+  /// horizontal flip reaches. Those are the same kind of thing — one
+  /// gesture away — and the point of naming them here is that they get
+  /// the same treatment rather than the opponent getting a lookalike of
+  /// it somewhere else. Everything else in [urls] stays bytes-only.
+  ///
+  /// Order matters when the pool cannot hold them all: [_openSpare]
+  /// declines rather than evicting a spare already opened for this same
+  /// window, so an earlier entry wins the last slot. Swipes vastly
+  /// outnumber flips, so the feed puts the next reel first.
+  void prefetch(List<String> urls, {List<String> live = const []}) {
     final window = urls.where((u) => u.isNotEmpty).toList();
     if (window.isEmpty) return;
 
     VideoCacheService.instance.warm(window);
 
-    // One live spare. Anything beyond this is bytes-only — that is the
-    // change that removes the decoder pile-up.
-    final next = window.first;
-    if (_prefetchedUrls.contains(next)) return;
-    if (_pool.any((e) => e.url == next)) return;
+    final wanted = spareTargets(window, live);
+
+    // Anything we were holding a deferred spare for that is no longer one
+    // gesture away has left the window — drop it, so the wait below
+    // resolves into nothing instead of opening a player for a reel the
+    // user has already scrolled past.
+    _pendingSpares.removeWhere((u) => !wanted.contains(u));
+    _wantedSpares = wanted;
+
+    for (final url in wanted) {
+      _requestSpare(url);
+    }
+  }
+
+  /// Which urls out of a prefetch window get a live player, in priority
+  /// order.
+  ///
+  /// Pure, and separated out because it is the whole of the "how many
+  /// reels are one gesture away" decision — everything after it is
+  /// plumbing through [VideoCacheService], which a test of this question
+  /// would have to stand up a temp directory and a loopback proxy for.
+  ///
+  /// An empty [live] means the caller has not thought about it, and gets
+  /// the historical behaviour: the nearest url in the window, and nothing
+  /// else. Duplicates collapse — a battle whose opponent is also the next
+  /// reel's video is one player, asked for twice.
+  static Set<String> spareTargets(List<String> window, List<String> live) {
+    final chosen = live.where((u) => u.isNotEmpty).toSet();
+    if (chosen.isNotEmpty) return chosen;
+    final fallback = window.where((u) => u.isNotEmpty);
+    return fallback.isEmpty ? <String>{} : {fallback.first};
+  }
+
+  /// Open a live spare for [url], now if its opening slice is already
+  /// cached and after a short wait if it is not.
+  void _requestSpare(String url) {
+    if (_prefetchedUrls.contains(url)) return;
+    if (_pool.any((e) => e.url == url)) return;
 
     // Already warm: open it now, against the proxy.
-    if (VideoCacheService.instance.isReady(next)) {
-      _pendingSpare = null;
-      _openSpare(next, warm: true);
+    if (VideoCacheService.instance.isReady(url)) {
+      _pendingSpares.remove(url);
+      _openSpare(url, warm: true);
       return;
     }
 
     // Cold — and this is the case that used to quietly defeat the whole
-    // cache. warm() above only ENQUEUES a download; it returns long
-    // before any byte arrives. Opening the spare on the next line
-    // therefore asked playbackUrlFor() a question whose answer could not
-    // yet be anything but "origin", so the reel most likely to be
-    // watched next — the one a single swipe away — was the one reel
-    // guaranteed to open against the network. Worse, its opening slice
-    // then finished downloading into a proxy registration that nothing
-    // would ever read, because the controller was already bound to the
-    // origin URL. Device logs showed the shape of it: proxy=4 (40%),
-    // network=6 (60%), with only 3 prefixes warmed in the whole session.
+    // cache. warm() only ENQUEUES a download; it returns long before any
+    // byte arrives. Opening the spare immediately therefore asked
+    // playbackUrlFor() a question whose answer could not yet be anything
+    // but "origin", so the reel most likely to be watched next — the one
+    // a single swipe away — was the one reel guaranteed to open against
+    // the network. Worse, its opening slice then finished downloading
+    // into a proxy registration that nothing would ever read, because the
+    // controller was already bound to the origin URL. Device logs showed
+    // the shape of it: proxy=4 (40%), network=6 (60%), with only 3
+    // prefixes warmed in the whole session.
     //
     // So wait for the slice, briefly, and open against the proxy when it
     // lands. If it does not land inside the grace we open cold anyway —
     // never having a spare would be worse than having a cold one.
-    if (_pendingSpare == next) return; // already waiting on this reel
-    _pendingSpare = next;
+    //
+    // The wait doubles as the throttle that keeps fast scrolling cheap. A
+    // user moving a reel a second has moved on before the grace elapses,
+    // so the url is gone from [_pendingSpares] by then and no player is
+    // ever built for it. That is what makes it safe to hand the opponent
+    // the same treatment as the next reel: a battle flown past opens
+    // nothing, exactly as a reel flown past opens nothing.
+    if (!_pendingSpares.add(url)) return; // already waiting on this one
     unawaited(
-      VideoCacheService.instance.awaitReady(next, spareWarmGrace).then((warm) {
+      VideoCacheService.instance.awaitReady(url, spareWarmGrace).then((warm) {
         // Re-check everything: a grace is long enough for the user to
         // swipe, for the window to move on, or for the tile itself to
-        // have opened this URL directly.
-        if (_pendingSpare != next) return;
-        _pendingSpare = null;
-        if (_prefetchedUrls.contains(next)) return;
-        if (_pool.any((e) => e.url == next)) return;
-        _openSpare(next, warm: warm);
+        // have opened this URL directly. remove() returning false means
+        // prefetch already dropped it as out of reach.
+        if (!_pendingSpares.remove(url)) return;
+        if (_prefetchedUrls.contains(url)) return;
+        if (_pool.any((e) => e.url == url)) return;
+        _openSpare(url, warm: warm);
       }),
     );
   }
@@ -338,10 +391,19 @@ class VideoPlayerService {
   /// so the next profile run can say whether it is set right.
   static const Duration spareWarmGrace = Duration(milliseconds: 1500);
 
-  /// The URL [prefetch] is currently holding a deferred spare for, so a
-  /// wait that resolves after the user has moved on is dropped instead
-  /// of opening a player for a reel that has left the window.
-  String? _pendingSpare;
+  /// URLs [prefetch] is currently holding a deferred spare for, so a wait
+  /// that resolves after the user has moved on is dropped instead of
+  /// opening a player for a reel that has left the window.
+  final Set<String> _pendingSpares = {};
+
+  /// URLs the latest [prefetch] declared to be one gesture away.
+  ///
+  /// Read by [_openSpare] so that opening the second spare cannot pay for
+  /// itself by evicting the first. Without it a three-slot pool holding
+  /// the active reel plus the next reel would hand the last slot to the
+  /// opponent by throwing away the next reel — trading the swipe, which
+  /// is the common gesture, for the flip, which is not.
+  Set<String> _wantedSpares = {};
 
   /// Create the single live spare controller for [next] and pool it.
   ///
@@ -364,8 +426,14 @@ class VideoPlayerService {
     // Stale watched reels are exactly what should make way for the reel
     // one swipe ahead, so evict by age and let the active reel be the
     // only thing that is off limits.
+    // Protect every url this window called one gesture away, not just this
+    // one. With two spares wanted, evicting by age alone would let the
+    // second cannibalise the first — a three-slot pool holding the active
+    // reel and the next reel would give the opponent the last slot by
+    // throwing the next reel away. Declining is the right answer there:
+    // the pool is full of things the user is more likely to reach.
     if (_pool.length >= _config.maxPoolSize - 1) {
-      if (!_evictOldest(keep: next)) return;
+      if (!_evictOldest(protect: {next, ..._wantedSpares})) return;
     }
 
     if (warm) {
@@ -489,7 +557,8 @@ class VideoPlayerService {
     _pool.clear();
     _prefetchedUrls.clear();
     _activeUrl = null;
-    _pendingSpare = null;
+    _pendingSpares.clear();
+    _wantedSpares = {};
   }
 
   /// Evict the least recently used controller that isn't the reel on
@@ -506,10 +575,15 @@ class VideoPlayerService {
   /// for. A spare is opened at the moment it is wanted, so it sorts
   /// newest; the previous reel sorts one swipe old, which is what keeps
   /// back-swipe instant; genuinely stale reels sort oldest and go first.
-  bool _evictOldest({String? keep}) {
+  ///
+  /// [protect] is spared alongside the active reel. Callers pass the url
+  /// they are making room FOR, plus anything else that must outlive this
+  /// eviction — see [_openSpare], where the set is what stops one spare
+  /// being bought with another.
+  bool _evictOldest({Set<String> protect = const {}}) {
     _pool.sort((a, b) => a.lastUsed.compareTo(b.lastUsed));
     final victim = _pool
-        .where((e) => e.url != _activeUrl && e.url != keep)
+        .where((e) => e.url != _activeUrl && !protect.contains(e.url))
         .firstOrNull;
     if (victim == null) return false;
     _pool.remove(victim);
@@ -577,9 +651,14 @@ class VideoPlayerService {
   /// none of which say anything about the question these tests ask, which
   /// is purely "does the pool make room for the spare". This seam keeps
   /// that question separable from how the bytes got there.
+  /// [wanted] stands in for the set [prefetch] would have declared one
+  /// gesture away, which is what [_openSpare] protects from eviction.
+  /// Defaults to just [url], matching a window with a single spare.
   @visibleForTesting
-  void debugOpenSpare(String url, {required bool warm}) =>
-      _openSpare(url, warm: warm);
+  void debugOpenSpare(String url, {required bool warm, Set<String>? wanted}) {
+    _wantedSpares = wanted ?? {url};
+    _openSpare(url, warm: warm);
+  }
 
   @visibleForTesting
   int get debugPoolSize => _pool.length;

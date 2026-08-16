@@ -1002,7 +1002,26 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       final u = entry.videoUrl;
       if (u.isNotEmpty) back.add(u);
     }
-    VideoPlayerService.instance.prefetch([...upcoming, ...back]);
+    // The two urls one gesture away from where the user is standing: the
+    // next reel, which a vertical swipe reaches, and — on a battle — the
+    // active reel's opponent, which a horizontal flip reaches. Both get a
+    // live player from the same read-ahead machinery, on the same terms,
+    // so a flip lands on a ready controller exactly the way a swipe does.
+    //
+    // The order is the priority when the pool cannot hold both: swipes
+    // vastly outnumber flips, so the next reel takes the slot first and
+    // the opponent gets one only if there is another going spare.
+    //
+    // Nothing here fires for a reel being scrolled past. prefetch holds a
+    // cold spare until its opening bytes land, and by then a fast scroller
+    // has moved on and the url is no longer claimed — so the battles in a
+    // fling open no players at all.
+    final live = <String>[
+      if (challengers.isNotEmpty) challengers.first,
+      if (current is _ReelItem && current.opponentVideoUrl.isNotEmpty)
+        current.opponentVideoUrl,
+    ];
+    VideoPlayerService.instance.prefetch([...upcoming, ...back], live: live);
   }
 
   void _maybePrefetchNextPage() {
