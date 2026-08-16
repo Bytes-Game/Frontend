@@ -2346,24 +2346,8 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
       _isPaused = false; // resume on swap so the new side autoplays
     });
 
-    if (show) {
-      final s = _ensureOpponentState();
-      // ignore: discarded_futures
-      widget.state.controller.pause();
-      // ignore: discarded_futures
-      s.controller.setVolume(VideoPlayerService.instance.activeVolume);
-      // ignore: discarded_futures
-      s.controller.play();
-    } else {
-      // ignore: discarded_futures
-      _opponentState?.controller.pause();
-      // ignore: discarded_futures
-      widget.state.controller.setVolume(
-        VideoPlayerService.instance.activeVolume,
-      );
-      // ignore: discarded_futures
-      widget.state.controller.play();
-    }
+    // ignore: discarded_futures
+    _startSide(show);
 
     if (track) {
       EventTracker.instance.trackSwipe(
@@ -2380,6 +2364,61 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
         side: show ? 1 : 0,
       );
     }
+  }
+
+  /// Playback half of a side switch: stop the face going away, start the
+  /// face coming in, and — the part that used to be missing — tell
+  /// VideoPlayerService which URL is now the one on screen.
+  ///
+  /// The old version paused one controller and played the other directly,
+  /// never routing through [VideoPlayerService.pauseAllExcept]. The
+  /// service therefore still believed the CHALLENGER was on screen for the
+  /// whole time the user spent watching the opponent, and it acts on that
+  /// belief in two places that both end in a frozen picture:
+  ///
+  ///   - Eviction protects only the URL the service thinks is active, so
+  ///     the opponent — visible, playing, unprotected — was a legal victim
+  ///     the next time the pool needed a slot. Being evicted means being
+  ///     disposed, and a disposed player stops on its last frame.
+  ///   - [VideoPlayerService.getController] mutes and pauses a controller
+  ///     that finishes initialising while some other URL is active. An
+  ///     opponent whose first frame landed after the flip was therefore
+  ///     silenced and stopped by the service moments after this method
+  ///     started it — a still picture with no sound.
+  ///
+  /// Going through pauseAllExcept fixes both, because it sets the active
+  /// URL synchronously before it awaits anything.
+  Future<void> _startSide(bool show) async {
+    // A tile that has scrolled away runs this too: didUpdateWidget resets
+    // a battle to its challenger face on the way out, and that reset lands
+    // here with `show` false. It must not start the video — it is off
+    // screen — and it must not claim the active URL, which by then belongs
+    // to whichever reel the user swiped to. Doing either was the old
+    // "opponent frozen while the wrong audio plays" race, just from the
+    // other direction.
+    //
+    // Checked before _ensureOpponentState because that reset arrives
+    // during a build, and building an opponent there would reach
+    // getController → setVolume → setState mid-build. Today's reset only
+    // ever asks for the challenger, so the call below is unreachable from
+    // that path; the order is what keeps it unreachable.
+    if (!widget.isActive) {
+      // ignore: discarded_futures
+      _opponentState?.controller.pause();
+      // ignore: discarded_futures
+      widget.state.controller.pause();
+      return;
+    }
+
+    final incoming = show ? _ensureOpponentState() : widget.state;
+    await VideoPlayerService.instance.pauseAllExcept(incoming.url);
+    // The cube is finger-driven and the user can turn it back, or swipe
+    // the tile away, inside that await.
+    if (!mounted || _showingOpponent != show || !widget.isActive) return;
+    // ignore: discarded_futures
+    incoming.controller.setVolume(VideoPlayerService.instance.activeVolume);
+    // ignore: discarded_futures
+    incoming.controller.play();
   }
 
   /// Animate the cube from wherever it currently is to fully showing

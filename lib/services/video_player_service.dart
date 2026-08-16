@@ -34,8 +34,24 @@ class VideoPoolConfig {
     required this.prefetchBack,
   });
 
-  /// The ceiling every tier is clamped to on Android, and the reason the
-  /// tiers below no longer reach the numbers they used to.
+  /// How many players the screen actually needs alive at the same time.
+  ///
+  /// Four, and each one is on screen or one gesture away from it:
+  ///
+  ///   1. the reel being watched,
+  ///   2. the reel one swipe up,
+  ///   3. the reel one swipe down,
+  ///   4. the opponent's video, when the reel is a battle.
+  ///
+  /// The reels PageView builds its neighbours, so 2 and 3 are real
+  /// players, not plans to make one. A battle turns both cube faces at
+  /// once during the flip, so 4 is real too for as long as the gesture
+  /// lasts. This is a floor on the pool, not a wish: see
+  /// [maxConcurrentDecoders] for what happens when the pool sits below it.
+  static const int onScreenWorkingSet = 4;
+
+  /// The ceiling every tier is clamped to, and the reason the tiers below
+  /// no longer reach the numbers they used to.
   ///
   /// The tiers were sized for the Java heap: ~20-30 MB of MediaCodec and
   /// AudioTrack wrappers per live ExoPlayer against a 256 MB (or ~512 MB
@@ -49,19 +65,31 @@ class VideoPoolConfig {
   ///
   /// That is Android's resource manager taking decoders back because the
   /// process was holding more concurrent 720p AVC instances than the
-  /// vendor Codec2 stack will run. RAM does not predict that number —
-  /// it is a property of the SoC's decoder, and on this MediaTek part the
-  /// practical limit sat below what the 8 GB tier was asking for. Three
-  /// live players (the reel on screen, the one a swipe ahead, the one a
-  /// swipe back) fits inside every mainstream device's budget and is
-  /// exactly what the feed's gestures can reach, so nothing above it was
-  /// buying reachable warmth — only reclaims, and the churn that follows
-  /// one: 50 player opens for 14 distinct videos in a 90-second run.
+  /// vendor Codec2 stack will run. RAM does not predict that number — it
+  /// is a property of the SoC's decoder — so the cap exists and RAM is no
+  /// longer the ceiling. Nothing above the reachable set was buying warmth
+  /// the user could feel, only reclaims.
+  ///
+  /// It must never drop below [onScreenWorkingSet], and it sat at 3 for
+  /// one release, which is worth writing down because the reasoning was
+  /// wrong in an instructive way. The thought was that a smaller pool
+  /// means fewer live decoders. It does not. [getController] builds a
+  /// player whenever a tile asks for one and evicts to make room — the cap
+  /// never refuses anybody, it only decides how long a player survives. So
+  /// a pool below the working set holds exactly as many decoders at once
+  /// and additionally throws one away on every swipe, then rebuilds it
+  /// seconds later when the screen asks again. The device run showed it:
+  /// 40 player opens and 37 retirements for 14 distinct videos, reclaims
+  /// undiminished, and multi-second black frames while an evicted
+  /// neighbour re-initialised.
+  ///
+  /// Fewer live decoders has to come from asking for fewer players, not
+  /// from a cap underneath the demand.
   ///
   /// iOS has no equivalent reclaim path, but AVPlayer has its own limit on
   /// simultaneous render pipelines and the gesture argument holds there
   /// too, so the cap is not platform-conditional.
-  static const int maxConcurrentDecoders = 3;
+  static const int maxConcurrentDecoders = onScreenWorkingSet;
 
   /// Pick a config that matches the device's physical RAM, then clamp it
   /// to what the device's DECODER can actually run concurrently.
@@ -632,6 +660,21 @@ class VideoPlayerService {
   ///
   /// The outgoing track was ACTIVE when focus moved — that overlap is the
   /// audible chop on every swipe. Awaiting the pauses closes it.
+  ///
+  /// The wait is bounded, and that bound is the whole safety of this
+  /// method. A pause is a round trip to a native player, and a native
+  /// player whose decoder the resource manager already took, or whose
+  /// playback thread is gone, never answers:
+  ///
+  ///     E/MediaCodec: Released by resource manager
+  ///     java.lang.IllegalStateException: ... a Handler on a dead thread
+  ///
+  /// Its future then stays pending forever rather than failing, which
+  /// `catchError` below does nothing about. Unbounded, that turns one dead
+  /// outgoing player into a permanently frozen incoming reel, because the
+  /// caller's play() sits behind this await — a worse bug than the chop
+  /// the await was added to fix. After [pauseSettleTimeout] we start the
+  /// new reel regardless and accept the overlap.
   Future<void> pauseAllExcept(String activeUrl) async {
     // The authoritative "this reel is on screen" signal. Eviction reads
     // it to keep the watched player alive, and [_volumeFor] reads it so a
@@ -655,9 +698,21 @@ class VideoPlayerService {
     // A controller disposed mid-sweep completes with an error rather than
     // a value. That is not a reason to leave the incoming reel unstarted,
     // so failures are absorbed — the point of the await is only that the
-    // outgoing decoders have had their chance to stop.
-    await Future.wait(stopping).catchError((_) => const <void>[]);
+    // outgoing decoders have had their chance to stop. Neither is a player
+    // that never answers at all: see [pauseSettleTimeout].
+    await Future.wait(stopping)
+        .catchError((_) => const <void>[])
+        .timeout(pauseSettleTimeout, onTimeout: () => const <void>[]);
   }
+
+  /// How long [pauseAllExcept] will wait for the outgoing players.
+  ///
+  /// Long enough that a healthy pause — a method-channel hop and an
+  /// ExoPlayer state change, single-digit milliseconds on device — always
+  /// lands inside it, so the ordering this buys is the normal case. Short
+  /// enough that a player which will never answer costs the user a
+  /// just-noticeable delay rather than a dead reel.
+  static const Duration pauseSettleTimeout = Duration(milliseconds: 300);
 
   /// Pause all controllers (e.g., when app goes to background).
   void pauseAll() {

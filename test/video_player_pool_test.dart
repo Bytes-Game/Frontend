@@ -93,8 +93,20 @@ class _FakeVideoPlatform extends VideoPlayerPlatform {
   @override
   Future<void> setVolume(int playerId, double v) async => volume[playerId] = v;
 
+  /// Player ids whose `pause` never completes — no value, no error, just a
+  /// future that stays pending. Stands in for a native player whose
+  /// decoder the resource manager took, or whose playback thread has died:
+  /// the method-channel reply never arrives, so the Dart side waits
+  /// forever. A test cannot reproduce that with a throw, because a throw
+  /// is the case the pool already handles.
+  final Set<int> hangingPause = {};
+
   @override
-  Future<void> pause(int playerId) async => paused.add(playerId);
+  Future<void> pause(int playerId) {
+    if (hangingPause.contains(playerId)) return Completer<void>().future;
+    paused.add(playerId);
+    return Future<void>.value();
+  }
 
   @override
   Future<void> play(int playerId) async => paused.remove(playerId);
@@ -685,6 +697,30 @@ void main() {
       }
     });
 
+    test('never sits below what the screen has on it at once', () async {
+      // The cap spent one release at 3, under the working set, on the
+      // theory that a smaller pool means fewer live decoders. It does not:
+      // getController builds a player for any tile that asks and evicts to
+      // make room, so a cap under the demand holds the same number of
+      // decoders and additionally throws one away per swipe. The device
+      // run showed 40 opens and 37 retirements for 14 videos.
+      expect(
+        VideoPoolConfig.maxConcurrentDecoders,
+        greaterThanOrEqualTo(VideoPoolConfig.onScreenWorkingSet),
+        reason: 'a pool below the working set does not save decoders, it '
+            'only evicts players the screen still needs',
+      );
+    });
+
+    test('the top tier holds the whole working set', () async {
+      // Anything from mid-tier up should be able to keep the reel on
+      // screen, both swipe neighbours and a battle opponent alive at once.
+      expect(
+        VideoPoolConfig.forRam(8).maxPoolSize,
+        VideoPoolConfig.onScreenWorkingSet,
+      );
+    });
+
     test('the startup default is inside the budget too', () async {
       // This is the config in force while DeviceCapabilities.probe is
       // still running — i.e. during app start, when the first reel is
@@ -693,6 +729,67 @@ void main() {
         VideoPoolConfig.fallback.maxPoolSize,
         lessThanOrEqualTo(VideoPoolConfig.maxConcurrentDecoders),
       );
+    });
+  });
+
+  group('handing over to the next reel', () {
+    test('a player that never stops cannot hold the next reel back',
+        () async {
+      // The feed awaits pauseAllExcept before calling play(), so whatever
+      // this future waits on is directly in front of the user's next
+      // video. An outgoing player whose pause never returns — reclaimed
+      // decoder, dead playback thread — used to leave that await pending
+      // for the rest of the session: a reel frozen on its first frame,
+      // with no error anywhere to say why.
+      await watch(url(0));
+      await open(url(1));
+      platform.hangingPause.add(platform.idFor(url(0)));
+
+      await service
+          .pauseAllExcept(url(1))
+          .timeout(
+            const Duration(seconds: 5),
+            onTimeout: () => fail(
+              'pauseAllExcept never returned, so the incoming reel never '
+              'gets to play() — the freeze this bound exists to prevent',
+            ),
+          );
+    });
+
+    test('still waits for players that do stop', () async {
+      // The bound is a backstop, not the normal path: when the outgoing
+      // players answer, the sweep must actually have stopped them by the
+      // time it returns. That ordering is what keeps AudioFocus from
+      // moving while the old decoder is still running.
+      await watch(url(0));
+      await open(url(1));
+
+      await service.pauseAllExcept(url(1));
+
+      expect(
+        platform.paused,
+        contains(platform.idFor(url(0))),
+        reason: 'the outgoing player must be stopped before the caller '
+            'starts the incoming one',
+      );
+    });
+
+    test('names the incoming reel even when the outgoing one hangs',
+        () async {
+      // Eviction and volume both read the active URL. If a hung pause
+      // could stop it being recorded, the reel on screen would be a legal
+      // eviction victim and could come up silent.
+      await watch(url(0));
+      await open(url(1));
+      platform.hangingPause.add(platform.idFor(url(0)));
+
+      await service.pauseAllExcept(url(1));
+      for (var i = 2; i < 8; i++) {
+        await open(url(i));
+      }
+      await presentFrame();
+
+      expect(service.debugPoolUrls, contains(url(1)));
     });
   });
 
