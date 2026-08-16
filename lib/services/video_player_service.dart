@@ -34,15 +34,64 @@ class VideoPoolConfig {
     required this.prefetchBack,
   });
 
-  /// Pick a config that matches the device's physical RAM.
+  /// The ceiling every tier is clamped to on Android, and the reason the
+  /// tiers below no longer reach the numbers they used to.
   ///
-  /// IMPORTANT: physical RAM is necessary but NOT sufficient. Android caps
-  /// each app's Java heap independently of physical RAM — 256 MB default,
-  /// ~512 MB with largeHeap=true. Each live ExoPlayer holds ~20-30 MB of
-  /// Java-heap MediaCodec + AudioTrack wrappers in addition to its native
-  /// decoder buffers. We size tiers for the HEAP budget, not the RAM
-  /// number, then floor to what RAM can support.
+  /// The tiers were sized for the Java heap: ~20-30 MB of MediaCodec and
+  /// AudioTrack wrappers per live ExoPlayer against a 256 MB (or ~512 MB
+  /// with largeHeap) budget, which makes five players look affordable on a
+  /// big phone. Memory turned out not to be what runs out. A profile run
+  /// on a Xiaomi 2412DPC0AI — 8 GB RAM, so the top tier, pool of 5 — spent
+  /// its session being overruled by the platform:
+  ///
+  ///     D/MediaCodec: MediaCodec::reclaim(0x...) c2.mtk.avc.decoder
+  ///     E/MediaCodec: Released by resource manager
+  ///
+  /// That is Android's resource manager taking decoders back because the
+  /// process was holding more concurrent 720p AVC instances than the
+  /// vendor Codec2 stack will run. RAM does not predict that number —
+  /// it is a property of the SoC's decoder, and on this MediaTek part the
+  /// practical limit sat below what the 8 GB tier was asking for. Three
+  /// live players (the reel on screen, the one a swipe ahead, the one a
+  /// swipe back) fits inside every mainstream device's budget and is
+  /// exactly what the feed's gestures can reach, so nothing above it was
+  /// buying reachable warmth — only reclaims, and the churn that follows
+  /// one: 50 player opens for 14 distinct videos in a 90-second run.
+  ///
+  /// iOS has no equivalent reclaim path, but AVPlayer has its own limit on
+  /// simultaneous render pipelines and the gesture argument holds there
+  /// too, so the cap is not platform-conditional.
+  static const int maxConcurrentDecoders = 3;
+
+  /// Pick a config that matches the device's physical RAM, then clamp it
+  /// to what the device's DECODER can actually run concurrently.
+  ///
+  /// RAM still sets the floor — a 2 GB phone should not hold three players
+  /// even though its decoder would allow it — but it no longer sets the
+  /// ceiling, because [maxConcurrentDecoders] is the constraint that
+  /// actually binds. See that constant for the device evidence.
   factory VideoPoolConfig.forRam(double ramGb) {
+    return _byRam(ramGb)._clampedToDecoderBudget();
+  }
+
+  /// Re-derive this config with [maxConcurrentDecoders] enforced.
+  ///
+  /// Prefetch counts come down with the pool: one slot is always reserved
+  /// for the reel on screen, so a burst window that names more spares than
+  /// the pool can hold just makes [_openSpare] decline them one at a time,
+  /// which costs a decision per swipe and buys nothing.
+  VideoPoolConfig _clampedToDecoderBudget() {
+    if (maxPoolSize <= maxConcurrentDecoders) return this;
+    final spares = maxConcurrentDecoders - 1;
+    return VideoPoolConfig(
+      maxPoolSize: maxConcurrentDecoders,
+      prefetchAhead: prefetchAhead.clamp(0, spares),
+      prefetchAheadBurst: prefetchAheadBurst.clamp(0, spares),
+      prefetchBack: prefetchBack.clamp(0, spares),
+    );
+  }
+
+  static VideoPoolConfig _byRam(double ramGb) {
     if (ramGb < 2.0) {
       // Sub-2GB devices (very old / very budget Android). 1 active + 1
       // ahead, no back. Anything more risks OOM on a constrained heap.
@@ -91,13 +140,18 @@ class VideoPoolConfig {
     );
   }
 
-  /// Conservative default used until [DeviceCapabilities.probe]
-  /// finishes. Matches the old static behaviour so app startup
-  /// behaves identically to before the runtime-config rewrite.
+  /// Conservative default used until [DeviceCapabilities.probe] finishes.
+  ///
+  /// This used to be the 4/2/4/1 shape the top tiers had, on the theory
+  /// that startup should behave identically to the pre-config code. That
+  /// made the default the most aggressive thing in the file for the window
+  /// before the probe lands — which is app start, when the first reel is
+  /// opening and the decoder is least likely to have room. It now sits at
+  /// the decoder budget like everything else.
   static const VideoPoolConfig fallback = VideoPoolConfig(
-    maxPoolSize: 4,
-    prefetchAhead: 2,
-    prefetchAheadBurst: 4,
+    maxPoolSize: maxConcurrentDecoders,
+    prefetchAhead: 1,
+    prefetchAheadBurst: 2,
     prefetchBack: 1,
   );
 }
@@ -354,6 +408,44 @@ class VideoPlayerService {
     if (_prefetchedUrls.contains(url)) return;
     if (_pool.any((e) => e.url == url)) return;
 
+    // One spare at a time.
+    //
+    // A window naming two spares used to build both in the same turn,
+    // because this method is synchronous on the warm path and `prefetch`
+    // calls it once per wanted url. On device that put three players into
+    // MediaCodec's INITIALIZING state at the same moment — the reel on
+    // screen plus both spares:
+    //
+    //     I/MediaCodec: [mId: 54] [video-debug-dec] setState: INITIALIZING
+    //     I/MediaCodec: [mId: 55] [video-debug-dec] setState: INITIALIZING
+    //     I/MediaCodec: [mId: 56] [video-debug-dec] setState: INITIALIZING
+    //
+    // Three concurrent codec allocations is where the vendor stack starts
+    // handing back reclaims, and a reclaimed decoder is worse than a late
+    // one: the player survives but its codec does not, so the spare the
+    // user swipes onto opens cold anyway AND the pool paid for it.
+    //
+    // Waiting for the previous spare to finish initialising costs the
+    // second spare a few hundred milliseconds it was not going to be
+    // needed in — the gesture that reaches it has not happened yet, or it
+    // would be the active reel by now — and keeps the peak at two.
+    final opening = _spareOpening;
+    if (opening != null) {
+      if (_pendingSpares.containsKey(url)) return;
+      _pendingSpares[url] = lane;
+      unawaited(
+        opening.then((_) {
+          // Same re-checks the grace path makes, for the same reason: the
+          // wait is long enough for the user to have moved on.
+          if (_pendingSpares.remove(url) == null) return;
+          if (_prefetchedUrls.contains(url)) return;
+          if (_pool.any((e) => e.url == url)) return;
+          _requestSpare(url, lane);
+        }),
+      );
+      return;
+    }
+
     // Already warm: open it now, against the proxy.
     if (VideoCacheService.instance.isReady(url)) {
       _pendingSpares.remove(url);
@@ -415,6 +507,29 @@ class VideoPlayerService {
   /// opening a player for a reel that has left the window.
   final Map<String, SpareLane> _pendingSpares = {};
 
+  /// The initialisation of the spare currently being built, or null when
+  /// none is in flight.
+  ///
+  /// Read by [_requestSpare] as the one-at-a-time gate — see the comment
+  /// there for why concurrent spare construction is what triggers decoder
+  /// reclaims. Cleared when the initialise settles, whether it succeeded
+  /// or threw, and bounded by [spareOpenTimeout] so a player that never
+  /// reports ready cannot wedge the gate shut for the session.
+  Future<void>? _spareOpening;
+
+  /// Identifies which spare owns [_spareOpening], so a settled gate only
+  /// clears itself and never a newer one.
+  Object? _spareOpenToken;
+
+  /// How long the one-at-a-time gate waits on a spare that is not
+  /// reporting ready before letting the next one through.
+  ///
+  /// Generous on purpose: this is a deadlock guard, not a latency budget.
+  /// A spare that takes longer than this has almost certainly failed in a
+  /// way `initialize()` will not surface, and the alternative to letting
+  /// the next one through is opening no further spares at all.
+  static const Duration spareOpenTimeout = Duration(seconds: 8);
+
   /// URLs the latest [prefetch] declared to be one gesture away.
   ///
   /// Read by [_openSpare] so that opening the second spare cannot pay for
@@ -462,8 +577,7 @@ class VideoPlayerService {
     }
 
     final controller = _controllerFor(next);
-    // ignore: discarded_futures
-    controller
+    final opening = controller
         .initialize()
         .then((_) {
           // The spare is silent. AudioFocus on Android is exclusive — an
@@ -476,6 +590,23 @@ class VideoPlayerService {
         .catchError((_) {
           // Surfaced when the caller actually tries to use this URL.
         });
+    // Hold the gate until this one is ready, so the next spare's codec
+    // allocation does not overlap this one's. Failures release the gate
+    // too — a spare that could not open is not holding a decoder.
+    //
+    // The token guards against a later spare having already claimed the
+    // gate by the time this one settles, which [debugOpenSpare] can do
+    // because it bypasses [_requestSpare] and therefore the gate itself.
+    final token = Object();
+    _spareOpenToken = token;
+    _spareOpening = opening
+        .timeout(spareOpenTimeout, onTimeout: () {})
+        .whenComplete(() {
+          if (identical(_spareOpenToken, token)) {
+            _spareOpenToken = null;
+            _spareOpening = null;
+          }
+        });
     _pool.add(_PoolEntry(controller: controller, url: next, isPrefetch: true));
     _prefetchedUrls.add(next);
   }
@@ -484,20 +615,48 @@ class VideoPlayerService {
   /// mutes the paused side as a belt-and-suspenders guard so a
   /// controller that somehow autoplays during init doesn't bleed audio
   /// onto the active reel.
-  void pauseAllExcept(String activeUrl) {
+  /// Returns once the outgoing players have actually stopped, so the
+  /// caller can start the incoming one without overlapping them.
+  ///
+  /// The pauses used to be fire-and-forget, which reads as harmless —
+  /// they are all headed for the same platform channel — but the reel
+  /// arriving calls play() in the same turn, and play() is what makes
+  /// ExoPlayer request AudioFocus. Focus is exclusive, so the request is
+  /// granted by taking focus off the outgoing player, which is still
+  /// decoding because its pause has not landed yet. Device logs show the
+  /// window plainly, in this order:
+  ///
+  ///     I/ExoPlayerImpl: Init 768c029
+  ///     D/AudioManager: dispatching onAudioFocusChange(-1) ...
+  ///     D/AudioTrack: pause(38264): prior state:STATE_ACTIVE
+  ///
+  /// The outgoing track was ACTIVE when focus moved — that overlap is the
+  /// audible chop on every swipe. Awaiting the pauses closes it.
+  Future<void> pauseAllExcept(String activeUrl) async {
     // The authoritative "this reel is on screen" signal. Eviction reads
     // it to keep the watched player alive, and [_volumeFor] reads it so a
     // controller that finishes initialising later comes up at the right
     // volume instead of racing this sweep.
     _activeUrl = activeUrl;
+    final stopping = <Future<void>>[];
     for (final entry in _pool) {
       if (entry.url != activeUrl) {
-        entry.controller.pause();
-        entry.controller.setVolume(0);
+        stopping.add(entry.controller.pause());
+        stopping.add(entry.controller.setVolume(0));
       } else {
+        // Not awaited: the incoming reel's volume is not what the caller
+        // is waiting on, and holding play() back for it would add a
+        // channel round-trip to every swipe.
+        // ignore: discarded_futures
         entry.controller.setVolume(activeVolume);
       }
     }
+    if (stopping.isEmpty) return;
+    // A controller disposed mid-sweep completes with an error rather than
+    // a value. That is not a reason to leave the incoming reel unstarted,
+    // so failures are absorbed — the point of the await is only that the
+    // outgoing decoders have had their chance to stop.
+    await Future.wait(stopping).catchError((_) => const <void>[]);
   }
 
   /// Pause all controllers (e.g., when app goes to background).
@@ -577,6 +736,11 @@ class VideoPlayerService {
     _activeUrl = null;
     _pendingSpares.clear();
     _wantedSpares = {};
+    // Release the one-at-a-time gate. A shutdown that left it held would
+    // make the first spare of the NEXT session wait out [spareOpenTimeout]
+    // behind a player that no longer exists.
+    _spareOpenToken = null;
+    _spareOpening = null;
   }
 
   /// Evict the least recently used controller that isn't the reel on
@@ -682,6 +846,16 @@ class VideoPlayerService {
     _wantedSpares = wanted ?? {url};
     _openSpare(url, warm: warm, lane: lane);
   }
+
+  /// Whether a spare is mid-construction, i.e. whether [_requestSpare]
+  /// would currently defer the next one.
+  ///
+  /// The gate's failure mode is silent and total — a gate that is never
+  /// released opens no further spares for the rest of the session, and
+  /// the spare counters would report that as a feed which simply stopped
+  /// wanting spares — so the release path is worth asserting on directly.
+  @visibleForTesting
+  bool get debugSpareGateHeld => _spareOpening != null;
 
   @visibleForTesting
   int get debugPoolSize => _pool.length;

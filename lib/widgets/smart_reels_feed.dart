@@ -668,8 +668,9 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     _currentItemStart = null;
   }
 
-  void _playCurrent() {
+  Future<void> _playCurrent() async {
     if (_currentIndex < 0 || _currentIndex >= _items.length) return;
+    final index = _currentIndex;
     final item = _items[_currentIndex];
     // Account-suggestion cards are non-video tiles — pause everything and
     // skip player allocation so we don't leak audio onto a static card.
@@ -685,7 +686,14 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     }
     final state = _getPlayerState(_currentIndex);
     if (state == null) return;
-    VideoPlayerService.instance.pauseAllExcept(url);
+    // Await the stop before the start: play() is what requests AudioFocus,
+    // and taking focus while the outgoing player is still decoding is the
+    // audible chop on every swipe. See [pauseAllExcept].
+    await VideoPlayerService.instance.pauseAllExcept(url);
+    // The user can swipe again inside that await. Whatever this method was
+    // called for is no longer on screen if they did, and starting it now
+    // would leave an off-screen reel playing over the new one.
+    if (!mounted || _currentIndex != index) return;
     // Belt-and-suspenders: pool-promoted controllers should already be
     // at volume 1.0 via getController(), but setting it right before
     // play guarantees audible output in case a prefetch entry was
