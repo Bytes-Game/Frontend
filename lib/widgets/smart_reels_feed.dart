@@ -331,7 +331,11 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     _loadingMore = true;
     final nextPage = _page + 1;
     final sessionId = _sessionId();
-    final data = await _fetchPage(nextPage, sessionId, refresh: refresh && nextPage == 1);
+    final data = await _fetchPage(
+      nextPage,
+      sessionId,
+      refresh: refresh && nextPage == 1,
+    );
     if (!mounted) {
       _loadingMore = false;
       return;
@@ -340,9 +344,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     final parsed = <_FeedEntry>[];
     // Dedup against already-loaded items by (type, id). Catches the case
     // where seedChallenge is also the first item the explore page returns.
-    final existingKeys = <String>{
-      for (final e in _items) '${e.type}:${e.id}',
-    };
+    final existingKeys = <String>{for (final e in _items) '${e.type}:${e.id}'};
     for (final x in raw) {
       final item = _FeedEntry.fromJson(x as Map<String, dynamic>);
       if (item == null) continue;
@@ -377,7 +379,9 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // Self-heal a failed first load: back off 4s/8s/16s and re-pull.
     // Combined with the 30s request timeout this spans the full cold-
     // start wake, so the feed appears on its own once the server is up.
-    if (_lastError != null && _items.isEmpty && _autoRetries < _maxAutoRetries) {
+    if (_lastError != null &&
+        _items.isEmpty &&
+        _autoRetries < _maxAutoRetries) {
       _autoRetries++;
       final delay = Duration(seconds: 4 * (1 << (_autoRetries - 1)));
       Future.delayed(delay, () {
@@ -415,8 +419,13 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   /// dedup, `said` is the server's own `hasMore` (`null` when it sent
   /// none), and `more` is what this widget concluded — see
   /// [_decideHasMore].
-  void _logPageComposition(int page, List<_FeedEntry> parsed, int rawCount,
-      Object? declaredHasMore, bool hasMore) {
+  void _logPageComposition(
+    int page,
+    List<_FeedEntry> parsed,
+    int rawCount,
+    Object? declaredHasMore,
+    bool hasMore,
+  ) {
     var battles = 0;
     var shorts = 0;
     var mine = 0;
@@ -443,8 +452,11 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
 
   /// Dispatches to the right backend endpoint based on widget.kind. Each
   /// endpoint runs a different ranking algorithm — see FeedKind doc.
-  Future<Map<String, dynamic>> _fetchPage(int page, String sessionId,
-      {bool refresh = false}) {
+  Future<Map<String, dynamic>> _fetchPage(
+    int page,
+    String sessionId, {
+    bool refresh = false,
+  }) {
     switch (widget.kind) {
       case FeedKind.forYou:
         return ApiService.getSmartFeed(
@@ -455,11 +467,17 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
           refresh: refresh,
         );
       case FeedKind.following:
-        return ApiService.getFollowingFeedV2(widget.userId,
-            page: page, limit: _pageLimit);
+        return ApiService.getFollowingFeedV2(
+          widget.userId,
+          page: page,
+          limit: _pageLimit,
+        );
       case FeedKind.explore:
-        return ApiService.getExploreFeed(widget.userId,
-            page: page, limit: _pageLimit);
+        return ApiService.getExploreFeed(
+          widget.userId,
+          page: page,
+          limit: _pageLimit,
+        );
     }
   }
 
@@ -564,7 +582,9 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     if (_currentIndex < 0 || _currentIndex >= _items.length) return;
     final item = _items[_currentIndex];
     final state = _playerStates[_currentIndex];
-    final watched = DateTime.now().difference(_currentItemStart!).inMilliseconds;
+    final watched = DateTime.now()
+        .difference(_currentItemStart!)
+        .inMilliseconds;
     final totalMs = state?.controller.value.duration.inMilliseconds ?? 0;
 
     // Impression with true dwell — one per reel exit, INCLUDING quick
@@ -616,8 +636,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       if (item is _ReelItem && item.type == 'challenge' && item.id.isNotEmpty) {
         final dp = _cachedDp;
         final userId = dp?.user?.id ?? '';
-        if (userId.isNotEmpty &&
-            _watchEventRecorded.add(item.id)) {
+        if (userId.isNotEmpty && _watchEventRecorded.add(item.id)) {
           // Set.add returns true only when the id is brand-new for
           // this session — that's our dedup gate against the 1.5s
           // safety-net timer in _scheduleInitialWatchEvent. Either
@@ -792,8 +811,10 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       // MP4-first had missed a path, when it had not. Derive the labels rather
       // than hardcode them so this cannot drift again.
       String kind(String u) => u.contains('.m3u8') ? 'HLS' : 'MP4';
-      debugPrint('reel ${item.id}: ${kind(item.videoUrl)} source failed, '
-          'falling back to ${kind(item.fallbackVideoUrl)}');
+      debugPrint(
+        'reel ${item.id}: ${kind(item.videoUrl)} source failed, '
+        'falling back to ${kind(item.fallbackVideoUrl)}',
+      );
       item.videoUrl = item.fallbackVideoUrl;
       // Drop every player state bound to the dead manifest — indices can
       // shift under trimming, so match by URL rather than position.
@@ -851,7 +872,8 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       // Completion: playhead reached 95%. Fires once per reel-view; a
       // wrap-detected loop below also implies completion, so mark there
       // too in case the position listener never samples the tail.
-      if (!_completeTracked && pos.inMilliseconds >= dur.inMilliseconds * 0.95) {
+      if (!_completeTracked &&
+          pos.inMilliseconds >= dur.inMilliseconds * 0.95) {
         _completeTracked = true;
         EventTracker.instance.trackComplete(
           contentId: item.id,
@@ -966,9 +988,11 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // else's opponent is warmed after every challenger in the window.
     final challengers = <String>[];
     final opponents = <String>[];
-    for (int i = _currentIndex + 1;
-        i < _items.length && i <= _currentIndex + aheadCount;
-        i++) {
+    for (
+      int i = _currentIndex + 1;
+      i < _items.length && i <= _currentIndex + aheadCount;
+      i++
+    ) {
       final entry = _items[i];
       if (entry is! _ReelItem) continue; // skip cards
       final u = entry.videoUrl;
@@ -994,9 +1018,11 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // both directions warmed, the back-swipe hits the in-pool
     // controller and starts in <30ms.
     final back = <String>[];
-    for (int i = _currentIndex - 1;
-        i >= 0 && i >= _currentIndex - backCount;
-        i--) {
+    for (
+      int i = _currentIndex - 1;
+      i >= 0 && i >= _currentIndex - backCount;
+      i--
+    ) {
       final entry = _items[i];
       if (entry is! _ReelItem) continue;
       final u = entry.videoUrl;
@@ -1016,10 +1042,10 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // cold spare until its opening bytes land, and by then a fast scroller
     // has moved on and the url is no longer claimed — so the battles in a
     // fling open no players at all.
-    final live = <String>[
-      if (challengers.isNotEmpty) challengers.first,
+    final live = <(SpareLane, String)>[
+      if (challengers.isNotEmpty) (SpareLane.nextReel, challengers.first),
       if (current is _ReelItem && current.opponentVideoUrl.isNotEmpty)
-        current.opponentVideoUrl,
+        (SpareLane.opponent, current.opponentVideoUrl),
     ];
     VideoPlayerService.instance.prefetch([...upcoming, ...back], live: live);
   }
@@ -1052,10 +1078,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       _toast('Sign in to like');
       return;
     }
-    EventTracker.instance.trackLike(
-      contentId: item.id,
-      contentType: item.type,
-    );
+    EventTracker.instance.trackLike(contentId: item.id, contentType: item.type);
     // Optimistic — flip the icon and bump the count immediately so the
     // tap feels instant on slow networks.
     final wasLiked = item.isLiked;
@@ -1192,10 +1215,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       _toast('Sign in to save');
       return;
     }
-    EventTracker.instance.trackSave(
-      contentId: item.id,
-      contentType: item.type,
-    );
+    EventTracker.instance.trackSave(contentId: item.id, contentType: item.type);
     setState(() => item.isSaved = !item.isSaved);
     final result = await ApiService.toggleSaveChallenge(
       userId: userId,
@@ -1228,7 +1248,9 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     final item = _items[index];
     if (item is! _ReelItem) return; // cards have their own per-row taps
     EventTracker.instance.trackTap(
-      target: item.type == 'challenge' ? 'home_open_challenge' : 'home_open_post',
+      target: item.type == 'challenge'
+          ? 'home_open_challenge'
+          : 'home_open_post',
       pageName: 'home_page',
       params: {'contentId': item.id, 'contentType': item.type},
     );
@@ -1409,7 +1431,9 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     }
     // Light damping past the trigger so the badge doesn't hyperextend on
     // an over-enthusiastic flick.
-    final damped = dy <= _refreshTriggerPx ? dy : _refreshTriggerPx + (dy - _refreshTriggerPx) * 0.4;
+    final damped = dy <= _refreshTriggerPx
+        ? dy
+        : _refreshTriggerPx + (dy - _refreshTriggerPx) * 0.4;
     setState(() => _pullDistance = damped);
   }
 
@@ -1536,7 +1560,8 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                 }
                 final currentUserId =
                     context.read<DataProvider>().user?.id ?? '';
-                final isOwner = reel.type == 'challenge' &&
+                final isOwner =
+                    reel.type == 'challenge' &&
                     reel.creatorId.isNotEmpty &&
                     currentUserId.isNotEmpty &&
                     reel.creatorId == currentUserId;
@@ -1616,12 +1641,14 @@ class _ReelItem implements _FeedEntry {
   /// consumer — player, prefetch, prewarm — reads this field, so one
   /// swap heals them all.
   String videoUrl;
+
   /// The non-HLS (direct MP4) URL to retry with when [videoUrl] is an
   /// HLS manifest that fails to load. Empty when videoUrl is already
   /// the MP4 (no second fallback — the tile's error UI takes over).
   final String fallbackVideoUrl;
   final String thumbnailUrl;
   final String caption;
+
   /// Stable creator user id. Required to check ownership for the
   /// owner-only delete affordance on the reel — comparing usernames
   /// is unsafe because they can collide / change. Empty for legacy
@@ -1646,6 +1673,7 @@ class _ReelItem implements _FeedEntry {
   int views;
   int comments;
   bool isLiked;
+
   /// Local optimistic save state. Backend-truth is the response of
   /// ApiService.toggleSaveChallenge; we surface this immediately so the
   /// bookmark icon flips on tap without waiting for the round trip.
@@ -1654,6 +1682,7 @@ class _ReelItem implements _FeedEntry {
   /// round trip per scroll. Live correctness can land later via a
   /// `savedIds` set on the feed handler.
   bool isSaved = false;
+
   /// Locally tracked "the user has voted on this battle" pair. Used to
   /// switch the trophy icon to "voted (green)" and tag the post-vote
   /// toast with the right username. Same per-session-only caveat as
@@ -1709,8 +1738,7 @@ class _ReelItem implements _FeedEntry {
     if (type == 'challenge') {
       final c = entry['challenge'] as Map<String, dynamic>?;
       if (c == null) return null;
-      final title =
-          '${c['prefix'] ?? ''} ${c['subject'] ?? ''}'.trim();
+      final title = '${c['prefix'] ?? ''} ${c['subject'] ?? ''}'.trim();
       final fallbackUrl = (c['videoUrl'] as String?) ?? '';
       // Prefer HLS when the server-side transcode worker has produced
       // the segmented manifest for this challenge — drops first-frame
@@ -1731,8 +1759,9 @@ class _ReelItem implements _FeedEntry {
       final variantPick = NetworkQualityService.instance.pickVariantUrl(
         _coerceVariantsMap(c['videoVariants']),
       );
-      final mp4Url =
-          variantPick?.isNotEmpty == true ? variantPick! : fallbackUrl;
+      final mp4Url = variantPick?.isNotEmpty == true
+          ? variantPick!
+          : fallbackUrl;
       // MP4 first, HLS only as a fallback — the reverse of what this
       // used to do.
       //
@@ -1809,14 +1838,14 @@ class _ReelItem implements _FeedEntry {
     // Same HLS preference as fromFeedEntry above — when the worker has
     // produced the segmented manifest, use it; else fall back to the
     // per-bitrate MP4 selection.
-    final variantPick =
-        NetworkQualityService.instance.pickVariantUrl(c.videoVariants);
-    final opponentVariantPick = NetworkQualityService.instance
-        .pickVariantUrl(c.topResponseVideoVariants);
-    final mp4Url =
-        variantPick?.isNotEmpty == true ? variantPick! : c.videoUrl;
-    final chosenVideoUrl =
-        mp4Url.isNotEmpty ? mp4Url : c.hlsManifestUrl;
+    final variantPick = NetworkQualityService.instance.pickVariantUrl(
+      c.videoVariants,
+    );
+    final opponentVariantPick = NetworkQualityService.instance.pickVariantUrl(
+      c.topResponseVideoVariants,
+    );
+    final mp4Url = variantPick?.isNotEmpty == true ? variantPick! : c.videoUrl;
+    final chosenVideoUrl = mp4Url.isNotEmpty ? mp4Url : c.hlsManifestUrl;
     return _ReelItem(
       id: c.id,
       type: 'challenge',
@@ -1831,8 +1860,8 @@ class _ReelItem implements _FeedEntry {
       opponentVideoUrl: opponentVariantPick?.isNotEmpty == true
           ? opponentVariantPick!
           : (c.topResponseHlsManifestUrl.isNotEmpty
-              ? c.topResponseHlsManifestUrl
-              : c.topResponseVideoUrl),
+                ? c.topResponseHlsManifestUrl
+                : c.topResponseVideoUrl),
       opponentThumbnailUrl: c.topResponseThumbnailUrl,
       opponentUsername: c.topResponseUsername,
       opponentLeague: c.topResponseLeague,
@@ -1942,15 +1971,15 @@ class _AccountSuggestion {
   /// that follow/unfollow + profile-navigation actually consume; the rest
   /// stay at sensible defaults.
   UserModel toUserModel() => UserModel(
-        id: userId,
-        username: username,
-        fullName: fullName,
-        league: league.isEmpty ? 'Unranked' : league,
-        wins: wins,
-        losses: losses,
-        followersCount: followers,
-        followingCount: 0,
-      );
+    id: userId,
+    username: username,
+    fullName: fullName,
+    league: league.isEmpty ? 'Unranked' : league,
+    wins: wins,
+    losses: losses,
+    followersCount: followers,
+    followingCount: 0,
+  );
 }
 
 class _ReelPlayerState {
@@ -1959,10 +1988,7 @@ class _ReelPlayerState {
   final VideoPlayerController controller;
   final String url;
 
-  _ReelPlayerState({
-    required this.controller,
-    required this.url,
-  });
+  _ReelPlayerState({required this.controller, required this.url});
 
   void dispose() {
     // We don't own the controller — VideoPlayerService does. release()
@@ -1977,6 +2003,7 @@ class _ReelTile extends StatefulWidget {
   final _ReelItem item;
   final _ReelPlayerState state;
   final bool isActive;
+
   /// True when the currently signed-in user is the creator of this
   /// challenge. Drives the owner-only delete affordance — the 3-dot
   /// menu is only painted when this is true so non-owners never see a
@@ -1984,16 +2011,20 @@ class _ReelTile extends StatefulWidget {
   final bool isOwner;
   final VoidCallback onLike;
   final VoidCallback onComment;
+
   /// Open the share sheet (same UI used by FeedActionBar). Wired up
   /// once the right-rail share button became a first-class action.
   final VoidCallback onShare;
+
   /// Toggle the bookmark/save state.
   final VoidCallback onSave;
+
   /// Open the vote dialog. Only shown on battles — for plain shorts
   /// the trophy slot in the rail is hidden so the callback is unused
   /// in that case.
   final VoidCallback onVote;
   final VoidCallback onOpenDetail;
+
   /// Owner-only delete. Confirms via dialog inside the parent state,
   /// then removes the reel in-place. Only invoked when [isOwner] is
   /// true.
@@ -2017,8 +2048,7 @@ class _ReelTile extends StatefulWidget {
   State<_ReelTile> createState() => _ReelTileState();
 }
 
-class _ReelTileState extends State<_ReelTile>
-    with TickerProviderStateMixin {
+class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   bool _showHeart = false;
   bool _isPaused = false;
   late final AnimationController _heartCtl;
@@ -2236,7 +2266,9 @@ class _ReelTileState extends State<_ReelTile>
   /// The player state currently driving the visible video — primary by
   /// default, opponent when the user has swiped left on a battle.
   _ReelPlayerState get _activeState =>
-      _showingOpponent && _opponentState != null ? _opponentState! : widget.state;
+      _showingOpponent && _opponentState != null
+      ? _opponentState!
+      : widget.state;
 
   /// Build the opponent's controller. Mirrors the parent's
   /// _getPlayerState so the same VideoPlayerService cache is shared.
@@ -2318,7 +2350,9 @@ class _ReelTileState extends State<_ReelTile>
       // ignore: discarded_futures
       _opponentState?.controller.pause();
       // ignore: discarded_futures
-      widget.state.controller.setVolume(VideoPlayerService.instance.activeVolume);
+      widget.state.controller.setVolume(
+        VideoPlayerService.instance.activeVolume,
+      );
       // ignore: discarded_futures
       widget.state.controller.play();
     }
@@ -2328,10 +2362,7 @@ class _ReelTileState extends State<_ReelTile>
         target: show ? 'reel_swipe_to_opponent' : 'reel_swipe_to_challenger',
         direction: show ? 'left' : 'right',
         pageName: 'home_page',
-        params: {
-          'contentId': widget.item.id,
-          'contentType': widget.item.type,
-        },
+        params: {'contentId': widget.item.id, 'contentType': widget.item.type},
       );
       // Dedicated battle_switch event alongside the generic swipe —
       // the backend's content-event taxonomy scores it as active
@@ -2477,7 +2508,8 @@ class _ReelTileState extends State<_ReelTile>
               return SizedBox.expand(
                 child: FittedBox(
                   key: ValueKey(
-                      'reel-video-${item.id}-${opponent ? 'opp' : 'pri'}'),
+                    'reel-video-${item.id}-${opponent ? 'opp' : 'pri'}',
+                  ),
                   fit: BoxFit.cover,
                   child: SizedBox(
                     width: value.size.width,
@@ -2646,12 +2678,7 @@ class _ReelTileState extends State<_ReelTile>
           ),
 
         // Pause indicator.
-        if (_isPaused)
-          const Center(
-            child: IgnorePointer(
-              child: _PauseBadge(),
-            ),
-          ),
+        if (_isPaused) const Center(child: IgnorePointer(child: _PauseBadge())),
 
         // Double-tap heart.
         if (_showHeart)
@@ -2964,10 +2991,7 @@ class _OwnerMenuButton extends StatelessWidget {
             children: [
               Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
               SizedBox(width: 10),
-              Text(
-                'Delete',
-                style: TextStyle(color: Colors.redAccent),
-              ),
+              Text('Delete', style: TextStyle(color: Colors.redAccent)),
             ],
           ),
         ),
@@ -3023,7 +3047,9 @@ class _VoteAction extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: hasVoted ? Colors.green.shade300 : Colors.orange.shade300,
+                color: hasVoted
+                    ? Colors.green.shade300
+                    : Colors.orange.shade300,
                 fontSize: 11,
                 fontWeight: FontWeight.w600,
               ),
@@ -3137,7 +3163,9 @@ class _BattleIndicatorState extends State<_BattleIndicator>
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 6, vertical: 3),
+                    horizontal: 6,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     color: cs.primary.withValues(alpha: 0.85),
                     borderRadius: BorderRadius.circular(8),
@@ -3172,8 +3200,11 @@ class _BattleIndicatorState extends State<_BattleIndicator>
             mainAxisSize: MainAxisSize.min,
             children: [
               if (widget.showingOpponent)
-                const Icon(Icons.arrow_back_ios_new,
-                    color: Colors.white70, size: 12),
+                const Icon(
+                  Icons.arrow_back_ios_new,
+                  color: Colors.white70,
+                  size: 12,
+                ),
               if (widget.showingOpponent) const SizedBox(width: 4),
               Text(
                 widget.showingOpponent
@@ -3188,8 +3219,11 @@ class _BattleIndicatorState extends State<_BattleIndicator>
               ),
               if (!widget.showingOpponent) const SizedBox(width: 4),
               if (!widget.showingOpponent)
-                const Icon(Icons.arrow_forward_ios,
-                    color: Colors.white70, size: 12),
+                const Icon(
+                  Icons.arrow_forward_ios,
+                  color: Colors.white70,
+                  size: 12,
+                ),
             ],
           ),
         ),
@@ -3338,20 +3372,21 @@ class _FullScreenLoaderState extends State<_FullScreenLoader>
             right: 12,
             bottom: 100,
             child: Column(
-              children: List.generate(5, (i) => Padding(
-                padding: const EdgeInsets.only(bottom: 18),
-                child: Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.08),
-                    shape: i == 0 ? BoxShape.circle : BoxShape.rectangle,
-                    borderRadius: i == 0
-                        ? null
-                        : BorderRadius.circular(8),
+              children: List.generate(
+                5,
+                (i) => Padding(
+                  padding: const EdgeInsets.only(bottom: 18),
+                  child: Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.08),
+                      shape: i == 0 ? BoxShape.circle : BoxShape.rectangle,
+                      borderRadius: i == 0 ? null : BorderRadius.circular(8),
+                    ),
                   ),
                 ),
-              )),
+              ),
             ),
           ),
           // Caption / username skeleton blocks bottom-left.
@@ -3598,8 +3633,11 @@ class _AccountsCardTileState extends State<_AccountsCardTile> {
                   color: cs.primary.withValues(alpha: 0.18),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(Icons.group_add_rounded,
-                    color: cs.primary, size: 24),
+                child: Icon(
+                  Icons.group_add_rounded,
+                  color: cs.primary,
+                  size: 24,
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -3620,9 +3658,10 @@ class _AccountsCardTileState extends State<_AccountsCardTile> {
                         child: Text(
                           widget.card.reason,
                           style: const TextStyle(
-                              color: Colors.white60,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500),
+                            color: Colors.white60,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
                       ),
                   ],
@@ -3636,10 +3675,8 @@ class _AccountsCardTileState extends State<_AccountsCardTile> {
               padding: EdgeInsets.zero,
               physics: const NeverScrollableScrollPhysics(),
               itemCount: widget.card.users.length,
-              separatorBuilder: (_, _) => const Divider(
-                color: Colors.white12,
-                height: 16,
-              ),
+              separatorBuilder: (_, _) =>
+                  const Divider(color: Colors.white12, height: 16),
               itemBuilder: (_, i) => _AccountSuggestionRow(
                 user: widget.card.users[i],
                 cardId: widget.card.id,
@@ -3651,8 +3688,11 @@ class _AccountsCardTileState extends State<_AccountsCardTile> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: const [
-                Icon(Icons.keyboard_arrow_up_rounded,
-                    color: Colors.white38, size: 18),
+                Icon(
+                  Icons.keyboard_arrow_up_rounded,
+                  color: Colors.white38,
+                  size: 18,
+                ),
                 SizedBox(width: 4),
                 Text(
                   'Swipe up to keep watching',
@@ -3670,10 +3710,7 @@ class _AccountsCardTileState extends State<_AccountsCardTile> {
 class _AccountSuggestionRow extends StatelessWidget {
   final _AccountSuggestion user;
   final String cardId;
-  const _AccountSuggestionRow({
-    required this.user,
-    required this.cardId,
-  });
+  const _AccountSuggestionRow({required this.user, required this.cardId});
 
   String get _reasonChipLabel {
     if (user.followedByFriends > 0) {
@@ -3712,10 +3749,8 @@ class _AccountSuggestionRow extends StatelessWidget {
         );
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (_) => ProfilePage(
-              user: user.toUserModel(),
-              isEmbedded: false,
-            ),
+            builder: (_) =>
+                ProfilePage(user: user.toUserModel(), isEmbedded: false),
           ),
         );
       },
@@ -3761,7 +3796,9 @@ class _AccountSuggestionRow extends StatelessWidget {
                         const SizedBox(width: 6),
                         Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 5, vertical: 1),
+                            horizontal: 5,
+                            vertical: 1,
+                          ),
                           decoration: BoxDecoration(
                             border: Border.all(color: Colors.white38),
                             borderRadius: BorderRadius.circular(3),
@@ -3781,10 +3818,7 @@ class _AccountSuggestionRow extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     '${_compactInt(user.followers)} followers',
-                    style: const TextStyle(
-                      color: Colors.white60,
-                      fontSize: 12,
-                    ),
+                    style: const TextStyle(color: Colors.white60, fontSize: 12),
                   ),
                   if (chip.isNotEmpty)
                     Padding(
@@ -3881,9 +3915,7 @@ class _FollowButton extends StatelessWidget {
         foregroundColor: cs.onPrimary,
         minimumSize: const Size(96, 36),
         padding: const EdgeInsets.symmetric(horizontal: 14),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
       child: const Text(
         'Follow',
@@ -3917,10 +3949,7 @@ class _Placeholder extends StatelessWidget {
       children: [
         Icon(Icons.videocam_off, color: Colors.white38, size: 48),
         SizedBox(height: 6),
-        Text(
-          'No video available',
-          style: TextStyle(color: Colors.white54),
-        ),
+        Text('No video available', style: TextStyle(color: Colors.white54)),
       ],
     );
   }

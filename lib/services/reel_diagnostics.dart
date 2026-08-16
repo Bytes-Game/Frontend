@@ -1,5 +1,28 @@
 import 'package:flutter/foundation.dart';
 
+/// Which gesture a read-ahead spare was opened for.
+///
+/// The pool keeps a live player for every reel a single gesture can
+/// reach. There are two such reels, and they are reached differently:
+/// the next reel by a vertical swipe, a battle's opponent by a
+/// horizontal flip. Both used to be tallied together, which made the
+/// summary unable to answer the question the second one was added to
+/// settle — is a flip landing on a ready player, or paying a cold open?
+/// One number for both cannot say, because swipes vastly outnumber flips
+/// and drown the flip's contribution in the total.
+enum SpareLane {
+  /// The reel one vertical swipe away.
+  nextReel('swipe'),
+
+  /// The active battle's opponent, one horizontal flip away.
+  opponent('flip');
+
+  const SpareLane(this.label);
+
+  /// Short tag used in the summary line.
+  final String label;
+}
+
 /// Playback diagnostics that survive a profile build.
 ///
 /// Why this exists
@@ -41,8 +64,8 @@ class ReelDiagnostics {
   int _prefixWarmed = 0;
   int _prefixFailed = 0;
   final Map<String, int> _prefixBailed = <String, int>{};
-  int _spareWarm = 0;
-  int _spareCold = 0;
+  final Map<SpareLane, int> _spareWarm = <SpareLane, int>{};
+  final Map<SpareLane, int> _spareCold = <SpareLane, int>{};
   int _retired = 0;
   int _sinceSummary = 0;
 
@@ -113,18 +136,20 @@ class ReelDiagnostics {
 
   /// The read-ahead spare controller was opened with its opening slice
   /// already cached, so it starts against the proxy.
-  void recordSpareWarm() {
+  ///
+  /// [lane] says which gesture the spare was opened for — see [SpareLane].
+  void recordSpareWarm(SpareLane lane) {
     if (!_visible) return;
-    _spareWarm++;
+    _spareWarm[lane] = (_spareWarm[lane] ?? 0) + 1;
   }
 
   /// The spare was opened before its slice arrived and went to the
   /// network. Some of these are unavoidable (first reel of a session, a
   /// genuinely slow connection); a high ratio means
   /// [VideoPlayerService.spareWarmGrace] is too short for real devices.
-  void recordSpareCold() {
+  void recordSpareCold(SpareLane lane) {
     if (!_visible) return;
-    _spareCold++;
+    _spareCold[lane] = (_spareCold[lane] ?? 0) + 1;
   }
 
   /// A pooled player was shut down and released.
@@ -163,9 +188,23 @@ class ReelDiagnostics {
         'file=$_wholeFile (${pct(_wholeFile)})  network=$_origin (${pct(_origin)})  '
         '| downloads=$_downloads prefixes warmed=$_prefixWarmed '
         'failed=$_prefixFailed$bailed  '
-        '| spare warm=$_spareWarm cold=$_spareCold '
+        '| ${_spares()}  '
         '| players retired=$_retired${_pipeline()}';
   }
+
+  /// Spare tallies, one group per gesture, warm before cold.
+  ///
+  /// A lane with nothing in it is printed as `0/0` rather than left out.
+  /// Absence is the answer worth seeing: `flip 0/0` on a battle-heavy
+  /// session means no opponent was ever read ahead for, which is a
+  /// different fault from opponents being read ahead for and arriving
+  /// cold — and a missing line looks like neither.
+  String _spares() => SpareLane.values
+      .map(
+        (l) =>
+            '${l.label} ${_spareWarm[l] ?? 0}/${_spareCold[l] ?? 0} warm/cold',
+      )
+      .join('  ');
 
   /// The pipeline snapshot, or nothing if no probe is installed.
   ///
@@ -189,7 +228,8 @@ class ReelDiagnostics {
     _downloads = 0;
     _prefixWarmed = _prefixFailed = 0;
     _prefixBailed.clear();
-    _spareWarm = _spareCold = 0;
+    _spareWarm.clear();
+    _spareCold.clear();
     _retired = 0;
     _sinceSummary = 0;
     _pipelineProbe = null;
@@ -199,10 +239,10 @@ class ReelDiagnostics {
   int get debugRetired => _retired;
 
   @visibleForTesting
-  int get debugSpareWarm => _spareWarm;
+  int debugSpareWarm(SpareLane lane) => _spareWarm[lane] ?? 0;
 
   @visibleForTesting
-  int get debugSpareCold => _spareCold;
+  int debugSpareCold(SpareLane lane) => _spareCold[lane] ?? 0;
 
   @visibleForTesting
   int get debugProxied => _proxied;
