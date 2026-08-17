@@ -63,6 +63,7 @@ class ReelDiagnostics {
   int _downloads = 0;
   int _prefixWarmed = 0;
   int _prefixFailed = 0;
+  int _tailWarmed = 0;
   final Map<String, int> _prefixBailed = <String, int>{};
   final Map<SpareLane, int> _spareWarm = <SpareLane, int>{};
   final Map<SpareLane, int> _spareCold = <SpareLane, int>{};
@@ -120,6 +121,20 @@ class ReelDiagnostics {
   void recordPrefixFailed() {
     if (!_visible) return;
     _prefixFailed++;
+  }
+
+  /// A warmed reel also got the END of its file cached, because its index
+  /// lives there rather than at the front.
+  ///
+  /// Counted separately from [recordPrefixWarmed] — which it always
+  /// accompanies — because it is the direct replacement for what used to
+  /// be `bailed{moovAtEnd:n}`, and the two want comparing across runs. A
+  /// session where that tag was large and this one is now similarly large
+  /// is the fix working; a session where both are small is a catalog that
+  /// never had the problem.
+  void recordTailWarmed() {
+    if (!_visible) return;
+    _tailWarmed++;
   }
 
   /// The prefix fetch gave up before registering with the proxy, without
@@ -187,7 +202,7 @@ class ReelDiagnostics {
     return 'starts=$starts  proxy=$_proxied (${pct(_proxied)})  '
         'file=$_wholeFile (${pct(_wholeFile)})  network=$_origin (${pct(_origin)})  '
         '| downloads=$_downloads prefixes warmed=$_prefixWarmed '
-        'failed=$_prefixFailed$bailed  '
+        '(+tail $_tailWarmed) failed=$_prefixFailed$bailed  '
         '| ${_spares()}  '
         '| players retired=$_retired${_pipeline()}';
   }
@@ -226,7 +241,7 @@ class ReelDiagnostics {
   void debugReset() {
     _proxied = _wholeFile = _origin = 0;
     _downloads = 0;
-    _prefixWarmed = _prefixFailed = 0;
+    _prefixWarmed = _prefixFailed = _tailWarmed = 0;
     _prefixBailed.clear();
     _spareWarm.clear();
     _spareCold.clear();

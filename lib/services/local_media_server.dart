@@ -121,11 +121,26 @@ class LocalMediaServer {
   /// [totalLength] is the full size the origin reported. A totalLength of
   /// 0 means the origin would not tell us, and we refuse to register —
   /// without it we cannot answer a range request honestly.
+  ///
+  /// [tailPath] is an optional cached slice of the END of the file, whose
+  /// last byte is the file's last byte. It exists for one shape of MP4:
+  /// the one that keeps its `moov` index after the media rather than
+  /// before it (see `mp4_layout.dart`). A player opening such a file reads the
+  /// header, finds no index, and seeks to the end for it — so with a head
+  /// alone the very first thing it does is a network round-trip, and the
+  /// warmed head buys nothing at all. Caching the tail as well means the
+  /// index is already here when it asks, which is what makes those files
+  /// start as fast as a faststart one.
+  ///
+  /// Its offset is derived from the file's own size at serve time rather
+  /// than recorded here, so a short read cannot make us promise bytes we
+  /// do not hold — see [_handle].
   void register({
     required String originUrl,
     required String prefixPath,
     required int prefixLength,
     required int totalLength,
+    String? tailPath,
   }) {
     if (!healthy) return;
     if (totalLength <= 0 || prefixLength <= 0) return;
@@ -136,6 +151,7 @@ class LocalMediaServer {
       prefixPath: prefixPath,
       prefixLength: prefixLength,
       totalLength: totalLength,
+      tailPath: tailPath,
     );
   }
 
@@ -232,7 +248,47 @@ class LocalMediaServer {
         // the entry and those 404, which breaks playback outright
         // instead of merely making it slower.
       }
-      final tailStart = prefixEnd < 0 ? start : prefixEnd + 1;
+      // First byte the cached head does not cover.
+      final afterPrefix = prefixEnd < 0 ? start : prefixEnd + 1;
+
+      // THE TAIL, where a moov-at-end file keeps its index.
+      //
+      // Same treatment as the head and for the same reason: bytes we
+      // already hold go out without touching the network. This is the
+      // half that makes warming those files worth anything — the player's
+      // FIRST read after the header is a seek to the end for the index,
+      // so a proxy that could only answer from the front sent it to
+      // origin before it could decode a single frame.
+      //
+      // The offset comes from the file's own length, not from a number
+      // recorded at registration: the slice ends at the last byte of the
+      // media, so whatever is on disk occupies the final `onDisk` bytes.
+      // A short read therefore narrows the window we claim instead of
+      // shifting it, and we can never promise a byte we do not have.
+      File? tailFile;
+      var tailBegin = -1; // first byte index served from the tail file
+      var tailFileOffset = 0; // absolute offset of the tail file's byte 0
+      final tailPath = entry.tailPath;
+      if (tailPath != null && afterPrefix <= end) {
+        final file = File(tailPath);
+        final onDisk = file.existsSync() ? file.lengthSync() : 0;
+        if (onDisk > 0 && onDisk <= total) {
+          final from = total - onDisk;
+          final begin = afterPrefix > from ? afterPrefix : from;
+          if (begin <= end) {
+            tailFile = file;
+            tailBegin = begin;
+            tailFileOffset = from;
+          }
+        }
+      }
+
+      // Whatever sits between the two cached ends. For the common reel
+      // this is the bulk of the media and streams from origin; for a
+      // range that lands wholly inside the head or wholly inside the
+      // tail it is empty and no network is touched at all.
+      final originStart = afterPrefix;
+      final originEnd = tailBegin < 0 ? end : tailBegin - 1;
 
       // THE OVERLAP.
       //
@@ -252,8 +308,8 @@ class LocalMediaServer {
       // Only when the range genuinely extends past the cached head: a
       // read that lands wholly inside the prefix must still cost no
       // network at all.
-      if (tailStart <= end) {
-        tail = _openOrigin(entry.originUrl, tailStart, end);
+      if (originStart <= originEnd) {
+        tail = _openOrigin(entry.originUrl, originStart, originEnd);
         // Park a listener on it immediately. If writing the prefix throws,
         // nothing below ever awaits this future, and an origin error with
         // no listener becomes an unhandled async error that takes down the
@@ -288,7 +344,7 @@ class LocalMediaServer {
         await res.addStream(prefixFile.openRead(start, prefixEnd + 1));
       }
 
-      // Remainder from origin, already in flight.
+      // Middle from origin, already in flight.
       if (tail != null) {
         final origin = await tail;
         if (origin.statusCode != HttpStatus.partialContent &&
@@ -303,6 +359,14 @@ class LocalMediaServer {
         } finally {
           _backfills--;
         }
+      }
+
+      // And the cached end of the file, if this range reaches it.
+      if (tailFile != null) {
+        await res.addStream(tailFile.openRead(
+          tailBegin - tailFileOffset,
+          end - tailFileOffset + 1,
+        ));
       }
 
       await res.close();
@@ -512,11 +576,17 @@ class _Entry {
     required this.prefixPath,
     required this.prefixLength,
     required this.totalLength,
+    this.tailPath,
   });
   final String originUrl;
   final String prefixPath;
   final int prefixLength;
   final int totalLength;
+
+  /// Cached slice of the end of the file, or null. Its last byte is the
+  /// file's last byte, so the absolute offset it starts at is
+  /// `totalLength - <its size on disk>`. See [LocalMediaServer.register].
+  final String? tailPath;
 }
 
 class _Range {

@@ -99,6 +99,24 @@ class VideoCacheService {
   /// back-fill from origin catches up.
   static const int prefixBytes = 768 * 1024;
 
+  /// How much of the END of a moov-at-end file to warm alongside its head.
+  ///
+  /// Those files keep their index (`moov`) after the media, so a player
+  /// opening one reads the header, finds no index, and immediately seeks
+  /// to the end for it. Warming only the head therefore bought nothing:
+  /// the first thing the player did was go to the network anyway. This
+  /// slice is what the seek lands in.
+  ///
+  /// Sized for the index of a short reel, which is dominated by the
+  /// per-sample tables — a few KB per second per track, so tens of KB for
+  /// a feed clip and comfortably inside this even for a long one. Being
+  /// short is not a failure: the player's read simply runs past what we
+  /// hold and the proxy serves the remainder from origin, which is the
+  /// behaviour it had before any of this. Being generous is not free
+  /// either — it is spent on every moov-at-end reel in the window,
+  /// warmed or not — so this stays a fraction of [prefixBytes].
+  static const int tailBytes = 256 * 1024;
+
   /// A prefix fetch this far along is finished instead of cancelled when
   /// its reel leaves the window.
   ///
@@ -181,14 +199,16 @@ class VideoCacheService {
       // mid-download) — not playable, and handing the player a truncated
       // MP4 is worse than a cache miss.
       //
-      // `.prefix` files are fragments that are only ever useful via an
-      // in-memory proxy registration, and that registration does not
-      // survive a restart. Since prefixes are exempt from LRU eviction,
-      // nothing else would ever reclaim them, so they would accumulate
-      // across every launch of the app.
+      // `.prefix` and `.tail` files are fragments that are only ever
+      // useful via an in-memory proxy registration, and that registration
+      // does not survive a restart. Since both are exempt from LRU
+      // eviction, nothing else would ever reclaim them, so they would
+      // accumulate across every launch of the app.
       for (final f in dir.listSync()) {
         if (f is File &&
-            (f.path.endsWith('.part') || f.path.endsWith('.prefix'))) {
+            (f.path.endsWith('.part') ||
+                f.path.endsWith('.prefix') ||
+                f.path.endsWith('.tail'))) {
           try {
             f.deleteSync();
           } catch (_) {}
@@ -467,28 +487,47 @@ class VideoCacheService {
         return false;
       }
 
-      // An index at the end of the file makes this whole path pointless.
-      // The player would read the warmed slice, find no moov in it, and
-      // range-request the tail over the network before it could show a
-      // single frame — and the reel would still have been counted as a
-      // proxy start, so the summary would report it among the fast ones.
+      // An index at the end of the file makes the head ALONE pointless.
+      // The player reads the warmed slice, finds no moov in it, and
+      // range-requests the tail over the network before it can show a
+      // single frame — and the reel is still counted as a proxy start, so
+      // the summary reports it among the fast ones.
       //
-      // Falling through to whole-file caching is the honest answer: it
-      // costs more bytes up front, but the player needs the tail either
-      // way, and after the first play the file is local. The bail tag
-      // names the file count in the summary so a badly exported clip is
-      // visible as a content fix rather than a mystery slow reel.
-      if (readMp4Layout(probe.toBytes()) == Mp4Layout.moovAtEnd) {
-        ReelDiagnostics.instance.recordPrefixBailed('moovAtEnd');
-        await _safeDelete(prefixPath);
-        return false;
+      // This used to give up here and fall through to whole-file caching,
+      // which is honest but expensive, and on a fast scroll it mostly did
+      // not finish: a device profile bailed 23 of 38 warms this way and
+      // converted only 5 of them into cached files, so two thirds of the
+      // catalog was effectively uncached. The clips are what they are —
+      // re-exporting them with the index at the front is a content fix we
+      // do not control from here.
+      //
+      // So fetch the end of the file too. It is the one region the player
+      // is guaranteed to want next, it is small, and with both ends
+      // cached a moov-at-end reel starts exactly like a faststart one.
+      // Only if THAT fails do we fall through to the whole file.
+      final int prefixLength = d.written;
+      String? tailPath;
+      // `prefixLength < total` because a reel small enough to fit inside
+      // the opening slice has already been fetched whole — its index came
+      // with it, wherever in the file it sits, and asking for the end
+      // again would re-fetch bytes we are holding.
+      if (prefixLength < total &&
+          readMp4Layout(probe.toBytes()) == Mp4Layout.moovAtEnd) {
+        tailPath = await _fetchTail(d, total);
+        if (tailPath == null) {
+          ReelDiagnostics.instance
+              .recordPrefixBailed(d.cancelled ? 'cancelled' : 'moovAtEnd');
+          await _safeDelete(prefixPath);
+          return false;
+        }
       }
 
       LocalMediaServer.instance.register(
         originUrl: d.url,
         prefixPath: prefixPath,
-        prefixLength: d.written,
+        prefixLength: prefixLength,
         totalLength: total,
+        tailPath: tailPath,
       );
       _prefixed.add(d.url);
       // Signal before the size sweep — a waiting spare should get its
@@ -496,6 +535,7 @@ class VideoCacheService {
       // housekeeping.
       _signalWarm(d.url);
       ReelDiagnostics.instance.recordPrefixWarmed();
+      if (tailPath != null) ReelDiagnostics.instance.recordTailWarmed();
       unawaited(_enforceSizeCap());
       return true;
     } catch (e) {
@@ -503,6 +543,76 @@ class VideoCacheService {
       if (kDebugMode) debugPrint('prefix warm failed for ${d.url}: $e');
       await _safeDelete(prefixPath);
       return false;
+    } finally {
+      if (sink != null) {
+        try {
+          await sink.close();
+        } catch (_) {}
+      }
+    }
+  }
+
+  /// Fetch the last [tailBytes] of [d]'s file, where a moov-at-end clip
+  /// keeps its index. Returns the path on success, null on anything else.
+  ///
+  /// Null is never fatal — the caller falls through to the whole-file
+  /// path, which is what the moov-at-end case did unconditionally before
+  /// this existed.
+  ///
+  /// Runs on the same [_Download] as the head, so a reel that leaves the
+  /// window mid-tail is cancelled by the same [_cancel] and gives its
+  /// slot straight back. [_Download.written] is reset first so the cancel
+  /// grace weighs this fetch's own progress rather than the head's.
+  Future<String?> _fetchTail(_Download d, int total) async {
+    // Never ask for bytes the head already holds: the two slices must not
+    // overlap, or the proxy would serve the same region twice. The caller
+    // has already excluded the case where the head covers everything.
+    final headroom = total - prefixBytes;
+    if (headroom <= 0) return null;
+    final want = tailBytes < headroom ? tailBytes : headroom;
+    final from = total - want;
+    final tailPath = '${_fileFor(d.url)}.tail';
+    IOSink? sink;
+    d.written = 0;
+    try {
+      final request = http.Request('GET', Uri.parse(d.url))
+        ..headers[HttpHeaders.rangeHeader] = 'bytes=$from-${total - 1}';
+      final response = await ApiService.httpClient.send(request);
+      // The head came back 206, so the origin does ranges; anything else
+      // here is a transient we do not try to interpret.
+      if (response.statusCode != HttpStatus.partialContent) return null;
+
+      final file = File(tailPath);
+      sink = file.openWrite();
+      final done = Completer<void>();
+      d.done = done;
+      d.subscription = response.stream.listen(
+        (chunk) {
+          d.written += chunk.length;
+          sink!.add(chunk);
+        },
+        onDone: () => done.isCompleted ? null : done.complete(),
+        onError: (Object e) => done.isCompleted ? null : done.completeError(e),
+        cancelOnError: true,
+      );
+      await done.future;
+      await sink.flush();
+      await sink.close();
+      sink = null;
+
+      // A partial tail is worse than none: the proxy derives the slice's
+      // offset from its size on disk, so a truncated file would be served
+      // as though it started later in the media than it does. Only a
+      // complete one is registered.
+      if (d.cancelled || d.written != want) {
+        await _safeDelete(tailPath);
+        return null;
+      }
+      return tailPath;
+    } catch (e) {
+      if (kDebugMode) debugPrint('tail warm failed for ${d.url}: $e');
+      await _safeDelete(tailPath);
+      return null;
     } finally {
       if (sink != null) {
         try {
@@ -629,16 +739,20 @@ class VideoCacheService {
       }
       if (total <= maxCacheBytes) return;
 
-      // In-flight downloads and registered prefixes are not eviction
-      // candidates. Prefixes especially: a player that is mid-reel holds a
-      // loopback URL pointing at one, and deleting it underneath forces
-      // that reel back to a cold origin fetch at the worst possible
-      // moment. They are also bounded and tiny — prefetchDepth * 768 KB is
-      // single-digit megabytes against a 300 MB cap — so exempting them
-      // costs nothing worth reclaiming. Their bytes still count toward
-      // [total] above, so the cap stays honest about real disk use.
+      // In-flight downloads and registered fragments are not eviction
+      // candidates. Fragments especially: a player that is mid-reel holds
+      // a loopback URL pointing at them, and deleting one underneath
+      // forces that reel back to a cold origin fetch at the worst
+      // possible moment. They are also bounded and tiny — prefetchDepth *
+      // (768 + 256) KB is single-digit megabytes against a 300 MB cap —
+      // so exempting them costs nothing worth reclaiming. Their bytes
+      // still count toward [total] above, so the cap stays honest about
+      // real disk use.
       final files = all
-          .where((f) => !f.path.endsWith('.part') && !f.path.endsWith('.prefix'))
+          .where((f) =>
+              !f.path.endsWith('.part') &&
+              !f.path.endsWith('.prefix') &&
+              !f.path.endsWith('.tail'))
           .toList();
 
       files.sort((a, b) =>

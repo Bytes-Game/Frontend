@@ -335,6 +335,43 @@ class VideoPlayerService {
     return controller;
   }
 
+  /// The pooled controller for [url] if one already exists, without
+  /// creating one and without promoting it.
+  ///
+  /// For a caller that wants to SHOW a reel it has not been asked to
+  /// start — the pager's off-screen neighbours, which Flutter builds
+  /// either side of the visible page. [getController] is the wrong tool
+  /// there, in two ways that both cost real decoders.
+  ///
+  /// It CREATES. A tile that asks for a player gets one, so every reel
+  /// the pager materialises while the user is flinging opens an
+  /// ExoPlayer and a hardware decoder for a reel that is on screen for
+  /// a few frames on its way past. The read-ahead path already declines
+  /// to do that — [_requestSpare] holds a cold spare behind
+  /// [spareWarmGrace] precisely so a fast scroll opens nothing — but the
+  /// build path went straight round it, which is why a device log could
+  /// show 36 players retired against 21 distinct reels and a decoder
+  /// count climbing to 81 in ninety seconds of scrolling.
+  ///
+  /// And it PROMOTES. On a hit it restores audible volume and hands the
+  /// entry its audio decoder back, because its caller is by definition
+  /// the reel being watched. Called from a neighbour's build that is a
+  /// silent player unmuted off screen and an AAC instance spent on a
+  /// track nobody can hear, until the next [pauseAllExcept] undoes both
+  /// — the create/flush/release churn the audio decoders show in the
+  /// same log. The `setVolume` also notifies listeners, and a build that
+  /// notifies a [ValueListenableBuilder] bound to the same controller is
+  /// the `setState() called during build` crash documented on
+  /// `_ensureOpponentState`.
+  ///
+  /// So: look, don't touch. A neighbour that finds a player renders it;
+  /// one that does not renders its poster and waits to become the reel
+  /// on screen, which is the moment it is allowed to cost a decoder.
+  VideoPlayerController? peekController(String url) {
+    if (url.isEmpty) return null;
+    return _pool.where((e) => e.url == url).firstOrNull?.controller;
+  }
+
   /// Build a controller for [url], preferring a copy the cache has
   /// already pulled onto the device.
   ///

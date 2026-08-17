@@ -231,6 +231,168 @@ void main() {
           reason: 'a sliver must be a small fraction of the reel');
     });
 
+    /// Opening bytes that read as an MP4 keeping its index at the END:
+    /// `ftyp` followed straight by `mdat`, so `moov` is somewhere past
+    /// them. See [readMp4Layout].
+    List<int> moovAtEndBytes(int len) {
+      final out = List<int>.filled(len, 1);
+      void box(int at, int size, String type) {
+        out[at] = (size >> 24) & 0xff;
+        out[at + 1] = (size >> 16) & 0xff;
+        out[at + 2] = (size >> 8) & 0xff;
+        out[at + 3] = size & 0xff;
+        for (var i = 0; i < 4; i++) {
+          out[at + 4 + i] = type.codeUnitAt(i);
+        }
+      }
+
+      box(0, 16, 'ftyp');
+      box(16, len - 16, 'mdat');
+      return out;
+    }
+
+    /// A range-capable origin serving a moov-at-end file.
+    void useMoovAtEndOrigin() {
+      ApiService.useClient(MockClient.streaming((req, _) async {
+        final range = rangeOf(req);
+        rangesSeen.add(range);
+        final m = RegExp(r'bytes=(\d+)-(\d+)').firstMatch(range ?? '');
+        if (m == null) {
+          return http.StreamedResponse(
+              Stream.value(moovAtEndBytes(fileSize)), 200,
+              contentLength: fileSize);
+        }
+        final s = int.parse(m.group(1)!);
+        final e = int.parse(m.group(2)!) < fileSize - 1
+            ? int.parse(m.group(2)!)
+            : fileSize - 1;
+        final len = e - s + 1;
+        // Only the head has to look like boxes; the tail is opaque to
+        // everything under test here.
+        final bytes = s == 0 ? moovAtEndBytes(len) : List.filled(len, 2);
+        return http.StreamedResponse(Stream.value(bytes), 206,
+            contentLength: len,
+            headers: {'content-range': 'bytes $s-$e/$fileSize'});
+      }));
+    }
+
+    // A file whose index sits after the media used to fall out of prefix
+    // warming altogether — the head alone cannot start it, so the path
+    // bailed and left the reel to the whole-file fetch, which on a fast
+    // scroll mostly never finished. A device profile bailed 23 of 38
+    // warms this way. Now both ends are cached and the reel starts from
+    // the proxy like any other.
+    test('a moov-at-end file is warmed at both ends, not abandoned',
+        () async {
+      await LocalMediaServer.instance.start();
+      useMoovAtEndOrigin();
+
+      VideoCacheService.instance.warm(['https://cdn/moovend.mp4']);
+      expect(
+          await eventually(() =>
+              LocalMediaServer.instance.localUrlFor('https://cdn/moovend.mp4') !=
+              null),
+          isTrue,
+          reason: 'the reel must still be registered with the proxy');
+
+      // The index lives in the last bytes of the file, so those are the
+      // ones that had to be fetched in addition to the head.
+      const tailFrom = fileSize - VideoCacheService.tailBytes;
+      expect(rangesSeen, contains('bytes=$tailFrom-${fileSize - 1}'),
+          reason: 'the end of the file is the half that makes this work');
+
+      final tails =
+          tmp.listSync().whereType<File>().where((f) => f.path.endsWith('.tail'));
+      expect(tails, hasLength(1));
+      expect(tails.first.lengthSync(), VideoCacheService.tailBytes);
+
+      // And it is still a sliver: both ends together are a small fraction
+      // of the reel, which is the whole reason for warming rather than
+      // downloading.
+      final onDisk = tmp
+          .listSync()
+          .whereType<File>()
+          .fold<int>(0, (a, f) => a + f.lengthSync());
+      expect(onDisk,
+          VideoCacheService.prefixBytes + VideoCacheService.tailBytes);
+      expect(onDisk * 3, lessThan(fileSize));
+    });
+
+    test('a moov-at-end reel small enough to fit in the head needs no tail',
+        () async {
+      // The opening slice already IS the whole file, index and all, so
+      // there is no separate end to fetch — asking for one would re-fetch
+      // bytes we are holding, and giving up would send a reel we have
+      // completely cached down the whole-file path for no reason.
+      await LocalMediaServer.instance.start();
+      const small = 4096;
+      ApiService.useClient(MockClient.streaming((req, _) async {
+        rangesSeen.add(rangeOf(req));
+        return http.StreamedResponse(
+            Stream.value(moovAtEndBytes(small)), 206,
+            contentLength: small,
+            headers: {'content-range': 'bytes 0-${small - 1}/$small'});
+      }));
+
+      VideoCacheService.instance.warm(['https://cdn/tiny.mp4']);
+      expect(
+          await eventually(() =>
+              LocalMediaServer.instance.localUrlFor('https://cdn/tiny.mp4') !=
+              null),
+          isTrue,
+          reason: 'a fully-cached reel must be served from the proxy');
+      expect(rangesSeen, hasLength(1),
+          reason: 'one fetch was enough; there is no end left to ask for');
+      expect(
+          tmp.listSync().whereType<File>().where(
+              (f) => f.path.endsWith('.tail')),
+          isEmpty);
+    });
+
+    test('a moov-at-end file whose tail cannot be fetched falls back',
+        () async {
+      await LocalMediaServer.instance.start();
+      // Head answers, tail refuses — the reel must not be left stranded
+      // with a head that cannot start it.
+      ApiService.useClient(MockClient.streaming((req, _) async {
+        final range = rangeOf(req);
+        rangesSeen.add(range);
+        final m = RegExp(r'bytes=(\d+)-(\d+)').firstMatch(range ?? '');
+        if (m == null) {
+          return http.StreamedResponse(
+              Stream.value(moovAtEndBytes(4096)), 200, contentLength: 4096);
+        }
+        final s = int.parse(m.group(1)!);
+        if (s != 0) {
+          return http.StreamedResponse(const Stream.empty(), 500,
+              contentLength: 0);
+        }
+        final e = int.parse(m.group(2)!) < fileSize - 1
+            ? int.parse(m.group(2)!)
+            : fileSize - 1;
+        final len = e - s + 1;
+        return http.StreamedResponse(Stream.value(moovAtEndBytes(len)), 206,
+            contentLength: len,
+            headers: {'content-range': 'bytes $s-$e/$fileSize'});
+      }));
+
+      VideoCacheService.instance.warm(['https://cdn/tailfail.mp4']);
+      expect(
+          await eventually(() =>
+              VideoCacheService.instance.pathFor('https://cdn/tailfail.mp4') !=
+              null),
+          isTrue,
+          reason: 'it must still reach the whole-file path, as it used to');
+      expect(LocalMediaServer.instance.localUrlFor('https://cdn/tailfail.mp4'),
+          isNull,
+          reason: 'a head that cannot start the reel must not be registered');
+      expect(
+          tmp.listSync().whereType<File>().where(
+              (f) => f.path.endsWith('.tail')),
+          isEmpty,
+          reason: 'a partial tail is worse than none — see _fetchTail');
+    });
+
     test('an origin that ignores Range falls back to the whole file',
         () async {
       await LocalMediaServer.instance.start();

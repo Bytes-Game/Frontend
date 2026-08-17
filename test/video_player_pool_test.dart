@@ -219,6 +219,58 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 2));
   }
 
+  // The pager builds tiles either side of the visible page, and during a
+  // fling it builds one for every reel the user passes. Those builds used
+  // to reach getController, which creates on miss and promotes on hit —
+  // so a fast scroll opened a decoder per reel flown past AND unmuted the
+  // read-ahead spare off screen. A device profile showed the shape of it:
+  // 36 players retired for 21 distinct reels, decoder ids to 81, three
+  // reclaims by the platform. peekController is what a build is allowed
+  // to call instead.
+  group('looking without touching', () {
+    test('a reel with no player stays without one', () async {
+      expect(service.peekController(url(0)), isNull);
+      expect(service.debugPoolSize, 0,
+          reason: 'a peek must never be the thing that opens a decoder');
+    });
+
+    test('an empty url is not a lookup', () async {
+      expect(service.peekController(''), isNull);
+    });
+
+    test('adopts a player that already exists', () async {
+      await watch(url(0));
+      final live = service.peekController(url(0));
+
+      expect(live, isNotNull);
+      expect(identical(live, service.getController(url(0))), isTrue,
+          reason: 'the same player the pool is holding, not a second one');
+      expect(service.debugPoolSize, 1);
+    });
+
+    test('does not promote the spare it adopts', () async {
+      // The reel on screen, plus a silent read-ahead spare for the next.
+      await watch(url(0));
+      service.debugOpenSpare(url(1), warm: true);
+      await settle();
+      expect(audioOn(url(1)), isFalse,
+          reason: 'precondition: a spare is opened without its audio decoder');
+
+      final before = audioCalls.length;
+      service.peekController(url(1));
+      await settle();
+
+      // getController would have restored volume and handed the audio
+      // decoder back here, because its caller is by definition the reel
+      // being watched. A tile that is merely rendering is not.
+      expect(audioCalls.length, before,
+          reason: 'peeking must not hand a spare its audio decoder back');
+      expect(audioOn(url(1)), isFalse);
+      expect(service.debugActiveUrl, url(0),
+          reason: 'and must not change which reel is on screen');
+    });
+  });
+
   group('eviction', () {
     test('keeps the reel on screen no matter how full the pool is', () async {
       await watch(url(0));
