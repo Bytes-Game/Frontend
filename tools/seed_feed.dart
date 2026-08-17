@@ -156,23 +156,81 @@ Future<int> _runSeed(HttpClient http, _Session session, _Args args) async {
   // in a while on a desktop, and a steady pace is easier to read and easier
   // on a backend that is sharing one free-tier instance with the app.
   final created = <Map<String, dynamic>>[];
+
+  /// Feed items that were created but whose video never made it to the
+  /// bucket. They are in the ledger, so --cleanup removes them; this list is
+  /// only so the run can say plainly that it left something broken.
+  final broken = <String>[];
+  var consecutiveFailures = 0;
+
   for (var i = 0; i < args.count; i++) {
-    final clip = clips[i % clips.length];
+    // --start-index shifts which clip this run begins on. It matters because
+    // the rate limit means a feed gets filled by running this several times
+    // with different accounts, and without a shift every run would post the
+    // same first few videos over and over.
+    final n = i + args.startIndex;
+    final clip = clips[n % clips.length];
     final label = 'seed ${i + 1}/${args.count}';
     stdout.write('  $label  ${clip.name} ... ');
 
-    final url = await _uploadOne(http, session, clip);
-    if (url == null) {
-      stdout.writeln('upload failed, skipping');
+    // Reserve a place in the bucket. This sends no video, and the backend
+    // tells us the address the video will have, which is the whole trick:
+    // the feed item can be created before a single byte is uploaded.
+    final slot = await _reserveSlot(http, session);
+    if (slot == null) {
+      stdout.writeln('could not get an upload link — '
+          '${_lastError ?? 'unknown reason'}');
+      if (++consecutiveFailures >= 3) {
+        stdout.writeln('\nThree failures in a row. Stopping.');
+        break;
+      }
       continue;
     }
 
-    final id = await _createChallenge(http, session, url, i);
+    // Create the feed item BEFORE uploading.
+    //
+    // The obvious order is upload, then post. It is also the wrong one. The
+    // backend only accepts a couple of new posts per account per hour, so
+    // filling a feed means running into that limit constantly — and doing it
+    // in the obvious order means every refusal has already pushed a video
+    // into the bucket that nothing will ever point at. One run stranded five
+    // files that way before this was fixed. Asking first costs nothing when
+    // the answer is no.
+    final id = await _createChallenge(http, session, slot.publicUrl, n);
     if (id == null) {
-      stdout.writeln('uploaded, but creating the feed item failed');
+      final why = _lastError;
+      stdout.writeln('refused — ${why ?? 'unknown reason'} (nothing uploaded)');
+      if (why != null && why.isRateLimit) {
+        stdout.writeln('  this account has posted its allowance for now.');
+        break;
+      }
+      if (++consecutiveFailures >= 3) {
+        stdout.writeln('\nThree refusals in a row. Stopping.');
+        break;
+      }
       continue;
     }
-    created.add({'id': id, 'videoUrl': url});
+
+    // The feed item exists; now put the video where it says it is. For the
+    // few seconds in between, the item points at a video that is not there
+    // yet — which is why the upload failing here is worth shouting about.
+    if (!await _putBytes(http, slot, clip)) {
+      stdout.writeln('feed item $id created, but the upload FAILED — '
+          '${_lastError ?? 'unknown reason'}');
+      stdout.writeln('  that item now points at a video that is not there. '
+          'It is recorded, so --cleanup will remove it.');
+      broken.add(id);
+      created.add({'id': id, 'videoUrl': slot.publicUrl, 'uploadFailed': true});
+      await _writeLedger(created);
+      if (++consecutiveFailures >= 3) {
+        stdout.writeln('\nThree failures in a row. Stopping.');
+        break;
+      }
+      continue;
+    }
+
+    consecutiveFailures = 0;
+    created.add({'id': id, 'videoUrl': slot.publicUrl});
     stdout.writeln('ok');
 
     // Save after every item. If this run dies halfway, cleanup still knows
@@ -186,32 +244,62 @@ Future<int> _runSeed(HttpClient http, _Session session, _Args args) async {
   for (var i = 0; i < args.battles && i < created.length; i++) {
     final clip = clips[(i + 1) % clips.length];
     stdout.write('  battle ${i + 1}/${args.battles} ... ');
-    // Uploaded as the responder, because the storage key is built from the
-    // uploader's ID and the answer belongs to them.
-    final url = await _uploadOne(http, responder, clip);
-    if (url == null) {
-      stdout.writeln('upload failed, skipping');
+    // Same order as above, and for the same reason: ask first, upload only
+    // once the answer has been accepted. The slot is reserved as the
+    // responder, because the storage key is built from the uploader's ID and
+    // the answer belongs to them.
+    final slot = await _reserveSlot(http, responder);
+    if (slot == null) {
+      stdout.writeln('could not get an upload link — '
+          '${_lastError ?? 'unknown reason'}');
       continue;
     }
     final ok = await _acceptChallenge(
-        http, responder, created[i]['id'] as String, url);
-    stdout.writeln(ok
-        ? 'ok'
-        : 'rejected — the backend may not let you answer your own challenge; '
-            'pass --responder-user/--responder-password for a second account');
-    if (ok) battlesMade++;
+        http, responder, created[i]['id'] as String, slot.publicUrl);
+    if (!ok) {
+      stdout.writeln('rejected — ${_lastError ?? 'unknown reason'} '
+          '(nothing uploaded). If this is about answering your own '
+          'challenge, pass --responder-user/--responder-password.');
+      continue;
+    }
+    if (!await _putBytes(http, slot, clip)) {
+      stdout.writeln('answer accepted, but the upload FAILED — '
+          '${_lastError ?? 'unknown reason'}');
+      continue;
+    }
+    stdout.writeln('ok');
+    battlesMade++;
   }
 
   stdout.writeln('\nDone. ${created.length} new feed items, '
       '$battlesMade of them battles.');
-  stdout.writeln('Written to $_ledgerPath — '
-      'run with --cleanup --yes to remove them again.');
-  return 0;
+  if (created.isNotEmpty) {
+    stdout.writeln('Written to $_ledgerPath — '
+        'run with --cleanup --yes to remove them again.');
+  }
+  if (broken.isNotEmpty) {
+    stdout.writeln('\n${broken.length} feed item(s) were created but their '
+        'video did not upload, so they will not play: ${broken.join(', ')}. '
+        'They are in the ledger — run --cleanup --yes to remove them.');
+  }
+  return broken.isNotEmpty ? 1 : 0;
 }
 
-/// Signed link, then PUT the bytes to R2. Returns the public URL.
-Future<String?> _uploadOne(
-    HttpClient http, _Session session, _Clip clip) async {
+/// A place in the bucket to put one video: where to send the bytes, and the
+/// address the video will have once they are there.
+class _Slot {
+  _Slot(this.uploadUrl, this.publicUrl);
+
+  /// Write-only, signed, expires in minutes.
+  final String uploadUrl;
+
+  /// Where the video will be readable. Known before a single byte is sent,
+  /// which is what lets the feed item be created first.
+  final String publicUrl;
+}
+
+/// Asks the backend where to put a video. Sends nothing.
+Future<_Slot?> _reserveSlot(HttpClient http, _Session session) async {
   final presign = await _postJson(http, '/api/v1/media/presign', session, {
     'userId': session.userId,
     'items': [
@@ -226,19 +314,27 @@ Future<String?> _uploadOne(
   final uploadUrl = item['uploadUrl'] as String?;
   final publicUrl = item['publicUrl'] as String?;
   if (uploadUrl == null || publicUrl == null) return null;
+  return _Slot(uploadUrl, publicUrl);
+}
 
+/// Sends the actual video to the bucket.
+Future<bool> _putBytes(HttpClient http, _Slot slot, _Clip clip) async {
   try {
-    final req = await http.putUrl(Uri.parse(uploadUrl));
+    final req = await http.putUrl(Uri.parse(slot.uploadUrl));
     req.headers.set(HttpHeaders.contentTypeHeader, 'video/mp4');
     req.headers.set(HttpHeaders.contentLengthHeader, clip.bytes.length);
     req.add(clip.bytes);
     final res = await req.close().timeout(_timeout);
     await res.drain<void>();
-    if (res.statusCode < 200 || res.statusCode >= 300) return null;
-  } catch (_) {
-    return null;
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      _lastError = _HttpError(res.statusCode, 'upload refused by storage');
+      return false;
+    }
+    return true;
+  } catch (e) {
+    _lastError = _HttpError(0, '$e');
+    return false;
   }
-  return publicUrl;
 }
 
 Future<String?> _createChallenge(
@@ -428,10 +524,37 @@ Future<int> _runCleanup(
   return deleted == rows.length ? 0 : 1;
 }
 
+/// Saves what this run created, keeping whatever earlier runs recorded.
+///
+/// It merges rather than replaces because the rate limit makes several runs
+/// the normal way to use this: one account can only post a couple of items
+/// per hour, so filling a feed means running again with another account.
+/// An overwrite would leave the ledger describing only the last batch, and
+/// --cleanup would quietly walk past everything else.
 Future<void> _writeLedger(List<Map<String, dynamic>> rows) async {
   final file = File(_ledgerPath);
   await file.parent.create(recursive: true);
-  await file.writeAsString(const JsonEncoder.withIndent('  ').convert(rows));
+
+  final seen = <String>{};
+  final merged = <Map<String, dynamic>>[];
+  for (final row in [...await _readLedger(), ...rows]) {
+    final id = row['id'];
+    if (id is String && seen.add(id)) merged.add(row);
+  }
+  await file.writeAsString(const JsonEncoder.withIndent('  ').convert(merged));
+}
+
+Future<List<Map<String, dynamic>>> _readLedger() async {
+  final file = File(_ledgerPath);
+  if (!file.existsSync()) return const [];
+  try {
+    return (json.decode(await file.readAsString()) as List)
+        .cast<Map<String, dynamic>>();
+  } catch (_) {
+    // A half-written or hand-edited file. Better to keep going and re-record
+    // than to refuse to run.
+    return const [];
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -525,12 +648,42 @@ Future<Map<String, dynamic>?> _postJson(HttpClient http, String path,
     req.write(json.encode(payload));
     final res = await req.close().timeout(_timeout);
     final text = await res.transform(utf8.decoder).join();
-    if (res.statusCode < 200 || res.statusCode >= 300) return null;
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      // Remember why, so the caller can say something useful. The first
+      // version of this script threw the status away and reported every
+      // refusal as "failed", which hid a plain 429 behind a shrug and cost
+      // a pile of uploads before anyone knew what was wrong.
+      _lastError = _HttpError(res.statusCode, text.trim());
+      return null;
+    }
     if (text.trim().isEmpty) return <String, dynamic>{};
     final decoded = json.decode(text);
     return decoded is Map<String, dynamic> ? decoded : {'value': decoded};
-  } catch (_) {
+  } catch (e) {
+    _lastError = _HttpError(0, '$e');
     return null;
+  }
+}
+
+/// Why the most recent request failed. Read straight after a call returns
+/// null, before anything else runs.
+_HttpError? _lastError;
+
+class _HttpError {
+  _HttpError(this.status, this.body);
+
+  /// The HTTP status, or 0 if the request never got an answer at all.
+  final int status;
+  final String body;
+
+  /// True when the server is telling us to slow down or stop for now.
+  bool get isRateLimit => status == 429;
+
+  @override
+  String toString() {
+    if (status == 0) return 'no answer from the server ($body)';
+    final short = body.length > 160 ? '${body.substring(0, 160)}...' : body;
+    return 'HTTP $status${short.isEmpty ? '' : ' — $short'}';
   }
 }
 
@@ -551,6 +704,8 @@ Add videos to the feed so the reels player can be tested on a bigger catalogue.
   --responder-user NAME    second account, used to answer battles
   --responder-password P   its password
   --cleanup                delete everything this script created
+  --start-index N          begin at the Nth clip in the list, so repeat
+                           runs with other accounts post different videos
   --api-base URL           talk to a different backend (staging, or a stub)
   --yes                    actually do it (without this you only see a plan)
 
@@ -568,6 +723,7 @@ class _Args {
   String? urlsFile;
   String? responderUser;
   String? responderPassword;
+  int startIndex = 0;
   bool cleanup = false;
   bool yes = false;
   String? apiBase;
@@ -601,6 +757,9 @@ class _Args {
           i++;
         case '--responder-password':
           a.responderPassword = next(i);
+          i++;
+        case '--start-index':
+          a.startIndex = int.tryParse(next(i) ?? '') ?? a.startIndex;
           i++;
         case '--api-base':
           a.apiBase = next(i);
