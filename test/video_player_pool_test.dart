@@ -93,8 +93,20 @@ class _FakeVideoPlatform extends VideoPlayerPlatform {
   @override
   Future<void> setVolume(int playerId, double v) async => volume[playerId] = v;
 
+  /// Player ids whose `pause` never completes — no value, no error, just a
+  /// future that stays pending. Stands in for a native player whose
+  /// decoder the resource manager took, or whose playback thread has died:
+  /// the method-channel reply never arrives, so the Dart side waits
+  /// forever. A test cannot reproduce that with a throw, because a throw
+  /// is the case the pool already handles.
+  final Set<int> hangingPause = {};
+
   @override
-  Future<void> pause(int playerId) async => paused.add(playerId);
+  Future<void> pause(int playerId) {
+    if (hangingPause.contains(playerId)) return Completer<void>().future;
+    paused.add(playerId);
+    return Future<void>.value();
+  }
 
   @override
   Future<void> play(int playerId) async => paused.remove(playerId);
@@ -128,6 +140,26 @@ void main() {
 
   String url(int i) => 'https://cdn.example/reel$i.mp4';
 
+  /// Every audio-decoding request the pool made, oldest first, recorded as
+  /// (data source, enabled). The production implementation of this needs the
+  /// Android platform class; the fake platform here is deliberately none of
+  /// the real ones, so the seam is what makes the DECISION testable without
+  /// pretending to be ExoPlayer.
+  late List<(String, bool)> audioCalls;
+
+  /// The pool's most recent instruction for [u], or null if it never gave one.
+  bool? audioFor(String u) {
+    for (final call in audioCalls.reversed) {
+      if (call.$1 == u) return call.$2;
+    }
+    return null;
+  }
+
+  /// Whether [u]'s player is decoding audio. A player is born decoding it, so
+  /// silence from the pool means yes — the pool only ever has to speak up to
+  /// take it away and to hand it back.
+  bool audioOn(String u) => audioFor(u) ?? true;
+
   /// Let every pending initialize/volume/dispose future settle.
   Future<void> settle() => pumpEventQueue(times: 40);
 
@@ -146,8 +178,17 @@ void main() {
     VideoPlayerPlatform.instance = platform;
     pendingReleases = [];
     VideoPlayerService.deferRelease = pendingReleases.add;
+    audioCalls = [];
+    VideoPlayerService.setPlayerAudio = (controller, {required enabled}) async {
+      audioCalls.add((controller.dataSource, enabled));
+    };
     await service.disposeAll();
     ReelDiagnostics.instance.debugReset();
+    // Session state, not pool state, so disposeAll deliberately leaves it
+    // alone — which makes it the one thing that leaks between tests here.
+    // Every path that restores audible volume reads activeVolume, so a stray
+    // mute turns unrelated volume assertions into confusing failures.
+    service.feedMuted.value = false;
     service.configure(
       const VideoPoolConfig(
         maxPoolSize: 4,
@@ -685,6 +726,30 @@ void main() {
       }
     });
 
+    test('never sits below what the screen has on it at once', () async {
+      // The cap spent one release at 3, under the working set, on the
+      // theory that a smaller pool means fewer live decoders. It does not:
+      // getController builds a player for any tile that asks and evicts to
+      // make room, so a cap under the demand holds the same number of
+      // decoders and additionally throws one away per swipe. The device
+      // run showed 40 opens and 37 retirements for 14 videos.
+      expect(
+        VideoPoolConfig.maxConcurrentDecoders,
+        greaterThanOrEqualTo(VideoPoolConfig.onScreenWorkingSet),
+        reason: 'a pool below the working set does not save decoders, it '
+            'only evicts players the screen still needs',
+      );
+    });
+
+    test('the top tier holds the whole working set', () async {
+      // Anything from mid-tier up should be able to keep the reel on
+      // screen, both swipe neighbours and a battle opponent alive at once.
+      expect(
+        VideoPoolConfig.forRam(8).maxPoolSize,
+        VideoPoolConfig.onScreenWorkingSet,
+      );
+    });
+
     test('the startup default is inside the budget too', () async {
       // This is the config in force while DeviceCapabilities.probe is
       // still running — i.e. during app start, when the first reel is
@@ -693,6 +758,277 @@ void main() {
         VideoPoolConfig.fallback.maxPoolSize,
         lessThanOrEqualTo(VideoPoolConfig.maxConcurrentDecoders),
       );
+    });
+  });
+
+  group('one place decides what is playing', () {
+    // Playback used to be startable from two places — the feed on a swipe,
+    // the battle tile on a flip — and only one of them told the service what
+    // it had done. The service then held the wrong answer to "what is on
+    // screen" for as long as the user watched an opponent, and everything
+    // that reads it got that wrong answer: eviction disposed the visible
+    // player, the init callback muted and paused it. Starting a reel and
+    // declaring it are one call now, so they cannot disagree.
+    test('starting a reel is what declares it', () async {
+      service.getController(url(0));
+      await settle();
+
+      await service.showAndPlay(url(0));
+
+      expect(service.debugActiveUrl, url(0));
+      expect(platform.paused, isNot(contains(platform.idFor(url(0)))));
+    });
+
+    test('the reel it starts is the one eviction protects', () async {
+      // The whole point. A player the service does not know is on screen is
+      // an eviction candidate while the user is watching it, and eviction
+      // disposes it — a picture frozen on its last frame.
+      service.getController(url(0));
+      await settle();
+      await service.showAndPlay(url(0));
+
+      for (var i = 1; i <= 8; i++) {
+        await open(url(i));
+      }
+      await presentFrame();
+
+      expect(service.debugPoolUrls, contains(url(0)));
+    });
+
+    test('a reel the user has already swiped past is not started', () async {
+      // showAndPlay waits for the outgoing players before starting the
+      // incoming one, and the user can swipe again inside that wait. The
+      // call that loses the race must give up rather than start a video that
+      // is no longer on screen — otherwise it plays underneath the new one.
+      await watch(url(0));
+      await open(url(1));
+      await settle();
+
+      final first = service.showAndPlay(url(0));
+      final second = service.showAndPlay(url(1));
+      await Future.wait([first, second]);
+
+      expect(service.debugActiveUrl, url(1));
+      expect(
+        platform.paused,
+        contains(platform.idFor(url(0))),
+        reason: 'the reel that lost the race must not be left playing',
+      );
+    });
+
+    test('starting an unknown reel changes nothing about playback', () async {
+      await watch(url(0));
+      await settle();
+
+      await service.showAndPlay(url(5));
+
+      expect(
+        platform.createdFor.values,
+        isNot(contains(url(5))),
+        reason: 'showAndPlay starts an existing player; it does not open one',
+      );
+    });
+
+    test('a deliberate pause does not give up the screen', () async {
+      // Tap-to-pause is not a change of which reel is on screen. If it were
+      // treated as one the player would lose its audio decoder and its
+      // protection from eviction while the user sat looking at it.
+      await watch(url(0));
+      await settle();
+      await service.showAndPlay(url(0));
+
+      await service.pauseActive();
+
+      expect(service.debugActiveUrl, url(0));
+      expect(platform.paused, contains(platform.idFor(url(0))));
+
+      await service.resumeActive();
+
+      expect(platform.paused, isNot(contains(platform.idFor(url(0)))));
+    });
+
+    test('muting the feed reaches whichever reel is on screen', () async {
+      // The mute button used to set the volume on whatever the TILE thought
+      // was active, which is a second opinion about what is on screen, and
+      // on a battle flip it was the wrong one.
+      await watch(url(0));
+      await open(url(1));
+      await service.showAndPlay(url(1));
+
+      await service.setFeedMuted(true);
+
+      expect(platform.volume[platform.idFor(url(1))], 0);
+    });
+  });
+
+  group('audio decoding off screen', () {
+    // Muting a player silences its OUTPUT. The decoder behind it keeps
+    // running: a hardware AAC instance, an AudioTrack and its thread, and
+    // every chunk of sound decoded and dropped. A device profile caught one
+    // warm spare at "Qinput: 126, Render: 0, Drop: 122". Concurrent hardware
+    // decoders are the budget this app actually runs out of, and every warm
+    // player was spending two slots to use one.
+    test('a warm spare gives up its audio decoder', () async {
+      await watch(url(0));
+
+      service.debugOpenSpare(url(1), warm: true);
+      await settle();
+
+      expect(
+        audioOn(url(1)),
+        isFalse,
+        reason: 'a spare nobody can hear must not decode sound',
+      );
+      expect(
+        audioOn(url(0)),
+        isTrue,
+        reason: 'the reel on screen must keep its audio',
+      );
+    });
+
+    test('an off-screen neighbour gives up its audio decoder too', () async {
+      // The PageView builds the tiles either side of the current one, and
+      // those reach getController directly rather than through the spare
+      // path. They are silent for the same reason and cost the same decoder.
+      await watch(url(0));
+
+      service.getController(url(1));
+      await settle();
+
+      expect(audioOn(url(1)), isFalse);
+    });
+
+    test('promoting a spare hands its audio back', () async {
+      await watch(url(0));
+      service.debugOpenSpare(url(1), warm: true);
+      await settle();
+      expect(audioOn(url(1)), isFalse);
+
+      service.getController(url(1));
+
+      expect(
+        audioOn(url(1)),
+        isTrue,
+        reason: 'asked for on promotion rather than at play(), so the sound '
+            'is ready before the first frame instead of behind it',
+      );
+    });
+
+    test('the sweep moves audio to whichever reel is on screen', () async {
+      // pauseAllExcept is the one place that knows what the user is looking
+      // at, so it owns the answer for every player at once — the same way it
+      // already owns volume.
+      await watch(url(0));
+      await open(url(1));
+      await settle();
+
+      await service.pauseAllExcept(url(1));
+
+      expect(audioOn(url(1)), isTrue);
+      expect(audioOn(url(0)), isFalse);
+    });
+
+    test('a spare promoted before it finishes loading stays audible',
+        () async {
+      // The user can swipe onto a spare while it is still initialising. The
+      // spare's own initialize() continuation runs AFTER that, and used to
+      // mute unconditionally — silencing the reel now on screen, with the
+      // sweep that would have fixed it already run. Volume and audio
+      // decoding both have to ask who is on screen rather than assume.
+      platform.holdInit = true;
+      await watch(url(0));
+      service.debugOpenSpare(url(1), warm: true);
+      await settle();
+
+      // Swipe onto it before its first frame lands.
+      await service.pauseAllExcept(url(1));
+      platform.finishInit(platform.idFor(url(1)));
+      await settle();
+
+      expect(
+        audioOn(url(1)),
+        isTrue,
+        reason: 'the late initialize() must not silence the reel on screen',
+      );
+      expect(
+        platform.volume[platform.idFor(url(1))],
+        isNot(0),
+        reason: 'and must not mute it either',
+      );
+    });
+
+    test('says nothing when nothing changed', () async {
+      // Every call is a platform round trip. Players are born decoding
+      // audio, so the reel on screen should need no instruction at all.
+      await watch(url(0));
+      await settle();
+      final before = audioCalls.length;
+
+      await service.pauseAllExcept(url(0));
+      await service.pauseAllExcept(url(0));
+
+      expect(audioCalls.length, before);
+    });
+  });
+
+  group('handing over to the next reel', () {
+    test('a player that never stops cannot hold the next reel back',
+        () async {
+      // The feed awaits pauseAllExcept before calling play(), so whatever
+      // this future waits on is directly in front of the user's next
+      // video. An outgoing player whose pause never returns — reclaimed
+      // decoder, dead playback thread — used to leave that await pending
+      // for the rest of the session: a reel frozen on its first frame,
+      // with no error anywhere to say why.
+      await watch(url(0));
+      await open(url(1));
+      platform.hangingPause.add(platform.idFor(url(0)));
+
+      await service
+          .pauseAllExcept(url(1))
+          .timeout(
+            const Duration(seconds: 5),
+            onTimeout: () => fail(
+              'pauseAllExcept never returned, so the incoming reel never '
+              'gets to play() — the freeze this bound exists to prevent',
+            ),
+          );
+    });
+
+    test('still waits for players that do stop', () async {
+      // The bound is a backstop, not the normal path: when the outgoing
+      // players answer, the sweep must actually have stopped them by the
+      // time it returns. That ordering is what keeps AudioFocus from
+      // moving while the old decoder is still running.
+      await watch(url(0));
+      await open(url(1));
+
+      await service.pauseAllExcept(url(1));
+
+      expect(
+        platform.paused,
+        contains(platform.idFor(url(0))),
+        reason: 'the outgoing player must be stopped before the caller '
+            'starts the incoming one',
+      );
+    });
+
+    test('names the incoming reel even when the outgoing one hangs',
+        () async {
+      // Eviction and volume both read the active URL. If a hung pause
+      // could stop it being recorded, the reel on screen would be a legal
+      // eviction victim and could come up silent.
+      await watch(url(0));
+      await open(url(1));
+      platform.hangingPause.add(platform.idFor(url(0)));
+
+      await service.pauseAllExcept(url(1));
+      for (var i = 2; i < 8; i++) {
+        await open(url(i));
+      }
+      await presentFrame();
+
+      expect(service.debugPoolUrls, contains(url(1)));
     });
   });
 

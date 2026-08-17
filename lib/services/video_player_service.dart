@@ -3,6 +3,14 @@ import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 import 'package:video_player/video_player.dart';
+// Reached only through the `is AndroidVideoPlayer` test in
+// [VideoPlayerService._platformSetPlayerAudio]. Importing the Android
+// implementation directly is unusual and deliberate: turning a player's audio
+// decoding off is a local addition to our vendored copy of the plugin, so it
+// is not on VideoPlayerPlatform and cannot be reached generically. See
+// third_party/video_player_android/LOCAL_CHANGES.md.
+import 'package:video_player_android/video_player_android.dart';
+import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
@@ -34,8 +42,24 @@ class VideoPoolConfig {
     required this.prefetchBack,
   });
 
-  /// The ceiling every tier is clamped to on Android, and the reason the
-  /// tiers below no longer reach the numbers they used to.
+  /// How many players the screen actually needs alive at the same time.
+  ///
+  /// Four, and each one is on screen or one gesture away from it:
+  ///
+  ///   1. the reel being watched,
+  ///   2. the reel one swipe up,
+  ///   3. the reel one swipe down,
+  ///   4. the opponent's video, when the reel is a battle.
+  ///
+  /// The reels PageView builds its neighbours, so 2 and 3 are real
+  /// players, not plans to make one. A battle turns both cube faces at
+  /// once during the flip, so 4 is real too for as long as the gesture
+  /// lasts. This is a floor on the pool, not a wish: see
+  /// [maxConcurrentDecoders] for what happens when the pool sits below it.
+  static const int onScreenWorkingSet = 4;
+
+  /// The ceiling every tier is clamped to, and the reason the tiers below
+  /// no longer reach the numbers they used to.
   ///
   /// The tiers were sized for the Java heap: ~20-30 MB of MediaCodec and
   /// AudioTrack wrappers per live ExoPlayer against a 256 MB (or ~512 MB
@@ -49,19 +73,31 @@ class VideoPoolConfig {
   ///
   /// That is Android's resource manager taking decoders back because the
   /// process was holding more concurrent 720p AVC instances than the
-  /// vendor Codec2 stack will run. RAM does not predict that number —
-  /// it is a property of the SoC's decoder, and on this MediaTek part the
-  /// practical limit sat below what the 8 GB tier was asking for. Three
-  /// live players (the reel on screen, the one a swipe ahead, the one a
-  /// swipe back) fits inside every mainstream device's budget and is
-  /// exactly what the feed's gestures can reach, so nothing above it was
-  /// buying reachable warmth — only reclaims, and the churn that follows
-  /// one: 50 player opens for 14 distinct videos in a 90-second run.
+  /// vendor Codec2 stack will run. RAM does not predict that number — it
+  /// is a property of the SoC's decoder — so the cap exists and RAM is no
+  /// longer the ceiling. Nothing above the reachable set was buying warmth
+  /// the user could feel, only reclaims.
+  ///
+  /// It must never drop below [onScreenWorkingSet], and it sat at 3 for
+  /// one release, which is worth writing down because the reasoning was
+  /// wrong in an instructive way. The thought was that a smaller pool
+  /// means fewer live decoders. It does not. [getController] builds a
+  /// player whenever a tile asks for one and evicts to make room — the cap
+  /// never refuses anybody, it only decides how long a player survives. So
+  /// a pool below the working set holds exactly as many decoders at once
+  /// and additionally throws one away on every swipe, then rebuilds it
+  /// seconds later when the screen asks again. The device run showed it:
+  /// 40 player opens and 37 retirements for 14 distinct videos, reclaims
+  /// undiminished, and multi-second black frames while an evicted
+  /// neighbour re-initialised.
+  ///
+  /// Fewer live decoders has to come from asking for fewer players, not
+  /// from a cap underneath the demand.
   ///
   /// iOS has no equivalent reclaim path, but AVPlayer has its own limit on
   /// simultaneous render pipelines and the gesture argument holds there
   /// too, so the cap is not platform-conditional.
-  static const int maxConcurrentDecoders = 3;
+  static const int maxConcurrentDecoders = onScreenWorkingSet;
 
   /// Pick a config that matches the device's physical RAM, then clamp it
   /// to what the device's DECODER can actually run concurrently.
@@ -248,6 +284,10 @@ class VideoPlayerService {
       // are created muted so a paused, off-screen video can't fight
       // the active reel for AudioFocus.
       existing.controller.setVolume(activeVolume);
+      // A spare also had its audio decoder taken away; asking for it back
+      // here means the sound is ready by the time the reel is played rather
+      // than a track re-selection behind the first frame.
+      _setEntryAudio(existing, enabled: true);
       return existing.controller;
     }
 
@@ -271,6 +311,14 @@ class VideoPlayerService {
           // path runs for tiles the user cannot see yet, and those must come
           // up silent rather than relying on a later sweep to quieten them.
           controller.setVolume(_volumeFor(url));
+          // Silent is not enough: a neighbour tile that never plays still
+          // decodes its whole audio track. Drop it until the reel is the one
+          // on screen, at which point pauseAllExcept hands it back. Looked up
+          // by URL because the entry may have been evicted while we waited.
+          if (url != _activeUrl) {
+            final entry = _pool.where((e) => e.url == url).firstOrNull;
+            if (entry != null) _setEntryAudio(entry, enabled: false);
+          }
           // And stopped. A tile can call play() on its controller before
           // initialisation lands — the feed does exactly that in
           // _playCurrent — and video_player replays that request the moment
@@ -585,7 +633,19 @@ class VideoPlayerService {
           // promote path in getController restores volume. No pause needed:
           // nothing ever calls play() on a spare, and video_player leaves a
           // controller that was not playing paused once it initialises.
-          controller.setVolume(0);
+          //
+          // Via [_volumeFor] rather than a flat 0, because a spare can be
+          // promoted to the reel on screen while it is still initialising —
+          // the user swiping onto it before its first frame lands. Muting
+          // unconditionally here silenced exactly that case, and the sweep
+          // that would have fixed it had already run.
+          controller.setVolume(_volumeFor(next));
+          // Same question, same answer: still a spare means still no reason
+          // to decode a sound track nobody can hear. See [setPlayerAudio].
+          if (next != _activeUrl) {
+            final entry = _pool.where((e) => e.url == next).firstOrNull;
+            if (entry != null) _setEntryAudio(entry, enabled: false);
+          }
         })
         .catchError((_) {
           // Surfaced when the caller actually tries to use this URL.
@@ -632,6 +692,21 @@ class VideoPlayerService {
   ///
   /// The outgoing track was ACTIVE when focus moved — that overlap is the
   /// audible chop on every swipe. Awaiting the pauses closes it.
+  ///
+  /// The wait is bounded, and that bound is the whole safety of this
+  /// method. A pause is a round trip to a native player, and a native
+  /// player whose decoder the resource manager already took, or whose
+  /// playback thread is gone, never answers:
+  ///
+  ///     E/MediaCodec: Released by resource manager
+  ///     java.lang.IllegalStateException: ... a Handler on a dead thread
+  ///
+  /// Its future then stays pending forever rather than failing, which
+  /// `catchError` below does nothing about. Unbounded, that turns one dead
+  /// outgoing player into a permanently frozen incoming reel, because the
+  /// caller's play() sits behind this await — a worse bug than the chop
+  /// the await was added to fix. After [pauseSettleTimeout] we start the
+  /// new reel regardless and accept the overlap.
   Future<void> pauseAllExcept(String activeUrl) async {
     // The authoritative "this reel is on screen" signal. Eviction reads
     // it to keep the watched player alive, and [_volumeFor] reads it so a
@@ -643,21 +718,111 @@ class VideoPlayerService {
       if (entry.url != activeUrl) {
         stopping.add(entry.controller.pause());
         stopping.add(entry.controller.setVolume(0));
+        // And stop decoding the sound as well as silencing it. This is the
+        // one place that knows which reel is on screen, so it is the right
+        // place to own the answer for every player at once — see
+        // [setPlayerAudio]. Not awaited: nothing the caller does next
+        // depends on it, and it must not delay the incoming reel.
+        _setEntryAudio(entry, enabled: false);
       } else {
         // Not awaited: the incoming reel's volume is not what the caller
         // is waiting on, and holding play() back for it would add a
         // channel round-trip to every swipe.
         // ignore: discarded_futures
         entry.controller.setVolume(activeVolume);
+        // Give this one its audio decoder back. It may have arrived here as
+        // a silent spare, and a reel on screen that cannot make a sound is
+        // worse than the decoder it costs.
+        _setEntryAudio(entry, enabled: true);
       }
     }
     if (stopping.isEmpty) return;
     // A controller disposed mid-sweep completes with an error rather than
     // a value. That is not a reason to leave the incoming reel unstarted,
     // so failures are absorbed — the point of the await is only that the
-    // outgoing decoders have had their chance to stop.
-    await Future.wait(stopping).catchError((_) => const <void>[]);
+    // outgoing decoders have had their chance to stop. Neither is a player
+    // that never answers at all: see [pauseSettleTimeout].
+    await Future.wait(stopping)
+        .catchError((_) => const <void>[])
+        .timeout(pauseSettleTimeout, onTimeout: () => const <void>[]);
   }
+
+  /// Make [url] the reel on screen and start it playing.
+  ///
+  /// THE ONLY SUPPORTED WAY TO START A VIDEO. Widgets are not meant to call
+  /// `play()` on a controller themselves, and the reason is the class of bug
+  /// this method exists to make impossible.
+  ///
+  /// There used to be two places that started playback — the feed, on a
+  /// vertical swipe, and the battle tile, on a flip to the opponent — and
+  /// only one of them told this service what it had done. So while the user
+  /// watched an opponent's video, [_activeUrl] still named the challenger,
+  /// and everything downstream that asks "what is on screen" got the wrong
+  /// answer: eviction happily disposed the visible player, and the
+  /// initialisation callback muted and paused it. Both showed up as a reel
+  /// frozen on its last frame.
+  ///
+  /// Declaring the reel and starting it are the same act, so they are one
+  /// call. A caller that cannot reach playback without going through the
+  /// declaration cannot forget to make it.
+  ///
+  /// Returns without starting anything if [url] has no live player, or if
+  /// something else claimed the screen while the outgoing players were
+  /// stopping — the user swiping on during the handover.
+  Future<void> showAndPlay(String url) async {
+    await pauseAllExcept(url);
+    // Re-checked AFTER the await rather than before: a second swipe during
+    // the handover runs its own showAndPlay, which sets _activeUrl to the
+    // new reel. Whichever call loses this race must not start a video the
+    // user has already scrolled past.
+    if (_activeUrl != url) return;
+    final entry = _pool.where((e) => e.url == url).firstOrNull;
+    if (entry == null) return;
+    entry.lastUsed = DateTime.now();
+    // ignore: discarded_futures
+    entry.controller.setVolume(activeVolume);
+    // Deliberately not awaited, and deliberately allowed before the player
+    // has initialised: video_player replays a play() issued during startup
+    // once the player is ready, and the feed relies on that to show the
+    // first frame of a cold reel the moment it exists.
+    // ignore: discarded_futures
+    entry.controller.play();
+  }
+
+  /// Stop the reel on screen without giving up its place.
+  ///
+  /// For a deliberate pause — the tap-to-pause gesture. [resumeActive] is
+  /// the other half. Nothing about which reel is on screen changes, so the
+  /// player keeps its audio decoder and its protection from eviction.
+  Future<void> pauseActive() async {
+    final entry = _activeEntry;
+    if (entry == null) return;
+    await entry.controller.pause();
+  }
+
+  /// Start the reel on screen again after [pauseActive].
+  Future<void> resumeActive() async {
+    final entry = _activeEntry;
+    if (entry == null) return;
+    // ignore: discarded_futures
+    entry.controller.setVolume(activeVolume);
+    await entry.controller.play();
+  }
+
+  _PoolEntry? get _activeEntry {
+    final url = _activeUrl;
+    if (url == null) return null;
+    return _pool.where((e) => e.url == url).firstOrNull;
+  }
+
+  /// How long [pauseAllExcept] will wait for the outgoing players.
+  ///
+  /// Long enough that a healthy pause — a method-channel hop and an
+  /// ExoPlayer state change, single-digit milliseconds on device — always
+  /// lands inside it, so the ordering this buys is the normal case. Short
+  /// enough that a player which will never answer costs the user a
+  /// just-noticeable delay rather than a dead reel.
+  static const Duration pauseSettleTimeout = Duration(milliseconds: 300);
 
   /// Pause all controllers (e.g., when app goes to background).
   void pauseAll() {
@@ -667,11 +832,25 @@ class VideoPlayerService {
   }
 
   /// Release a specific controller back to pool (pause it).
-  void release(String url) {
+  Future<void> release(String url) async {
     final entry = _pool.where((e) => e.url == url).firstOrNull;
-    if (entry != null) {
-      entry.controller.pause();
-    }
+    if (entry == null) return;
+    await entry.controller.pause();
+  }
+
+  /// Set the session-wide feed mute and apply it to the reel on screen.
+  ///
+  /// Both halves, because they were split and the split was a bug source.
+  /// The mute button used to flip the flag here and then set the volume on
+  /// whatever the tile thought the active controller was — a second opinion
+  /// about what is on screen, which on a battle flip disagreed with this
+  /// service's. Every other path that restores audible volume already reads
+  /// [activeVolume], so this is the one that was out of step.
+  Future<void> setFeedMuted(bool muted) async {
+    feedMuted.value = muted;
+    final entry = _activeEntry;
+    if (entry == null) return;
+    await entry.controller.setVolume(activeVolume);
   }
 
   /// Whether a controller for the given URL is still alive in the pool.
@@ -816,6 +995,80 @@ class VideoPlayerService {
   @visibleForTesting
   static void Function(VoidCallback release) deferRelease = _afterNextFrame;
 
+  /// Turns audio decoding off, and back on, for a single native player.
+  ///
+  /// A muted player is not a quiet player. [VideoPlayerController.setVolume]
+  /// silences the OUTPUT; the decoder behind it keeps running, holding a
+  /// hardware AAC instance and an AudioTrack for a reel nobody can hear. On
+  /// device that showed up as `Qinput: 126, Render: 0, Drop: 122` — a hundred
+  /// chunks of sound decoded and none of it played — on every warm spare and
+  /// every off-screen PageView neighbour at once.
+  ///
+  /// That is the budget this app actually runs out of. Concurrent hardware
+  /// decoders are a small fixed number set by the SoC, and each warm player
+  /// was spending two slots to use one. Past the limit Android takes decoders
+  /// back mid-playback (`E/MediaCodec: Released by resource manager`), which
+  /// the user sees as a reel frozen on its last frame.
+  ///
+  /// Seam, in the same spirit as [deferRelease]: the real implementation
+  /// needs the Android platform class, and the pool tests run against a fake
+  /// platform that is deliberately none of the real ones. Swapping this lets
+  /// them assert WHEN the pool asks for audio to be dropped and restored,
+  /// which is the part that can be wrong, without pretending to be ExoPlayer.
+  @visibleForTesting
+  static Future<void> Function(VideoPlayerController controller,
+      {required bool enabled}) setPlayerAudio = _platformSetPlayerAudio;
+
+  /// The production [setPlayerAudio]: hand the request to the Android plugin.
+  ///
+  /// Android-only, and silently a no-op everywhere else. The method is a
+  /// local addition to our vendored copy of `video_player_android` — see
+  /// third_party/video_player_android/LOCAL_CHANGES.md — so it does not exist
+  /// on `VideoPlayerPlatform` and the cast is how it is reached. iOS and web
+  /// keep the old behaviour: muted, still decoding.
+  static Future<void> _platformSetPlayerAudio(
+    VideoPlayerController controller, {
+    required bool enabled,
+  }) async {
+    final platform = VideoPlayerPlatform.instance;
+    if (platform is! AndroidVideoPlayer) return;
+    // The player is addressed by its data source rather than by its id: the
+    // id is only reachable through VideoPlayerController.playerId, which
+    // upstream marks @visibleForTesting and documents as "shouldn't be used
+    // by anyone depending on the plugin". dataSource is public API and is the
+    // same string the plugin stored the player under.
+    try {
+      final applied = await platform.setAudioEnabledForSource(
+        controller.dataSource,
+        enabled: enabled,
+      );
+      // A player the plugin has no record of. The normal reasons are benign
+      // — it was disposed while this call was in flight, or it has not
+      // finished being created — but a lasting mismatch between the string we
+      // hold and the one it stored would make every call here a silent no-op,
+      // and nothing else in the app would notice. Loud in debug, ignored in
+      // release, where a missed decoder is not worth a crash.
+      assert(
+        applied || !controller.value.isInitialized,
+        'No Android player is registered for ${controller.dataSource}, so '
+        'audio decoding was left on. If this fires for an initialised '
+        'controller, dataSource and the plugin\'s stored uri have diverged.',
+      );
+    } catch (_) {
+      // A player disposed mid-call, or a platform that does not implement it.
+      // Audio decoding is a resource optimisation: failing to apply it costs
+      // a decoder slot, never correctness, and must not break playback.
+    }
+  }
+
+  /// Apply [enabled] to [entry] if it is not already in that state.
+  void _setEntryAudio(_PoolEntry entry, {required bool enabled}) {
+    if (entry.audioEnabled == enabled) return;
+    entry.audioEnabled = enabled;
+    // ignore: discarded_futures
+    setPlayerAudio(entry.controller, enabled: enabled);
+  }
+
   static void _afterNextFrame(VoidCallback release) {
     final binding = WidgetsBinding.instance;
     binding.addPostFrameCallback((_) => release());
@@ -862,6 +1115,15 @@ class VideoPlayerService {
 
   @visibleForTesting
   List<String> get debugPoolUrls => _pool.map((e) => e.url).toList();
+
+  /// The reel this service believes is on screen.
+  ///
+  /// Worth asserting on directly: when this disagreed with what was actually
+  /// playing, the visible player lost its protection from eviction and got
+  /// muted by its own initialisation callback, and nothing in the pool's
+  /// other observable state said so.
+  @visibleForTesting
+  String? get debugActiveUrl => _activeUrl;
 }
 
 class _PoolEntry {
@@ -872,6 +1134,13 @@ class _PoolEntry {
   /// getController returns an existing prefetched controller.
   bool isPrefetch;
   DateTime lastUsed;
+
+  /// Whether this player is currently decoding its audio track.
+  ///
+  /// Tracked so the pool only crosses the platform channel when the answer
+  /// actually changes. Players are born decoding audio — the flag starts
+  /// true to match, not because we asked for it.
+  bool audioEnabled = true;
 
   _PoolEntry({
     required this.controller,
