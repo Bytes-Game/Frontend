@@ -747,6 +747,74 @@ class VideoPlayerService {
         .timeout(pauseSettleTimeout, onTimeout: () => const <void>[]);
   }
 
+  /// Make [url] the reel on screen and start it playing.
+  ///
+  /// THE ONLY SUPPORTED WAY TO START A VIDEO. Widgets are not meant to call
+  /// `play()` on a controller themselves, and the reason is the class of bug
+  /// this method exists to make impossible.
+  ///
+  /// There used to be two places that started playback — the feed, on a
+  /// vertical swipe, and the battle tile, on a flip to the opponent — and
+  /// only one of them told this service what it had done. So while the user
+  /// watched an opponent's video, [_activeUrl] still named the challenger,
+  /// and everything downstream that asks "what is on screen" got the wrong
+  /// answer: eviction happily disposed the visible player, and the
+  /// initialisation callback muted and paused it. Both showed up as a reel
+  /// frozen on its last frame.
+  ///
+  /// Declaring the reel and starting it are the same act, so they are one
+  /// call. A caller that cannot reach playback without going through the
+  /// declaration cannot forget to make it.
+  ///
+  /// Returns without starting anything if [url] has no live player, or if
+  /// something else claimed the screen while the outgoing players were
+  /// stopping — the user swiping on during the handover.
+  Future<void> showAndPlay(String url) async {
+    await pauseAllExcept(url);
+    // Re-checked AFTER the await rather than before: a second swipe during
+    // the handover runs its own showAndPlay, which sets _activeUrl to the
+    // new reel. Whichever call loses this race must not start a video the
+    // user has already scrolled past.
+    if (_activeUrl != url) return;
+    final entry = _pool.where((e) => e.url == url).firstOrNull;
+    if (entry == null) return;
+    entry.lastUsed = DateTime.now();
+    // ignore: discarded_futures
+    entry.controller.setVolume(activeVolume);
+    // Deliberately not awaited, and deliberately allowed before the player
+    // has initialised: video_player replays a play() issued during startup
+    // once the player is ready, and the feed relies on that to show the
+    // first frame of a cold reel the moment it exists.
+    // ignore: discarded_futures
+    entry.controller.play();
+  }
+
+  /// Stop the reel on screen without giving up its place.
+  ///
+  /// For a deliberate pause — the tap-to-pause gesture. [resumeActive] is
+  /// the other half. Nothing about which reel is on screen changes, so the
+  /// player keeps its audio decoder and its protection from eviction.
+  Future<void> pauseActive() async {
+    final entry = _activeEntry;
+    if (entry == null) return;
+    await entry.controller.pause();
+  }
+
+  /// Start the reel on screen again after [pauseActive].
+  Future<void> resumeActive() async {
+    final entry = _activeEntry;
+    if (entry == null) return;
+    // ignore: discarded_futures
+    entry.controller.setVolume(activeVolume);
+    await entry.controller.play();
+  }
+
+  _PoolEntry? get _activeEntry {
+    final url = _activeUrl;
+    if (url == null) return null;
+    return _pool.where((e) => e.url == url).firstOrNull;
+  }
+
   /// How long [pauseAllExcept] will wait for the outgoing players.
   ///
   /// Long enough that a healthy pause — a method-channel hop and an
@@ -764,11 +832,25 @@ class VideoPlayerService {
   }
 
   /// Release a specific controller back to pool (pause it).
-  void release(String url) {
+  Future<void> release(String url) async {
     final entry = _pool.where((e) => e.url == url).firstOrNull;
-    if (entry != null) {
-      entry.controller.pause();
-    }
+    if (entry == null) return;
+    await entry.controller.pause();
+  }
+
+  /// Set the session-wide feed mute and apply it to the reel on screen.
+  ///
+  /// Both halves, because they were split and the split was a bug source.
+  /// The mute button used to flip the flag here and then set the volume on
+  /// whatever the tile thought the active controller was — a second opinion
+  /// about what is on screen, which on a battle flip disagreed with this
+  /// service's. Every other path that restores audible volume already reads
+  /// [activeVolume], so this is the one that was out of step.
+  Future<void> setFeedMuted(bool muted) async {
+    feedMuted.value = muted;
+    final entry = _activeEntry;
+    if (entry == null) return;
+    await entry.controller.setVolume(activeVolume);
   }
 
   /// Whether a controller for the given URL is still alive in the pool.
@@ -1033,6 +1115,15 @@ class VideoPlayerService {
 
   @visibleForTesting
   List<String> get debugPoolUrls => _pool.map((e) => e.url).toList();
+
+  /// The reel this service believes is on screen.
+  ///
+  /// Worth asserting on directly: when this disagreed with what was actually
+  /// playing, the visible player lost its protection from eviction and got
+  /// muted by its own initialisation callback, and nothing in the pool's
+  /// other observable state said so.
+  @visibleForTesting
+  String? get debugActiveUrl => _activeUrl;
 }
 
 class _PoolEntry {

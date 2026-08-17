@@ -184,6 +184,11 @@ void main() {
     };
     await service.disposeAll();
     ReelDiagnostics.instance.debugReset();
+    // Session state, not pool state, so disposeAll deliberately leaves it
+    // alone — which makes it the one thing that leaks between tests here.
+    // Every path that restores audible volume reads activeVolume, so a stray
+    // mute turns unrelated volume assertions into confusing failures.
+    service.feedMuted.value = false;
     service.configure(
       const VideoPoolConfig(
         maxPoolSize: 4,
@@ -753,6 +758,106 @@ void main() {
         VideoPoolConfig.fallback.maxPoolSize,
         lessThanOrEqualTo(VideoPoolConfig.maxConcurrentDecoders),
       );
+    });
+  });
+
+  group('one place decides what is playing', () {
+    // Playback used to be startable from two places — the feed on a swipe,
+    // the battle tile on a flip — and only one of them told the service what
+    // it had done. The service then held the wrong answer to "what is on
+    // screen" for as long as the user watched an opponent, and everything
+    // that reads it got that wrong answer: eviction disposed the visible
+    // player, the init callback muted and paused it. Starting a reel and
+    // declaring it are one call now, so they cannot disagree.
+    test('starting a reel is what declares it', () async {
+      service.getController(url(0));
+      await settle();
+
+      await service.showAndPlay(url(0));
+
+      expect(service.debugActiveUrl, url(0));
+      expect(platform.paused, isNot(contains(platform.idFor(url(0)))));
+    });
+
+    test('the reel it starts is the one eviction protects', () async {
+      // The whole point. A player the service does not know is on screen is
+      // an eviction candidate while the user is watching it, and eviction
+      // disposes it — a picture frozen on its last frame.
+      service.getController(url(0));
+      await settle();
+      await service.showAndPlay(url(0));
+
+      for (var i = 1; i <= 8; i++) {
+        await open(url(i));
+      }
+      await presentFrame();
+
+      expect(service.debugPoolUrls, contains(url(0)));
+    });
+
+    test('a reel the user has already swiped past is not started', () async {
+      // showAndPlay waits for the outgoing players before starting the
+      // incoming one, and the user can swipe again inside that wait. The
+      // call that loses the race must give up rather than start a video that
+      // is no longer on screen — otherwise it plays underneath the new one.
+      await watch(url(0));
+      await open(url(1));
+      await settle();
+
+      final first = service.showAndPlay(url(0));
+      final second = service.showAndPlay(url(1));
+      await Future.wait([first, second]);
+
+      expect(service.debugActiveUrl, url(1));
+      expect(
+        platform.paused,
+        contains(platform.idFor(url(0))),
+        reason: 'the reel that lost the race must not be left playing',
+      );
+    });
+
+    test('starting an unknown reel changes nothing about playback', () async {
+      await watch(url(0));
+      await settle();
+
+      await service.showAndPlay(url(5));
+
+      expect(
+        platform.createdFor.values,
+        isNot(contains(url(5))),
+        reason: 'showAndPlay starts an existing player; it does not open one',
+      );
+    });
+
+    test('a deliberate pause does not give up the screen', () async {
+      // Tap-to-pause is not a change of which reel is on screen. If it were
+      // treated as one the player would lose its audio decoder and its
+      // protection from eviction while the user sat looking at it.
+      await watch(url(0));
+      await settle();
+      await service.showAndPlay(url(0));
+
+      await service.pauseActive();
+
+      expect(service.debugActiveUrl, url(0));
+      expect(platform.paused, contains(platform.idFor(url(0))));
+
+      await service.resumeActive();
+
+      expect(platform.paused, isNot(contains(platform.idFor(url(0)))));
+    });
+
+    test('muting the feed reaches whichever reel is on screen', () async {
+      // The mute button used to set the volume on whatever the TILE thought
+      // was active, which is a second opinion about what is on screen, and
+      // on a battle flip it was the wrong one.
+      await watch(url(0));
+      await open(url(1));
+      await service.showAndPlay(url(1));
+
+      await service.setFeedMuted(true);
+
+      expect(platform.volume[platform.idFor(url(1))], 0);
     });
   });
 

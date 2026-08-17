@@ -686,22 +686,16 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     }
     final state = _getPlayerState(_currentIndex);
     if (state == null) return;
-    // Await the stop before the start: play() is what requests AudioFocus,
-    // and taking focus while the outgoing player is still decoding is the
-    // audible chop on every swipe. See [pauseAllExcept].
-    await VideoPlayerService.instance.pauseAllExcept(url);
-    // The user can swipe again inside that await. Whatever this method was
-    // called for is no longer on screen if they did, and starting it now
-    // would leave an off-screen reel playing over the new one.
+    // One call, because declaring which reel is on screen and starting it are
+    // the same act — see [VideoPlayerService.showAndPlay]. It stops the
+    // outgoing players before starting this one (play() is what requests
+    // AudioFocus, and taking focus while the old player is still decoding is
+    // the audible chop on every swipe) and it declines to start anything if
+    // the user swiped on during that handover.
+    await VideoPlayerService.instance.showAndPlay(url);
+    // The service guards its own half of that race; this guards ours, so a
+    // watch event is not recorded against a reel that is no longer on screen.
     if (!mounted || _currentIndex != index) return;
-    // Belt-and-suspenders: pool-promoted controllers should already be
-    // at volume 1.0 via getController(), but setting it right before
-    // play guarantees audible output in case a prefetch entry was
-    // muted mid-promote.
-    // ignore: discarded_futures
-    state.controller.setVolume(VideoPlayerService.instance.activeVolume);
-    // ignore: discarded_futures
-    state.controller.play();
 
     // Watch this reel's playback for complete/loop signals.
     _attachPlaybackListener(item, state.controller);
@@ -2150,12 +2144,15 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
 
   void _togglePause() {
     final activeController = _activeState.controller;
+    // Through the service, like every other start and stop — see
+    // [VideoPlayerService.showAndPlay]. A deliberate pause does not change
+    // which reel is on screen, so this pair does not touch that.
     if (_isPaused) {
       // ignore: discarded_futures
-      activeController.play();
+      VideoPlayerService.instance.resumeActive();
     } else {
       // ignore: discarded_futures
-      activeController.pause();
+      VideoPlayerService.instance.pauseActive();
     }
     setState(() => _isPaused = !_isPaused);
     // Deliberate pauses are retention signals (reading a caption,
@@ -2183,9 +2180,12 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   void _toggleMute() {
     final svc = VideoPlayerService.instance;
     final nowMuted = !svc.feedMuted.value;
-    svc.feedMuted.value = nowMuted;
+    // The service owns the session-wide mute AND applying it to the reel on
+    // screen. Doing the second half here meant this tile's idea of "the
+    // active controller" had to agree with the service's, and on a battle
+    // flip it did not — see [VideoPlayerService.showAndPlay].
     // ignore: discarded_futures
-    _activeState.controller.setVolume(nowMuted ? 0.0 : 1.0);
+    svc.setFeedMuted(nowMuted);
     if (!nowMuted) {
       EventTracker.instance.trackUnmute(
         contentId: widget.item.id,
@@ -2403,22 +2403,23 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     // ever asks for the challenger, so the call below is unreachable from
     // that path; the order is what keeps it unreachable.
     if (!widget.isActive) {
+      final opponentUrl = _opponentState?.url;
+      if (opponentUrl != null) {
+        // ignore: discarded_futures
+        VideoPlayerService.instance.release(opponentUrl);
+      }
       // ignore: discarded_futures
-      _opponentState?.controller.pause();
-      // ignore: discarded_futures
-      widget.state.controller.pause();
+      VideoPlayerService.instance.release(widget.state.url);
       return;
     }
 
     final incoming = show ? _ensureOpponentState() : widget.state;
-    await VideoPlayerService.instance.pauseAllExcept(incoming.url);
-    // The cube is finger-driven and the user can turn it back, or swipe
-    // the tile away, inside that await.
-    if (!mounted || _showingOpponent != show || !widget.isActive) return;
-    // ignore: discarded_futures
-    incoming.controller.setVolume(VideoPlayerService.instance.activeVolume);
-    // ignore: discarded_futures
-    incoming.controller.play();
+    // Same call the vertical swipe makes. That is the point: a flip is a
+    // change of which reel is on screen, and it goes through the one place
+    // that records that, rather than starting a player behind the service's
+    // back — which is exactly what used to leave the opponent unprotected
+    // from eviction and muted by its own initialisation callback.
+    await VideoPlayerService.instance.showAndPlay(incoming.url);
   }
 
   /// Animate the cube from wherever it currently is to fully showing
