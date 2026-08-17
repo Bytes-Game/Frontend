@@ -157,10 +157,10 @@ Future<int> _runSeed(HttpClient http, _Session session, _Args args) async {
   // on a backend that is sharing one free-tier instance with the app.
   final created = <Map<String, dynamic>>[];
 
-  /// Files that reached the bucket but that no feed item points at. Reported
-  /// at the end so they can be deleted by hand — the upload link the backend
-  /// hands out is write-only, so this script cannot remove them itself.
-  final orphaned = <String>[];
+  /// Feed items that were created but whose video never made it to the
+  /// bucket. They are in the ledger, so --cleanup removes them; this list is
+  /// only so the run can say plainly that it left something broken.
+  final broken = <String>[];
   var consecutiveFailures = 0;
 
   for (var i = 0; i < args.count; i++) {
@@ -173,41 +173,64 @@ Future<int> _runSeed(HttpClient http, _Session session, _Args args) async {
     final label = 'seed ${i + 1}/${args.count}';
     stdout.write('  $label  ${clip.name} ... ');
 
-    final url = await _uploadOne(http, session, clip);
-    if (url == null) {
-      stdout.writeln('upload failed — ${_lastError ?? 'unknown reason'}');
+    // Reserve a place in the bucket. This sends no video, and the backend
+    // tells us the address the video will have, which is the whole trick:
+    // the feed item can be created before a single byte is uploaded.
+    final slot = await _reserveSlot(http, session);
+    if (slot == null) {
+      stdout.writeln('could not get an upload link — '
+          '${_lastError ?? 'unknown reason'}');
+      if (++consecutiveFailures >= 3) {
+        stdout.writeln('\nThree failures in a row. Stopping.');
+        break;
+      }
       continue;
     }
 
-    final id = await _createChallenge(http, session, url, n);
+    // Create the feed item BEFORE uploading.
+    //
+    // The obvious order is upload, then post. It is also the wrong one. The
+    // backend only accepts a couple of new posts per account per hour, so
+    // filling a feed means running into that limit constantly — and doing it
+    // in the obvious order means every refusal has already pushed a video
+    // into the bucket that nothing will ever point at. One run stranded five
+    // files that way before this was fixed. Asking first costs nothing when
+    // the answer is no.
+    final id = await _createChallenge(http, session, slot.publicUrl, n);
     if (id == null) {
       final why = _lastError;
-      stdout.writeln('uploaded, but the feed item was refused — '
-          '${why ?? 'unknown reason'}');
-
-      // The file is in the bucket and nothing points at it. Write it down:
-      // an upload nobody can reach is invisible otherwise, and it still
-      // costs storage.
-      orphaned.add(url);
-
+      stdout.writeln('refused — ${why ?? 'unknown reason'} (nothing uploaded)');
       if (why != null && why.isRateLimit) {
-        stdout.writeln('\nThe backend is rate limiting new posts, so every '
-            'further attempt would upload a file and then be turned down '
-            'the same way. Stopping here rather than filling the bucket '
-            'with videos nothing links to.');
+        stdout.writeln('  this account has posted its allowance for now.');
         break;
       }
-      // Something other than a rate limit. Give it a few tries in case it is
-      // a blip, then stop for the same reason.
       if (++consecutiveFailures >= 3) {
-        stdout.writeln('\nThree refusals in a row. Stopping rather than '
-            'uploading more files nothing will point at.');
+        stdout.writeln('\nThree refusals in a row. Stopping.');
         break;
       }
       continue;
     }
+
+    // The feed item exists; now put the video where it says it is. For the
+    // few seconds in between, the item points at a video that is not there
+    // yet — which is why the upload failing here is worth shouting about.
+    if (!await _putBytes(http, slot, clip)) {
+      stdout.writeln('feed item $id created, but the upload FAILED — '
+          '${_lastError ?? 'unknown reason'}');
+      stdout.writeln('  that item now points at a video that is not there. '
+          'It is recorded, so --cleanup will remove it.');
+      broken.add(id);
+      created.add({'id': id, 'videoUrl': slot.publicUrl, 'uploadFailed': true});
+      await _writeLedger(created);
+      if (++consecutiveFailures >= 3) {
+        stdout.writeln('\nThree failures in a row. Stopping.');
+        break;
+      }
+      continue;
+    }
+
     consecutiveFailures = 0;
-    created.add({'id': id, 'videoUrl': url});
+    created.add({'id': id, 'videoUrl': slot.publicUrl});
     stdout.writeln('ok');
 
     // Save after every item. If this run dies halfway, cleanup still knows
@@ -221,20 +244,31 @@ Future<int> _runSeed(HttpClient http, _Session session, _Args args) async {
   for (var i = 0; i < args.battles && i < created.length; i++) {
     final clip = clips[(i + 1) % clips.length];
     stdout.write('  battle ${i + 1}/${args.battles} ... ');
-    // Uploaded as the responder, because the storage key is built from the
-    // uploader's ID and the answer belongs to them.
-    final url = await _uploadOne(http, responder, clip);
-    if (url == null) {
-      stdout.writeln('upload failed, skipping');
+    // Same order as above, and for the same reason: ask first, upload only
+    // once the answer has been accepted. The slot is reserved as the
+    // responder, because the storage key is built from the uploader's ID and
+    // the answer belongs to them.
+    final slot = await _reserveSlot(http, responder);
+    if (slot == null) {
+      stdout.writeln('could not get an upload link — '
+          '${_lastError ?? 'unknown reason'}');
       continue;
     }
     final ok = await _acceptChallenge(
-        http, responder, created[i]['id'] as String, url);
-    stdout.writeln(ok
-        ? 'ok'
-        : 'rejected — the backend may not let you answer your own challenge; '
-            'pass --responder-user/--responder-password for a second account');
-    if (ok) battlesMade++;
+        http, responder, created[i]['id'] as String, slot.publicUrl);
+    if (!ok) {
+      stdout.writeln('rejected — ${_lastError ?? 'unknown reason'} '
+          '(nothing uploaded). If this is about answering your own '
+          'challenge, pass --responder-user/--responder-password.');
+      continue;
+    }
+    if (!await _putBytes(http, slot, clip)) {
+      stdout.writeln('answer accepted, but the upload FAILED — '
+          '${_lastError ?? 'unknown reason'}');
+      continue;
+    }
+    stdout.writeln('ok');
+    battlesMade++;
   }
 
   stdout.writeln('\nDone. ${created.length} new feed items, '
@@ -243,20 +277,29 @@ Future<int> _runSeed(HttpClient http, _Session session, _Args args) async {
     stdout.writeln('Written to $_ledgerPath — '
         'run with --cleanup --yes to remove them again.');
   }
-  if (orphaned.isNotEmpty) {
-    stdout.writeln('\n${orphaned.length} file(s) reached the bucket but have '
-        'no feed item pointing at them. Nothing in the app will ever load '
-        'them, but they still take up space, so delete them from R2 by hand:');
-    for (final url in orphaned) {
-      stdout.writeln('  $url');
-    }
+  if (broken.isNotEmpty) {
+    stdout.writeln('\n${broken.length} feed item(s) were created but their '
+        'video did not upload, so they will not play: ${broken.join(', ')}. '
+        'They are in the ledger — run --cleanup --yes to remove them.');
   }
-  return created.isEmpty && orphaned.isNotEmpty ? 1 : 0;
+  return broken.isNotEmpty ? 1 : 0;
 }
 
-/// Signed link, then PUT the bytes to R2. Returns the public URL.
-Future<String?> _uploadOne(
-    HttpClient http, _Session session, _Clip clip) async {
+/// A place in the bucket to put one video: where to send the bytes, and the
+/// address the video will have once they are there.
+class _Slot {
+  _Slot(this.uploadUrl, this.publicUrl);
+
+  /// Write-only, signed, expires in minutes.
+  final String uploadUrl;
+
+  /// Where the video will be readable. Known before a single byte is sent,
+  /// which is what lets the feed item be created first.
+  final String publicUrl;
+}
+
+/// Asks the backend where to put a video. Sends nothing.
+Future<_Slot?> _reserveSlot(HttpClient http, _Session session) async {
   final presign = await _postJson(http, '/api/v1/media/presign', session, {
     'userId': session.userId,
     'items': [
@@ -271,19 +314,27 @@ Future<String?> _uploadOne(
   final uploadUrl = item['uploadUrl'] as String?;
   final publicUrl = item['publicUrl'] as String?;
   if (uploadUrl == null || publicUrl == null) return null;
+  return _Slot(uploadUrl, publicUrl);
+}
 
+/// Sends the actual video to the bucket.
+Future<bool> _putBytes(HttpClient http, _Slot slot, _Clip clip) async {
   try {
-    final req = await http.putUrl(Uri.parse(uploadUrl));
+    final req = await http.putUrl(Uri.parse(slot.uploadUrl));
     req.headers.set(HttpHeaders.contentTypeHeader, 'video/mp4');
     req.headers.set(HttpHeaders.contentLengthHeader, clip.bytes.length);
     req.add(clip.bytes);
     final res = await req.close().timeout(_timeout);
     await res.drain<void>();
-    if (res.statusCode < 200 || res.statusCode >= 300) return null;
-  } catch (_) {
-    return null;
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      _lastError = _HttpError(res.statusCode, 'upload refused by storage');
+      return false;
+    }
+    return true;
+  } catch (e) {
+    _lastError = _HttpError(0, '$e');
+    return false;
   }
-  return publicUrl;
 }
 
 Future<String?> _createChallenge(
