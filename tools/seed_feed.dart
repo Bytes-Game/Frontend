@@ -156,6 +156,13 @@ Future<int> _runSeed(HttpClient http, _Session session, _Args args) async {
   // in a while on a desktop, and a steady pace is easier to read and easier
   // on a backend that is sharing one free-tier instance with the app.
   final created = <Map<String, dynamic>>[];
+
+  /// Files that reached the bucket but that no feed item points at. Reported
+  /// at the end so they can be deleted by hand — the upload link the backend
+  /// hands out is write-only, so this script cannot remove them itself.
+  final orphaned = <String>[];
+  var consecutiveFailures = 0;
+
   for (var i = 0; i < args.count; i++) {
     final clip = clips[i % clips.length];
     final label = 'seed ${i + 1}/${args.count}';
@@ -163,15 +170,38 @@ Future<int> _runSeed(HttpClient http, _Session session, _Args args) async {
 
     final url = await _uploadOne(http, session, clip);
     if (url == null) {
-      stdout.writeln('upload failed, skipping');
+      stdout.writeln('upload failed — ${_lastError ?? 'unknown reason'}');
       continue;
     }
 
     final id = await _createChallenge(http, session, url, i);
     if (id == null) {
-      stdout.writeln('uploaded, but creating the feed item failed');
+      final why = _lastError;
+      stdout.writeln('uploaded, but the feed item was refused — '
+          '${why ?? 'unknown reason'}');
+
+      // The file is in the bucket and nothing points at it. Write it down:
+      // an upload nobody can reach is invisible otherwise, and it still
+      // costs storage.
+      orphaned.add(url);
+
+      if (why != null && why.isRateLimit) {
+        stdout.writeln('\nThe backend is rate limiting new posts, so every '
+            'further attempt would upload a file and then be turned down '
+            'the same way. Stopping here rather than filling the bucket '
+            'with videos nothing links to.');
+        break;
+      }
+      // Something other than a rate limit. Give it a few tries in case it is
+      // a blip, then stop for the same reason.
+      if (++consecutiveFailures >= 3) {
+        stdout.writeln('\nThree refusals in a row. Stopping rather than '
+            'uploading more files nothing will point at.');
+        break;
+      }
       continue;
     }
+    consecutiveFailures = 0;
     created.add({'id': id, 'videoUrl': url});
     stdout.writeln('ok');
 
@@ -204,9 +234,19 @@ Future<int> _runSeed(HttpClient http, _Session session, _Args args) async {
 
   stdout.writeln('\nDone. ${created.length} new feed items, '
       '$battlesMade of them battles.');
-  stdout.writeln('Written to $_ledgerPath — '
-      'run with --cleanup --yes to remove them again.');
-  return 0;
+  if (created.isNotEmpty) {
+    stdout.writeln('Written to $_ledgerPath — '
+        'run with --cleanup --yes to remove them again.');
+  }
+  if (orphaned.isNotEmpty) {
+    stdout.writeln('\n${orphaned.length} file(s) reached the bucket but have '
+        'no feed item pointing at them. Nothing in the app will ever load '
+        'them, but they still take up space, so delete them from R2 by hand:');
+    for (final url in orphaned) {
+      stdout.writeln('  $url');
+    }
+  }
+  return created.isEmpty && orphaned.isNotEmpty ? 1 : 0;
 }
 
 /// Signed link, then PUT the bytes to R2. Returns the public URL.
@@ -525,12 +565,42 @@ Future<Map<String, dynamic>?> _postJson(HttpClient http, String path,
     req.write(json.encode(payload));
     final res = await req.close().timeout(_timeout);
     final text = await res.transform(utf8.decoder).join();
-    if (res.statusCode < 200 || res.statusCode >= 300) return null;
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      // Remember why, so the caller can say something useful. The first
+      // version of this script threw the status away and reported every
+      // refusal as "failed", which hid a plain 429 behind a shrug and cost
+      // a pile of uploads before anyone knew what was wrong.
+      _lastError = _HttpError(res.statusCode, text.trim());
+      return null;
+    }
     if (text.trim().isEmpty) return <String, dynamic>{};
     final decoded = json.decode(text);
     return decoded is Map<String, dynamic> ? decoded : {'value': decoded};
-  } catch (_) {
+  } catch (e) {
+    _lastError = _HttpError(0, '$e');
     return null;
+  }
+}
+
+/// Why the most recent request failed. Read straight after a call returns
+/// null, before anything else runs.
+_HttpError? _lastError;
+
+class _HttpError {
+  _HttpError(this.status, this.body);
+
+  /// The HTTP status, or 0 if the request never got an answer at all.
+  final int status;
+  final String body;
+
+  /// True when the server is telling us to slow down or stop for now.
+  bool get isRateLimit => status == 429;
+
+  @override
+  String toString() {
+    if (status == 0) return 'no answer from the server ($body)';
+    final short = body.length > 160 ? '${body.substring(0, 160)}...' : body;
+    return 'HTTP $status${short.isEmpty ? '' : ' — $short'}';
   }
 }
 
