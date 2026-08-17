@@ -164,7 +164,12 @@ Future<int> _runSeed(HttpClient http, _Session session, _Args args) async {
   var consecutiveFailures = 0;
 
   for (var i = 0; i < args.count; i++) {
-    final clip = clips[i % clips.length];
+    // --start-index shifts which clip this run begins on. It matters because
+    // the rate limit means a feed gets filled by running this several times
+    // with different accounts, and without a shift every run would post the
+    // same first few videos over and over.
+    final n = i + args.startIndex;
+    final clip = clips[n % clips.length];
     final label = 'seed ${i + 1}/${args.count}';
     stdout.write('  $label  ${clip.name} ... ');
 
@@ -174,7 +179,7 @@ Future<int> _runSeed(HttpClient http, _Session session, _Args args) async {
       continue;
     }
 
-    final id = await _createChallenge(http, session, url, i);
+    final id = await _createChallenge(http, session, url, n);
     if (id == null) {
       final why = _lastError;
       stdout.writeln('uploaded, but the feed item was refused — '
@@ -468,10 +473,37 @@ Future<int> _runCleanup(
   return deleted == rows.length ? 0 : 1;
 }
 
+/// Saves what this run created, keeping whatever earlier runs recorded.
+///
+/// It merges rather than replaces because the rate limit makes several runs
+/// the normal way to use this: one account can only post a couple of items
+/// per hour, so filling a feed means running again with another account.
+/// An overwrite would leave the ledger describing only the last batch, and
+/// --cleanup would quietly walk past everything else.
 Future<void> _writeLedger(List<Map<String, dynamic>> rows) async {
   final file = File(_ledgerPath);
   await file.parent.create(recursive: true);
-  await file.writeAsString(const JsonEncoder.withIndent('  ').convert(rows));
+
+  final seen = <String>{};
+  final merged = <Map<String, dynamic>>[];
+  for (final row in [...await _readLedger(), ...rows]) {
+    final id = row['id'];
+    if (id is String && seen.add(id)) merged.add(row);
+  }
+  await file.writeAsString(const JsonEncoder.withIndent('  ').convert(merged));
+}
+
+Future<List<Map<String, dynamic>>> _readLedger() async {
+  final file = File(_ledgerPath);
+  if (!file.existsSync()) return const [];
+  try {
+    return (json.decode(await file.readAsString()) as List)
+        .cast<Map<String, dynamic>>();
+  } catch (_) {
+    // A half-written or hand-edited file. Better to keep going and re-record
+    // than to refuse to run.
+    return const [];
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -621,6 +653,8 @@ Add videos to the feed so the reels player can be tested on a bigger catalogue.
   --responder-user NAME    second account, used to answer battles
   --responder-password P   its password
   --cleanup                delete everything this script created
+  --start-index N          begin at the Nth clip in the list, so repeat
+                           runs with other accounts post different videos
   --api-base URL           talk to a different backend (staging, or a stub)
   --yes                    actually do it (without this you only see a plan)
 
@@ -638,6 +672,7 @@ class _Args {
   String? urlsFile;
   String? responderUser;
   String? responderPassword;
+  int startIndex = 0;
   bool cleanup = false;
   bool yes = false;
   String? apiBase;
@@ -671,6 +706,9 @@ class _Args {
           i++;
         case '--responder-password':
           a.responderPassword = next(i);
+          i++;
+        case '--start-index':
+          a.startIndex = int.tryParse(next(i) ?? '') ?? a.startIndex;
           i++;
         case '--api-base':
           a.apiBase = next(i);
