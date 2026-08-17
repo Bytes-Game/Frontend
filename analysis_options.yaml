@@ -9,6 +9,15 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  exclude:
+    # Vendored upstream package. It is Flutter-team code held as close to the
+    # original as possible so the one local change stays easy to re-apply on a
+    # newer release — see third_party/video_player_android/LOCAL_CHANGES.md.
+    # Holding it to this app's lint set would mean editing code we want to
+    # keep diffable, and two of its files are generated anyway.
+    - third_party/**
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

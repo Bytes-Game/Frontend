@@ -3,6 +3,14 @@ import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 import 'package:video_player/video_player.dart';
+// Reached only through the `is AndroidVideoPlayer` test in
+// [VideoPlayerService._platformSetPlayerAudio]. Importing the Android
+// implementation directly is unusual and deliberate: turning a player's audio
+// decoding off is a local addition to our vendored copy of the plugin, so it
+// is not on VideoPlayerPlatform and cannot be reached generically. See
+// third_party/video_player_android/LOCAL_CHANGES.md.
+import 'package:video_player_android/video_player_android.dart';
+import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
@@ -276,6 +284,10 @@ class VideoPlayerService {
       // are created muted so a paused, off-screen video can't fight
       // the active reel for AudioFocus.
       existing.controller.setVolume(activeVolume);
+      // A spare also had its audio decoder taken away; asking for it back
+      // here means the sound is ready by the time the reel is played rather
+      // than a track re-selection behind the first frame.
+      _setEntryAudio(existing, enabled: true);
       return existing.controller;
     }
 
@@ -299,6 +311,14 @@ class VideoPlayerService {
           // path runs for tiles the user cannot see yet, and those must come
           // up silent rather than relying on a later sweep to quieten them.
           controller.setVolume(_volumeFor(url));
+          // Silent is not enough: a neighbour tile that never plays still
+          // decodes its whole audio track. Drop it until the reel is the one
+          // on screen, at which point pauseAllExcept hands it back. Looked up
+          // by URL because the entry may have been evicted while we waited.
+          if (url != _activeUrl) {
+            final entry = _pool.where((e) => e.url == url).firstOrNull;
+            if (entry != null) _setEntryAudio(entry, enabled: false);
+          }
           // And stopped. A tile can call play() on its controller before
           // initialisation lands — the feed does exactly that in
           // _playCurrent — and video_player replays that request the moment
@@ -613,7 +633,19 @@ class VideoPlayerService {
           // promote path in getController restores volume. No pause needed:
           // nothing ever calls play() on a spare, and video_player leaves a
           // controller that was not playing paused once it initialises.
-          controller.setVolume(0);
+          //
+          // Via [_volumeFor] rather than a flat 0, because a spare can be
+          // promoted to the reel on screen while it is still initialising —
+          // the user swiping onto it before its first frame lands. Muting
+          // unconditionally here silenced exactly that case, and the sweep
+          // that would have fixed it had already run.
+          controller.setVolume(_volumeFor(next));
+          // Same question, same answer: still a spare means still no reason
+          // to decode a sound track nobody can hear. See [setPlayerAudio].
+          if (next != _activeUrl) {
+            final entry = _pool.where((e) => e.url == next).firstOrNull;
+            if (entry != null) _setEntryAudio(entry, enabled: false);
+          }
         })
         .catchError((_) {
           // Surfaced when the caller actually tries to use this URL.
@@ -686,12 +718,22 @@ class VideoPlayerService {
       if (entry.url != activeUrl) {
         stopping.add(entry.controller.pause());
         stopping.add(entry.controller.setVolume(0));
+        // And stop decoding the sound as well as silencing it. This is the
+        // one place that knows which reel is on screen, so it is the right
+        // place to own the answer for every player at once — see
+        // [setPlayerAudio]. Not awaited: nothing the caller does next
+        // depends on it, and it must not delay the incoming reel.
+        _setEntryAudio(entry, enabled: false);
       } else {
         // Not awaited: the incoming reel's volume is not what the caller
         // is waiting on, and holding play() back for it would add a
         // channel round-trip to every swipe.
         // ignore: discarded_futures
         entry.controller.setVolume(activeVolume);
+        // Give this one its audio decoder back. It may have arrived here as
+        // a silent spare, and a reel on screen that cannot make a sound is
+        // worse than the decoder it costs.
+        _setEntryAudio(entry, enabled: true);
       }
     }
     if (stopping.isEmpty) return;
@@ -871,6 +913,80 @@ class VideoPlayerService {
   @visibleForTesting
   static void Function(VoidCallback release) deferRelease = _afterNextFrame;
 
+  /// Turns audio decoding off, and back on, for a single native player.
+  ///
+  /// A muted player is not a quiet player. [VideoPlayerController.setVolume]
+  /// silences the OUTPUT; the decoder behind it keeps running, holding a
+  /// hardware AAC instance and an AudioTrack for a reel nobody can hear. On
+  /// device that showed up as `Qinput: 126, Render: 0, Drop: 122` — a hundred
+  /// chunks of sound decoded and none of it played — on every warm spare and
+  /// every off-screen PageView neighbour at once.
+  ///
+  /// That is the budget this app actually runs out of. Concurrent hardware
+  /// decoders are a small fixed number set by the SoC, and each warm player
+  /// was spending two slots to use one. Past the limit Android takes decoders
+  /// back mid-playback (`E/MediaCodec: Released by resource manager`), which
+  /// the user sees as a reel frozen on its last frame.
+  ///
+  /// Seam, in the same spirit as [deferRelease]: the real implementation
+  /// needs the Android platform class, and the pool tests run against a fake
+  /// platform that is deliberately none of the real ones. Swapping this lets
+  /// them assert WHEN the pool asks for audio to be dropped and restored,
+  /// which is the part that can be wrong, without pretending to be ExoPlayer.
+  @visibleForTesting
+  static Future<void> Function(VideoPlayerController controller,
+      {required bool enabled}) setPlayerAudio = _platformSetPlayerAudio;
+
+  /// The production [setPlayerAudio]: hand the request to the Android plugin.
+  ///
+  /// Android-only, and silently a no-op everywhere else. The method is a
+  /// local addition to our vendored copy of `video_player_android` — see
+  /// third_party/video_player_android/LOCAL_CHANGES.md — so it does not exist
+  /// on `VideoPlayerPlatform` and the cast is how it is reached. iOS and web
+  /// keep the old behaviour: muted, still decoding.
+  static Future<void> _platformSetPlayerAudio(
+    VideoPlayerController controller, {
+    required bool enabled,
+  }) async {
+    final platform = VideoPlayerPlatform.instance;
+    if (platform is! AndroidVideoPlayer) return;
+    // The player is addressed by its data source rather than by its id: the
+    // id is only reachable through VideoPlayerController.playerId, which
+    // upstream marks @visibleForTesting and documents as "shouldn't be used
+    // by anyone depending on the plugin". dataSource is public API and is the
+    // same string the plugin stored the player under.
+    try {
+      final applied = await platform.setAudioEnabledForSource(
+        controller.dataSource,
+        enabled: enabled,
+      );
+      // A player the plugin has no record of. The normal reasons are benign
+      // — it was disposed while this call was in flight, or it has not
+      // finished being created — but a lasting mismatch between the string we
+      // hold and the one it stored would make every call here a silent no-op,
+      // and nothing else in the app would notice. Loud in debug, ignored in
+      // release, where a missed decoder is not worth a crash.
+      assert(
+        applied || !controller.value.isInitialized,
+        'No Android player is registered for ${controller.dataSource}, so '
+        'audio decoding was left on. If this fires for an initialised '
+        'controller, dataSource and the plugin\'s stored uri have diverged.',
+      );
+    } catch (_) {
+      // A player disposed mid-call, or a platform that does not implement it.
+      // Audio decoding is a resource optimisation: failing to apply it costs
+      // a decoder slot, never correctness, and must not break playback.
+    }
+  }
+
+  /// Apply [enabled] to [entry] if it is not already in that state.
+  void _setEntryAudio(_PoolEntry entry, {required bool enabled}) {
+    if (entry.audioEnabled == enabled) return;
+    entry.audioEnabled = enabled;
+    // ignore: discarded_futures
+    setPlayerAudio(entry.controller, enabled: enabled);
+  }
+
   static void _afterNextFrame(VoidCallback release) {
     final binding = WidgetsBinding.instance;
     binding.addPostFrameCallback((_) => release());
@@ -927,6 +1043,13 @@ class _PoolEntry {
   /// getController returns an existing prefetched controller.
   bool isPrefetch;
   DateTime lastUsed;
+
+  /// Whether this player is currently decoding its audio track.
+  ///
+  /// Tracked so the pool only crosses the platform channel when the answer
+  /// actually changes. Players are born decoding audio — the flag starts
+  /// true to match, not because we asked for it.
+  bool audioEnabled = true;
 
   _PoolEntry({
     required this.controller,

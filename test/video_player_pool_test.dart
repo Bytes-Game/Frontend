@@ -140,6 +140,26 @@ void main() {
 
   String url(int i) => 'https://cdn.example/reel$i.mp4';
 
+  /// Every audio-decoding request the pool made, oldest first, recorded as
+  /// (data source, enabled). The production implementation of this needs the
+  /// Android platform class; the fake platform here is deliberately none of
+  /// the real ones, so the seam is what makes the DECISION testable without
+  /// pretending to be ExoPlayer.
+  late List<(String, bool)> audioCalls;
+
+  /// The pool's most recent instruction for [u], or null if it never gave one.
+  bool? audioFor(String u) {
+    for (final call in audioCalls.reversed) {
+      if (call.$1 == u) return call.$2;
+    }
+    return null;
+  }
+
+  /// Whether [u]'s player is decoding audio. A player is born decoding it, so
+  /// silence from the pool means yes — the pool only ever has to speak up to
+  /// take it away and to hand it back.
+  bool audioOn(String u) => audioFor(u) ?? true;
+
   /// Let every pending initialize/volume/dispose future settle.
   Future<void> settle() => pumpEventQueue(times: 40);
 
@@ -158,6 +178,10 @@ void main() {
     VideoPlayerPlatform.instance = platform;
     pendingReleases = [];
     VideoPlayerService.deferRelease = pendingReleases.add;
+    audioCalls = [];
+    VideoPlayerService.setPlayerAudio = (controller, {required enabled}) async {
+      audioCalls.add((controller.dataSource, enabled));
+    };
     await service.disposeAll();
     ReelDiagnostics.instance.debugReset();
     service.configure(
@@ -729,6 +753,116 @@ void main() {
         VideoPoolConfig.fallback.maxPoolSize,
         lessThanOrEqualTo(VideoPoolConfig.maxConcurrentDecoders),
       );
+    });
+  });
+
+  group('audio decoding off screen', () {
+    // Muting a player silences its OUTPUT. The decoder behind it keeps
+    // running: a hardware AAC instance, an AudioTrack and its thread, and
+    // every chunk of sound decoded and dropped. A device profile caught one
+    // warm spare at "Qinput: 126, Render: 0, Drop: 122". Concurrent hardware
+    // decoders are the budget this app actually runs out of, and every warm
+    // player was spending two slots to use one.
+    test('a warm spare gives up its audio decoder', () async {
+      await watch(url(0));
+
+      service.debugOpenSpare(url(1), warm: true);
+      await settle();
+
+      expect(
+        audioOn(url(1)),
+        isFalse,
+        reason: 'a spare nobody can hear must not decode sound',
+      );
+      expect(
+        audioOn(url(0)),
+        isTrue,
+        reason: 'the reel on screen must keep its audio',
+      );
+    });
+
+    test('an off-screen neighbour gives up its audio decoder too', () async {
+      // The PageView builds the tiles either side of the current one, and
+      // those reach getController directly rather than through the spare
+      // path. They are silent for the same reason and cost the same decoder.
+      await watch(url(0));
+
+      service.getController(url(1));
+      await settle();
+
+      expect(audioOn(url(1)), isFalse);
+    });
+
+    test('promoting a spare hands its audio back', () async {
+      await watch(url(0));
+      service.debugOpenSpare(url(1), warm: true);
+      await settle();
+      expect(audioOn(url(1)), isFalse);
+
+      service.getController(url(1));
+
+      expect(
+        audioOn(url(1)),
+        isTrue,
+        reason: 'asked for on promotion rather than at play(), so the sound '
+            'is ready before the first frame instead of behind it',
+      );
+    });
+
+    test('the sweep moves audio to whichever reel is on screen', () async {
+      // pauseAllExcept is the one place that knows what the user is looking
+      // at, so it owns the answer for every player at once — the same way it
+      // already owns volume.
+      await watch(url(0));
+      await open(url(1));
+      await settle();
+
+      await service.pauseAllExcept(url(1));
+
+      expect(audioOn(url(1)), isTrue);
+      expect(audioOn(url(0)), isFalse);
+    });
+
+    test('a spare promoted before it finishes loading stays audible',
+        () async {
+      // The user can swipe onto a spare while it is still initialising. The
+      // spare's own initialize() continuation runs AFTER that, and used to
+      // mute unconditionally — silencing the reel now on screen, with the
+      // sweep that would have fixed it already run. Volume and audio
+      // decoding both have to ask who is on screen rather than assume.
+      platform.holdInit = true;
+      await watch(url(0));
+      service.debugOpenSpare(url(1), warm: true);
+      await settle();
+
+      // Swipe onto it before its first frame lands.
+      await service.pauseAllExcept(url(1));
+      platform.finishInit(platform.idFor(url(1)));
+      await settle();
+
+      expect(
+        audioOn(url(1)),
+        isTrue,
+        reason: 'the late initialize() must not silence the reel on screen',
+      );
+      expect(
+        platform.volume[platform.idFor(url(1))],
+        isNot(0),
+        reason: 'and must not mute it either',
+      );
+    });
+
+    test('says nothing when nothing changed', () async {
+      // Every call is a platform round trip. Players are born decoding
+      // audio, so the reel on screen should need no instruction at all.
+      await watch(url(0));
+      await settle();
+      final before = audioCalls.length;
+
+      await service.pauseAllExcept(url(0));
+      await service.pauseAllExcept(url(0));
+
+      expect(audioCalls.length, before);
     });
   });
 

@@ -758,12 +758,11 @@ packages:
     source: hosted
     version: "2.11.1"
   video_player_android:
-    dependency: transitive
+    dependency: "direct main"
     description:
-      name: video_player_android
-      sha256: "877a6c7ba772456077d7bfd71314629b3fe2b73733ce503fc77c3314d43a0ca0"
-      url: "https://pub.dev"
-    source: hosted
+      path: "third_party/video_player_android"
+      relative: true
+    source: path
     version: "2.9.5"
   video_player_avfoundation:
     dependency: transitive
@@ -774,7 +773,7 @@ packages:
     source: hosted
     version: "2.9.4"
   video_player_platform_interface:
-    dependency: "direct dev"
+    dependency: "direct main"
     description:
       name: video_player_platform_interface
       sha256: "57c5d73173f76d801129d0531c2774052c5a7c11ccb962f1830630decd9f24ec"
