@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/config/constants.dart';
 import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/providers/theme_provider.dart';
@@ -315,7 +316,7 @@ class _WebSocketWrapperState extends State<_WebSocketWrapper>
 
     final dp = Provider.of<DataProvider>(context, listen: false);
     final username = dp.user?.username ?? '';
-    _ws = WebSocketService('wss://gobackend-9nd8.onrender.com', username);
+    _ws = WebSocketService(AppConstants.wsBaseUrl, username);
     if (username.isNotEmpty) {
       _ws.connect();
       _ws.notificationStream.listen((n) {
