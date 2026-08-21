@@ -45,6 +45,44 @@ enum FeedKind { forYou, following, explore }
 ///
 /// Not responsible for: the AppBar, tab chrome, or nav — the host page wraps
 /// it. Drop it into the body of a scaffold and give it a userId + kind.
+
+/// Re-aim the warm window anyway once it has been pointed at the same
+/// place for this long. A sustained fling would otherwise defer it for as
+/// long as the fling lasted, and warming that never re-aims is warming
+/// that has stopped.
+const Duration prefetchMaxStale = Duration(milliseconds: 1200);
+
+/// Whether a page change should re-aim the warm window immediately, or
+/// wait for the scrolling to settle.
+///
+/// Pure, and lifted out of the widget because it is the whole of the
+/// decision — everything around it is a [Timer] and a mounted check. The
+/// two answers it has to get right pull in opposite directions:
+///
+///   * Re-aiming on every page of a fling is what made warming churn.
+///     `VideoCacheService.warm` cancels downloads for URLs that have left
+///     the window, so eight re-aims in four seconds spend the download
+///     slots killing each other's work — a device profile saw 18 of 22
+///     downloads cancelled while the reels the user landed on opened cold.
+///
+///   * Never re-aiming is worse. A fling that lasts is a window that has
+///     stopped following the user, so warming quietly stops being about
+///     anything. [maxStale] is the backstop: however fast the scrolling,
+///     the window is re-pointed at least this often.
+///
+/// [lastPrefetchAt] is null before the first re-aim of a feed, which is
+/// always immediate — there is nothing warm yet to protect.
+bool shouldReaimPrefetchNow({
+  required bool bursting,
+  required DateTime? lastPrefetchAt,
+  required DateTime now,
+  Duration maxStale = prefetchMaxStale,
+}) {
+  if (!bursting) return true;
+  if (lastPrefetchAt == null) return true;
+  return now.difference(lastPrefetchAt) >= maxStale;
+}
+
 class SmartReelsFeed extends StatefulWidget {
   final String userId;
   final String fallbackSessionId;
@@ -171,6 +209,31 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   static const int _velocitySamples = 4;
   static const Duration _burstWindow = Duration(milliseconds: 1500);
 
+  // ─── Re-aiming the warm window ───────────────────────────────────────
+  // Warming is aimed at where the user is standing, so in principle every
+  // page change should re-aim it. In a fling that is the wrong trade.
+  //
+  // VideoCacheService.warm() cancels the download of any URL that has
+  // dropped out of the window, which is right when the window moves once
+  // and self-defeating when it moves eight times in four seconds: each
+  // re-aim kills fetches the previous one started, so the slots churn and
+  // little is ever warmed. A device profile caught it exactly — 22 URLs
+  // seen, 18 downloads cancelled — while the reels the user actually
+  // landed on opened cold.
+  //
+  // So during a burst the re-aim is deferred until the scrolling settles,
+  // which is the moment the window is worth pointing anywhere. Downloads
+  // already in flight are left alone to finish, for the same reason
+  // [VideoCacheService.cancelGraceBytes] exists: past a certain point,
+  // abandoning work costs more than completing it.
+  Timer? _prefetchDebounce;
+  DateTime? _lastPrefetchAt;
+
+  /// How long after the last page change a burst is considered settled.
+  /// Comfortably shorter than the time a user spends on a reel they have
+  /// chosen to watch, so a deliberate swipe never waits on it.
+  static const Duration _prefetchSettleDelay = Duration(milliseconds: 300);
+
   // ─── Rich playback signals (complete / loop / rewatch / impression) ──
   // The backend has dedicated ranking pipelines for these events
   // (completion & loop caches, impression bounce-classification,
@@ -211,6 +274,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   @override
   void dispose() {
     _initialWatchTimer?.cancel();
+    _prefetchDebounce?.cancel();
     _detachPlaybackListener();
     _flushCurrentItemEvent(isSkip: false); // best-effort save on leave
     WidgetsBinding.instance.removeObserver(this);
@@ -272,8 +336,11 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       _playerStates.clear();
       // Reset velocity tracking — fast scrolling in the old feed
       // shouldn't keep the burst-prefetch window open against the
-      // new (cold) one.
+      // new (cold) one. The deferred re-aim goes with it: it was
+      // pointed at indices in a list that no longer exists.
       _recentSwipes.clear();
+      _prefetchDebounce?.cancel();
+      _lastPrefetchAt = null;
     }
     final hasSeed = widget.seedChallenge != null;
     setState(() {
@@ -566,8 +633,27 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     });
 
     _playCurrent();
-    _prefetchUpcomingVideos();
+    _schedulePrefetch();
     _maybePrefetchNextPage();
+  }
+
+  /// Re-aim the warm window, now or once the scrolling settles.
+  ///
+  /// See the note on [_prefetchDebounce] for why a fling defers instead of
+  /// re-aiming per page.
+  void _schedulePrefetch() {
+    _prefetchDebounce?.cancel();
+    if (shouldReaimPrefetchNow(
+      bursting: _isBurstScrolling(),
+      lastPrefetchAt: _lastPrefetchAt,
+      now: DateTime.now(),
+    )) {
+      _prefetchUpcomingVideos();
+      return;
+    }
+    _prefetchDebounce = Timer(_prefetchSettleDelay, () {
+      if (mounted) _prefetchUpcomingVideos();
+    });
   }
 
   bool _wasQuickSkip() {
@@ -684,8 +770,21 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       VideoPlayerService.instance.pauseAll();
       return;
     }
-    final state = _getPlayerState(_currentIndex);
+    // The one place a player is opened. Everything else — every tile the
+    // pager builds on the way past — takes one that already exists or
+    // renders its poster, which is what stops a fling costing a decoder
+    // per reel. See "who may open a player" on [_getPlayerState].
+    final had = _playerStates[index];
+    final state = _getPlayerState(index, create: true);
     if (state == null) return;
+    // A reel that had no player until a moment ago is currently painting
+    // its poster with nothing bound to a controller, so nothing would
+    // repaint it when the first frame lands. Ask for the rebuild that
+    // hands the tile its new controller.
+    if (!identical(had, state)) {
+      // ignore: no-empty-block
+      setState(() {});
+    }
     // One call, because declaring which reel is on screen and starting it are
     // the same act — see [VideoPlayerService.showAndPlay]. It stops the
     // outgoing players before starting this one (play() is what requests
@@ -748,10 +847,39 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   }
 
   /// Fetch (or build) the player state for a reel index. Returns null when
-  /// the entry at `index` is a non-video tile (e.g. an accounts card) — the
-  /// caller has to handle nullability rather than try to instantiate a
-  /// player against an empty URL.
+  /// the entry at `index` is a non-video tile (e.g. an accounts card), and
+  /// when the reel at `index` is not on screen and has no player already —
+  /// the caller renders its poster instead. See "who may open a player".
   ///
+  /// WHO MAY OPEN A PLAYER
+  /// ---------------------
+  /// Only the reel on screen. Everything else takes a player that already
+  /// exists or does without one.
+  ///
+  /// This method is reached from `itemBuilder`, so it runs for every tile
+  /// the PageView materialises — which during a fling is every reel the
+  /// user passes. It used to call [VideoPlayerService.getController] for
+  /// all of them, and that method creates on miss, so a fast scroll opened
+  /// an ExoPlayer and a hardware decoder per reel flown past and evicted it
+  /// again a moment later.
+  ///
+  /// The read-ahead path was already careful about this — a cold spare
+  /// waits out [VideoPlayerService.spareWarmGrace] and is dropped if the
+  /// user moves on, so a fling opens no spares — and the comment in
+  /// [_prefetchUpcomingVideos] says as much. It was true and it did not
+  /// matter: the build path went straight around it. A device profile
+  /// showed the result plainly, 40 opens and 36 retirements for 21 distinct
+  /// reels, decoder ids climbing to 81 in ninety seconds, `MediaCodec::
+  /// reclaim` three times, and ~800ms to first frame on every swipe.
+  ///
+  /// So the rule is now the same on both paths, and the tile is the one
+  /// that enforces it. A neighbour still shows live video the moment the
+  /// spare exists — that is the common case for an ordinary swipe, because
+  /// read-ahead opened it while the user was watching — and shows its
+  /// poster when it does not, which is exactly the reel nobody is going to
+  /// look at for more than a few frames anyway.
+  ///
+
   /// IMPORTANT: validates the cached entry against the pool before
   /// returning it. The pool LRU-evicts (and disposes) controllers when
   /// it's full and a new URL is requested, but `_playerStates` lives as
@@ -760,7 +888,20 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   /// VideoPlayerController was used after being disposed" the next time
   /// the tile builds. We re-fetch from the pool in that case (pool
   /// returns a fresh controller; getController is idempotent on URL).
-  _ReelPlayerState? _getPlayerState(int index) {
+  /// [create] opens a player when the pool does not already have one, and
+  /// is the caller asserting it is NOT inside a build.
+  ///
+  /// [VideoPlayerService.getController] promotes on a hit, and promotion
+  /// calls `setVolume`, and that notifies the controller's listeners
+  /// synchronously — every [ValueListenableBuilder] bound to it, which
+  /// then calls setState. From inside `itemBuilder` that is the
+  /// `setState() or markNeedsBuild() called during build` crash already
+  /// documented on [_ReelTileState._ensureOpponentState], reached by a
+  /// different road. So the build path never creates: `itemBuilder` takes
+  /// the default and gets a player only if one already exists, and
+  /// [_playCurrent] — which runs from a page change or a post-frame
+  /// callback, both outside build — is the one caller that passes true.
+  _ReelPlayerState? _getPlayerState(int index, {bool create = false}) {
     if (index < 0 || index >= _items.length) return null;
     final item = _items[index];
     if (item is! _ReelItem) return null;
@@ -781,7 +922,24 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // Either no cache, the cached URL is stale (item at this index
     // changed — e.g. after _trimMemoryIfNeeded re-keyed), or the
     // pool has evicted the controller. Build a fresh state.
-    final controller = VideoPlayerService.instance.getController(url);
+    //
+    // `peek` unless the caller is opening this reel deliberately: it
+    // adopts a player read-ahead has already built and returns null
+    // rather than building one itself. Null is not a failure here — the
+    // tile renders its poster and picks the video up on the rebuild
+    // [_playCurrent] schedules once this reel becomes current, which is
+    // the moment it is allowed to cost a decoder. See "who may open a
+    // player" above.
+    final controller = create
+        ? VideoPlayerService.instance.getController(url)
+        : VideoPlayerService.instance.peekController(url);
+    if (controller == null) {
+      // Drop any state we were holding for this index so the next build
+      // re-asks rather than handing back a controller the pool has since
+      // disposed.
+      _playerStates.remove(index);
+      return null;
+    }
     // ignore: discarded_futures
     controller.setLooping(true);
     final s = _ReelPlayerState(controller: controller, url: url);
@@ -949,6 +1107,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   }
 
   void _prefetchUpcomingVideos() {
+    _lastPrefetchAt = DateTime.now();
     final cfg = VideoPlayerService.instance.config;
     // Pick window width based on swipe velocity. Burst mode widens
     // the upcoming-prefetch reach so a fast scroller doesn't overshoot
@@ -1553,13 +1712,18 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                   return _AccountsCardTile(card: entry);
                 }
                 final reel = entry as _ReelItem;
-                final state = _getPlayerState(index);
-                // _getPlayerState should always return non-null for a _ReelItem
-                // with a real video URL; the fallback placeholder keeps the
-                // page renderable in the rare empty-URL edge case.
-                if (state == null) {
+                // A reel with no video at all is not a tile — there is
+                // nothing to play and no controls worth showing.
+                if (reel.videoUrl.isEmpty) {
                   return _Placeholder(item: reel);
                 }
+                // Null here means "no player yet", not "no video": this
+                // reel is off screen and read-ahead has not opened it.
+                // _ReelTile renders its poster and the rest of the reel
+                // furniture, and picks up the video on the rebuild that
+                // follows this reel becoming current. See the note on
+                // _getPlayerState.
+                final state = _getPlayerState(index);
                 final currentUserId =
                     context.read<DataProvider>().user?.id ?? '';
                 final isOwner =
@@ -2003,7 +2167,17 @@ class _ReelPlayerState {
 
 class _ReelTile extends StatefulWidget {
   final _ReelItem item;
-  final _ReelPlayerState state;
+
+  /// The reel's player, or null while it has none.
+  ///
+  /// Null is the ordinary state for an off-screen neighbour: only the reel
+  /// on screen may open a player, so a tile the pager built on the way
+  /// past has one only if read-ahead happened to get there first. The
+  /// poster carries the tile until then — see [_videoFace], which already
+  /// paints the video over the poster only once a controller has a frame,
+  /// so "no controller" and "controller with no frame yet" look the same
+  /// to the user.
+  final _ReelPlayerState? state;
   final bool isActive;
 
   /// True when the currently signed-in user is the creator of this
@@ -2143,7 +2317,8 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   }
 
   void _togglePause() {
-    final activeController = _activeState.controller;
+    final activeController = _activeState?.controller;
+    if (activeController == null) return;
     // Through the service, like every other start and stop — see
     // [VideoPlayerService.showAndPlay]. A deliberate pause does not change
     // which reel is on screen, so this pair does not touch that.
@@ -2203,7 +2378,8 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
       contentId: widget.item.id,
       contentType: widget.item.type,
     );
-    final currentSpeed = _activeState.controller.value.playbackSpeed;
+    final currentSpeed =
+        _activeState?.controller.value.playbackSpeed ?? 1.0;
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -2256,7 +2432,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                   _ => 1.0,
                 };
                 // ignore: discarded_futures
-                _activeState.controller.setPlaybackSpeed(next);
+                _activeState?.controller.setPlaybackSpeed(next);
                 Navigator.of(sheetCtx).pop();
                 EventTracker.instance.trackTap(
                   target: 'playback_speed',
@@ -2273,7 +2449,16 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
 
   /// The player state currently driving the visible video — primary by
   /// default, opponent when the user has swiped left on a battle.
-  _ReelPlayerState get _activeState =>
+  ///
+  /// Null only when this tile has no player at all, which for an ACTIVE
+  /// tile does not happen: the reel on screen is the one index allowed to
+  /// open one, so [_getPlayerState] creates rather than peeks for it. The
+  /// callers below are all gestures on the active tile and would be within
+  /// their rights to assume that; they handle null anyway, because "the
+  /// user cannot pause a reel that has not loaded" is a better failure
+  /// than a null check that was correct until someone made a neighbour
+  /// interactive.
+  _ReelPlayerState? get _activeState =>
       _showingOpponent && _opponentState != null
       ? _opponentState!
       : widget.state;
@@ -2408,12 +2593,19 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
         // ignore: discarded_futures
         VideoPlayerService.instance.release(opponentUrl);
       }
-      // ignore: discarded_futures
-      VideoPlayerService.instance.release(widget.state.url);
+      final url = widget.state?.url;
+      if (url != null) {
+        // ignore: discarded_futures
+        VideoPlayerService.instance.release(url);
+      }
       return;
     }
 
+    // No player and not the opponent means this reel has not been opened
+    // yet — there is nothing to show or play, and the poster is already
+    // what the tile is rendering.
     final incoming = show ? _ensureOpponentState() : widget.state;
+    if (incoming == null) return;
     // Same call the vertical swipe makes. That is the point: a flip is a
     // change of which reel is on screen, and it goes through the one place
     // that records that, rather than starting a player behind the service's
@@ -2932,13 +3124,17 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
         // video_player's controller is itself a ValueListenable, so
         // ValueListenableBuilder gives us frame-rate-ish rebuilds
         // without manually forwarding position ticks through a Stream.
-        if (hasVideo)
+        // Gated on the player, not just on the reel having a video: an
+        // off-screen tile showing its poster has no controller to track a
+        // position against, and a bar stuck at zero would read as a video
+        // that failed rather than one that has not been opened.
+        if (hasVideo && widget.state != null)
           Positioned(
             left: 0,
             right: 0,
             bottom: MediaQuery.of(context).padding.bottom,
             child: ValueListenableBuilder<VideoPlayerValue>(
-              valueListenable: widget.state.controller,
+              valueListenable: widget.state!.controller,
               builder: (context, v, _) {
                 final pos = v.position;
                 final dur = v.duration;

@@ -489,6 +489,91 @@ void main() {
           reason: 'sustained origin failure must trip the fallback');
     });
   });
+
+  // A moov-at-end file keeps its index AFTER the media, so the first
+  // thing a player does with one is seek to the end. With only a head
+  // cached that seek went to the network before a single frame could be
+  // decoded, which made warming those files worth nothing — 23 of 38
+  // warms in a device profile. Caching both ends is what fixes it, and
+  // these are the offsets that have to be exactly right for it to work:
+  // the tail's position is derived from its size on disk, so an error
+  // here serves the wrong bytes rather than failing loudly.
+  group('a cached tail', () {
+    const tailLen = 800;
+    late File tailFile;
+
+    setUp(() {
+      tailFile = File('${tmp.path}/clip.tail')
+        ..writeAsBytesSync(full.sublist(total - tailLen));
+      LocalMediaServer.instance.register(
+        originUrl: 'https://cdn/clip.mp4',
+        prefixPath: prefixFile.path,
+        prefixLength: prefixLen,
+        totalLength: total,
+        tailPath: tailFile.path,
+      );
+    });
+
+    test('serves the index seek without touching origin', () async {
+      final url = LocalMediaServer.instance.localUrlFor('https://cdn/clip.mp4')!;
+      // What a player issues when it wants the moov: the last N bytes.
+      final res = await get(url, range: 'bytes=-$tailLen');
+
+      expect(res.statusCode, 206);
+      expect(res.headers.value(HttpHeaders.contentRangeHeader),
+          'bytes ${total - tailLen}-${total - 1}/$total');
+      expect(await bytesOf(res), full.sublist(total - tailLen));
+      expect(originRanges, isEmpty,
+          reason: 'the whole point is that this seek costs no network');
+    });
+
+    test('serves an explicit range inside the tail from disk', () async {
+      final url = LocalMediaServer.instance.localUrlFor('https://cdn/clip.mp4')!;
+      final from = total - tailLen + 100;
+      final res = await get(url, range: 'bytes=$from-${total - 1}');
+
+      expect(await bytesOf(res), full.sublist(from));
+      expect(originRanges, isEmpty);
+    });
+
+    test('stitches head, origin and tail into one gapless body', () async {
+      final url = LocalMediaServer.instance.localUrlFor('https://cdn/clip.mp4')!;
+      final res = await get(url);
+
+      expect(res.statusCode, 200);
+      expect(res.headers.value(HttpHeaders.contentLengthHeader), '$total');
+      expect(await bytesOf(res), full,
+          reason: 'three segments, no gap and no duplication');
+      // Only the middle should have been fetched: both ends were cached.
+      expect(originRanges, ['bytes=$prefixLen-${total - tailLen - 1}']);
+    });
+
+    test('a range straddling the origin/tail boundary stitches', () async {
+      final url = LocalMediaServer.instance.localUrlFor('https://cdn/clip.mp4')!;
+      final from = total - tailLen - 300;
+      final res = await get(url, range: 'bytes=$from-${total - 1}');
+
+      expect(await bytesOf(res), full.sublist(from));
+      expect(originRanges, ['bytes=$from-${total - tailLen - 1}'],
+          reason: 'origin is asked for the gap only, not the cached end');
+    });
+
+    test('a truncated tail narrows the window instead of shifting it',
+        () async {
+      // The offset is derived from the file's size, so a short file must
+      // read as "we hold less of the end", never as "we hold a different
+      // part of the file". Getting this backwards would serve the wrong
+      // bytes silently — the reason the cache tier refuses to register a
+      // tail whose length does not match what it asked for.
+      tailFile.writeAsBytesSync(full.sublist(total - 200));
+      final url = LocalMediaServer.instance.localUrlFor('https://cdn/clip.mp4')!;
+      final res = await get(url, range: 'bytes=${total - tailLen}-${total - 1}');
+
+      expect(await bytesOf(res), full.sublist(total - tailLen));
+      expect(originRanges, ['bytes=${total - tailLen}-${total - 201}'],
+          reason: 'the 200 bytes we hold come from disk, the rest from origin');
+    });
+  });
 }
 
 /// An [IOSink] that accepts writes but never finishes a flush until the

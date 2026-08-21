@@ -65,7 +65,24 @@ void main() {
     expect(d.summary(), 'no reels played yet');
 
     d.recordProxiedStart();
-    expect(d.summary(), contains('warmed=2 failed=1'));
+    expect(d.summary(), contains('warmed=2 (+tail 0) failed=1'));
+  });
+
+  test('a warm that also cached the file\'s end says so', () {
+    // The counter that replaced `bailed{moovAtEnd:n}`. Those files used to
+    // fall out of prefix warming entirely; now they are warmed with their
+    // index as well, and the summary has to distinguish the two kinds or
+    // there is no way to tell the fix worked from the catalog never
+    // having had the problem.
+    final d = ReelDiagnostics.instance;
+    d.recordPrefixWarmed();
+    d.recordPrefixWarmed();
+    d.recordTailWarmed();
+    d.recordProxiedStart();
+
+    // A tail always accompanies a prefix, so it is a subset, never a
+    // separate warm.
+    expect(d.summary(), contains('warmed=2 (+tail 1)'));
   });
 
   test('the summary carries the live pipeline snapshot', () {
