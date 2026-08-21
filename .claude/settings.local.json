@@ -156,8 +156,7 @@
       "mcp__Claude_Code_Remote__delete_trigger",
       "mcp__Claude_Code_Remote__unsubscribe_pr_activity",
       "mcp__Claude_Code_Remote__list_repos",
-      "mcp__Claude_Code_Remote__register_repo_root",
-      "mcp__Claude_Code_Remote__create_trigger"
+      "mcp__Claude_Code_Remote__register_repo_root"
     ]
   }
 }

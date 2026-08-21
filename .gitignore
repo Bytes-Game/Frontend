@@ -50,6 +50,3 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-# Written by tools/seed_feed.dart: the list of feed items it created, so
-# --cleanup can delete them again. Local test state, not shared.
-tools/seeded_challenges.json
