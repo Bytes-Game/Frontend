@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import 'package:myapp/config/constants.dart';
 import 'package:myapp/services/api_service.dart';
 
 /// Pre-warms the DNS + TLS connection to the video-storage origin (and
@@ -39,7 +40,7 @@ class ConnectionPrewarmService {
   /// Add a CDN custom-domain hostname here once it's wired (e.g.
   /// media.devf.com) — the R2 default hostname becomes a fallback.
   static const List<String> _defaultOrigins = [
-    'https://gobackend-9nd8.onrender.com',
+    AppConstants.apiBaseUrl,
     // R2 public origins — both shapes (pub-<account>.r2.dev AND any
     // custom domain) should be added by the caller via [start]. The
     // empty default is intentional: hard-coding an account-ID here

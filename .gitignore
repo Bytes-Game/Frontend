@@ -50,3 +50,19 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Raw Claude Code transcripts.
+#
+# These were the full chat logs the project was built through — 25 files and
+# about 2.7 MB of them sat in the repo root. They are kept out now for two
+# reasons, and size is the smaller one:
+#
+#   * A raw transcript is whatever was said, including pasted keys, paths from
+#     someone's own machine, and half-finished ideas. That is not something to
+#     hand to everyone who clones the repo.
+#   * They are not source. Nothing builds from them and nothing reads them.
+#
+# The distilled version, .session_notes.md, IS tracked on purpose — it is the
+# genuinely useful part: what the app is for, what was decided, and why.
+.session_part_*.txt
+.session_readable.txt
+
