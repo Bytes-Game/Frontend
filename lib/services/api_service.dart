@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:myapp/config/constants.dart';
+import 'package:myapp/services/device_capabilities.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/models/challenge_model.dart';
 
@@ -66,6 +67,18 @@ class _AuthHttp {
 }
 
 final _authHttp = _AuthHttp();
+
+/// The query fragment that tells the backend what this phone can decode.
+///
+/// Appended to every feed request. The server uses it to downshift an
+/// oversized video to a smaller pre-made rung, and only withholds an item when
+/// there is no smaller version to offer — see the backend's device_fit.go.
+///
+/// One helper rather than three copies, because the three feed endpoints have
+/// drifted apart before and the one that gets forgotten is the one that hands
+/// a cheap phone a file it cannot play.
+String get _deviceFitQuery =>
+    '&maxVideoSide=${DeviceCapabilities.instance.maxVideoLongSide}';
 
 /// Tri-state result for [ApiService.updateUserProfile]. Lets callers
 /// distinguish a no-op success (server returned 200 with `updated:
@@ -935,6 +948,7 @@ class ApiService {
       // hour-of-day routing buckets by the user's LOCAL hour rather than the
       // server's timezone. Absent → backend treats it as UTC (no behaviour change).
       url += '&tzOffset=${DateTime.now().timeZoneOffset.inMinutes}';
+      url += _deviceFitQuery;
       // Pull-to-refresh signal — the backend drops the seen-content filter
       // and clears session dedup so the new feed isn't biased back toward
       // the items the user just swiped past.
@@ -975,7 +989,8 @@ class ApiService {
       String userId, {int page = 1, int limit = 20}) async {
     try {
       final res = await _authHttp.get(Uri.parse(
-        '$_base/api/v1/feed/following/v2?userId=$userId&page=$page&limit=$limit',
+        '$_base/api/v1/feed/following/v2?userId=$userId&page=$page&limit=$limit'
+        '$_deviceFitQuery',
       )).timeout(const Duration(seconds: 30));
       if (res.statusCode == 200) {
         final body = json.decode(res.body) as Map<String, dynamic>;
@@ -1046,6 +1061,7 @@ class ApiService {
       }) async {
     try {
       var url = '$_base/api/v1/feed/explore?userId=$userId&page=$page&limit=$limit';
+      url += _deviceFitQuery;
       // Pull-to-refresh signal — backend resets session dedup, jitters
       // scores, and demotes the previous refresh's top-3 so the head of the
       // feed reliably changes. It does NOT forget what you've watched:
