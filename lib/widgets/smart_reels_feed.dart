@@ -15,6 +15,7 @@ import 'package:myapp/services/connection_prewarm_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/feed_paging.dart';
 import 'package:myapp/services/network_quality_service.dart';
+import 'package:myapp/services/playback_reporter.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/video_player_service.dart';
@@ -959,6 +960,10 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   void _armSourceFallback(_ReelItem item, VideoPlayerController controller) {
     if (item.fallbackVideoUrl.isEmpty ||
         item.videoUrl == item.fallbackVideoUrl) {
+      // Nothing to fall back TO. If this one fails the user is left looking at
+      // a black reel, so it is the more serious of the two failures and the
+      // one we most need told about — report it and stop.
+      _reportUnrecoverableFailure(item, controller);
       return;
     }
     void swap() {
@@ -974,6 +979,16 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       debugPrint(
         'reel ${item.id}: ${kind(item.videoUrl)} source failed, '
         'falling back to ${kind(item.fallbackVideoUrl)}',
+      );
+      // Tell Sentry a video would not play. The user is about to stop
+      // noticing — the backup copy loads and the feed carries on — which is
+      // exactly why this needs recording: without it, a phone that cannot
+      // decode what other people upload fails silently and forever. Guarded
+      // against flooding; see PlaybackReporter.
+      PlaybackReporter.instance.reportPlaybackFailure(
+        videoUrl: item.videoUrl,
+        error: controller.value.errorDescription,
+        recovered: true,
       );
       item.videoUrl = item.fallbackVideoUrl;
       // Drop every player state bound to the dead manifest — indices can
@@ -1007,6 +1022,37 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       if (!controller.value.hasError) return;
       controller.removeListener(onChange);
       swap();
+    };
+    controller.addListener(onChange);
+  }
+
+  /// Report a failure the app cannot paper over.
+  ///
+  /// Separate from the recovered path because the two mean different things: a
+  /// swap the user never noticed is a warning, while this one is a reel that
+  /// stays black. Both are worth knowing; only this one is worth waking up for.
+  void _reportUnrecoverableFailure(
+      _ReelItem item, VideoPlayerController controller) {
+    void report() {
+      PlaybackReporter.instance.reportPlaybackFailure(
+        videoUrl: item.videoUrl,
+        error: controller.value.errorDescription,
+        recovered: false,
+      );
+    }
+
+    // A player handed over from the warm pool may have failed before this reel
+    // ever reached the screen, in which case no further change is coming and
+    // a listener would wait forever.
+    if (controller.value.hasError) {
+      report();
+      return;
+    }
+    late final VoidCallback onChange;
+    onChange = () {
+      if (!controller.value.hasError) return;
+      controller.removeListener(onChange);
+      report();
     };
     controller.addListener(onChange);
   }

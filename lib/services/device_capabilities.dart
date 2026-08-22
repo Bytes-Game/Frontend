@@ -32,6 +32,25 @@ class DeviceCapabilities {
   /// own tier-based choices (e.g. image cache size).
   double ramGb = 4.0;
 
+  /// The largest video this phone should be asked to decode, in pixels on
+  /// the longer side. Sent to the backend with every feed request, which
+  /// downshifts or withholds anything above it — see the server's
+  /// device_fit.go.
+  ///
+  /// Why the feed needs telling at all: the app can decide how MANY videos to
+  /// hold open, and it already does that by RAM. What it cannot do is change
+  /// the video it was handed. A 1080p60 file on a low-tier phone is a decoder
+  /// that struggles or fails, and a failed decoder mid-playback is the frozen
+  /// reel the whole caching effort exists to prevent.
+  ///
+  /// The split is at 3 GB, matching [VideoPoolConfig.forRam]: below it a phone
+  /// holds two players and should stay at 720p; above it 1080p is fine. Both
+  /// numbers describe the same tier, so they are kept side by side rather than
+  /// derived from each other — a phone that can hold more players is not
+  /// automatically a phone that can decode bigger frames, and if that ever
+  /// stops being true here we want to change one without the other moving.
+  int get maxVideoLongSide => ramGb < 3.0 ? 720 : 1920;
+
   /// True once [probe] has resolved (success or fallback).
   bool _probed = false;
   bool get probed => _probed;
