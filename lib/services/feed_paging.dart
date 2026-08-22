@@ -23,10 +23,26 @@ class FeedPaging {
   /// is one request that comes back empty; the cost of the old default
   /// was content the user could never reach.
   ///
-  /// [newItems] is the count AFTER de-duplication, and it guards the loop
-  /// the fallback could otherwise start: a server that keeps replaying a
-  /// page it has already sent yields nothing new each time, and asking
-  /// again would spin forever.
+  /// [newItems] is how many items survived to be added. It guards the loop
+  /// the fallback could otherwise start: a server that keeps replaying a page
+  /// it has already sent yields nothing each time, and asking again would spin
+  /// forever.
+  ///
+  /// That guard has become a backstop rather than the main event. It was
+  /// written when the app deleted every video it had already shown, so a page
+  /// of repeats really did arrive here as zero — the app was, in effect,
+  /// working out for itself when the feed had run dry, because the server was
+  /// claiming "more" on a page with nothing new in it.
+  ///
+  /// The server answers that honestly now: it marks repeats and stops promising
+  /// another page once everything it has left is one. So the app no longer
+  /// deletes duplicates, [newItems] normally equals [rawCount], and [declared]
+  /// carries the decision — which is the right place for it, since the server
+  /// is the only party that can see the whole catalogue.
+  ///
+  /// This check stays anyway. It costs nothing, and "the server said more and
+  /// then sent an empty page" is precisely the kind of disagreement that used
+  /// to spin the client through fifteen requests in ninety seconds.
   static bool hasMoreAfter({
     required Object? declared,
     required int rawCount,

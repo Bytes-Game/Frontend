@@ -410,15 +410,34 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     }
     final raw = (data['items'] as List?) ?? const [];
     final parsed = <_FeedEntry>[];
-    // Dedup against already-loaded items by (type, id). Catches the case
-    // where seedChallenge is also the first item the explore page returns.
-    final existingKeys = <String>{for (final e in _items) '${e.type}:${e.id}'};
+    // We render what the server sent us.
+    //
+    // This used to throw away anything already on screen, which sounds
+    // obviously right and was the cause of the worst thing in the feed. The
+    // server does not hide videos you have seen — it ranks them down and
+    // serves them once nothing fresher is left, deliberately, because a hard
+    // filter used to make the feed announce it had ended when it had not. So
+    // the server was sending repeats on purpose and the app was deleting them
+    // on purpose, and between the two of them a device run got pages of 7, 16
+    // and finally 0 items out of 21 sent — a whole round trip for nothing, and
+    // no fresh video ready by the time the user arrived.
+    //
+    // Two systems answering "has this person seen this?" and disagreeing. Only
+    // one of them can see the whole picture, and it is not this one: the app's
+    // memory is whatever is in this scroll list right now and dies when the
+    // screen does, while the server's is attached to the account and follows
+    // you to a new phone. So the server decides, and a repeat now arrives
+    // labelled (see [_ReelItem.isRepeat]) rather than inferred.
+    //
+    // The one thing still dropped is a duplicate WITHIN a single response.
+    // That is not a repeat, it is the same row sent twice in one page, which
+    // is a bug rather than a decision — and it would put two tiles on screen
+    // that fight over one video's playback state.
+    final seenInThisPage = <String>{};
     for (final x in raw) {
       final item = _FeedEntry.fromJson(x as Map<String, dynamic>);
       if (item == null) continue;
-      final key = '${item.type}:${item.id}';
-      if (existingKeys.contains(key)) continue;
-      existingKeys.add(key);
+      if (!seenInThisPage.add('${item.type}:${item.id}')) continue;
       parsed.add(item);
     }
     final more = FeedPaging.hasMoreAfter(
@@ -1902,6 +1921,20 @@ class _ReelItem implements _FeedEntry {
   bool hasVoted = false;
   String votedFor = '';
 
+  /// True when the server says it has shown this to us before.
+  ///
+  /// The feed does not hide what you have already seen — it ranks it down and
+  /// serves it once there is nothing fresher. This flag is how the server says
+  /// which is which, and it exists because the app used to decide for itself by
+  /// deleting every duplicate. That disagreed with the ranking decision made on
+  /// the server: it would send twenty-one videos and the app would keep none,
+  /// costing a round trip and leaving the page empty.
+  ///
+  /// Read-only as far as the feed is concerned. It may be used to LABEL a reel
+  /// or to space repeats out. It must never be used to drop one — what the
+  /// viewer sees is the server's decision alone.
+  final bool isRepeat;
+
   /// True iff this item is a battle — i.e. there's an opponent video to
   /// swipe to. Plain shorts and image posts return false.
   bool get isBattle => opponentVideoUrl.isNotEmpty;
@@ -1925,6 +1958,7 @@ class _ReelItem implements _FeedEntry {
     required this.views,
     required this.comments,
     required this.isLiked,
+    this.isRepeat = false,
   });
 
   static _ReelItem? fromFeedEntry(Map<String, dynamic> entry) {
@@ -2030,6 +2064,9 @@ class _ReelItem implements _FeedEntry {
         // have to hit /challenges/{id} just to render the right number.
         comments: c['commentCount'] as int? ?? 0,
         isLiked: false,
+        // The server says whether it has shown us this one before. Absent
+        // means fresh, which is the usual case.
+        isRepeat: c['repeat'] as bool? ?? false,
       );
     }
     return null;
