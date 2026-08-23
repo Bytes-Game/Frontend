@@ -223,13 +223,18 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
       subject: _subjectCtl.text.trim(),
       visibility: _visibility,
       category: _category,
-      // Tags ride in on the emotionTags slot for now — the
-      // backend's emotion column was never used as a hard constraint
-      // and the column is JSONB so it accepts whatever strings we
-      // throw at it. A follow-up will rename the column / API field
-      // to "tags" cleanly; for this release we're keeping the
-      // payload shape stable so older builds keep working.
-      emotionTags: _tags,
+      // Tags now go in the field that means tags. They used to ride in on
+      // emotionTags because the backend had nowhere else to put them, and
+      // that quietly cost twice over: the ranker matches emotions against a
+      // user's mood from a fixed list of sixteen words, so free-text tags
+      // landing there matched nothing and diluted the ones that would have,
+      // while the tags themselves were never read as tags at all.
+      //
+      // emotionTags is left empty on purpose. The server infers emotion from
+      // the caption when none is sent, which is a better guess than a
+      // creator's subject tags ever were.
+      tags: _tags,
+      emotionTags: const [],
     );
 
     // Prepared path: the upload has (usually) been running since this
