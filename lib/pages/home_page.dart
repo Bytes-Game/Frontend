@@ -34,7 +34,15 @@ class _HomePageState extends State<HomePage>
     with SingleTickerProviderStateMixin, PageTracker<HomePage> {
   late TabController _tabController;
   int _lastTabIndex = 0;
-  static const _tabLabels = ['For You', 'Following', 'Explore'];
+  // The first three pick a ranking; the last two pick a kind of video. Kind
+  // tabs go last so the ranking tabs stay where people already expect them.
+  static const _tabLabels = [
+    'For You',
+    'Following',
+    'Explore',
+    'Battles',
+    'Shorts',
+  ];
 
   @override
   String get pageName => 'home_page';
@@ -87,6 +95,8 @@ class _HomePageState extends State<HomePage>
               SmartReelsFeed(userId: userId, kind: FeedKind.forYou),
               SmartReelsFeed(userId: userId, kind: FeedKind.following),
               SmartReelsFeed(userId: userId, kind: FeedKind.explore),
+              SmartReelsFeed(userId: userId, kind: FeedKind.battles),
+              SmartReelsFeed(userId: userId, kind: FeedKind.shorts),
             ],
           ),
 
@@ -167,7 +177,7 @@ class _TopTabStripState extends State<_TopTabStrip> {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    final row = Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: List.generate(widget.labels.length, (i) {
         final active = widget.controller.index == i;
@@ -206,6 +216,10 @@ class _TopTabStripState extends State<_TopTabStrip> {
         );
       }),
     );
+    // Scale down rather than overflow. Three labels fitted across a phone;
+    // five do not, and a Row that overflows paints a yellow warning stripe
+    // across the video.
+    return FittedBox(fit: BoxFit.scaleDown, child: row);
   }
 }
 

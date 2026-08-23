@@ -30,7 +30,18 @@ import 'package:myapp/widgets/feed_action_bar.dart'
 ///   explore   → /api/v1/feed/explore    discovery-first, non-personalized
 ///
 /// Same JSON shape across all three so this widget reuses the parser.
-enum FeedKind { forYou, following, explore }
+/// Which feed this widget is showing.
+///
+/// The first three pick a RANKING — a different algorithm decides what you
+/// see. The last two pick a KIND: the same For You ranking with one sort of
+/// video left out. [shorts] shows only challenges nobody has answered yet;
+/// [battles] shows only the head-to-head ones.
+///
+/// The SERVER does the leaving out, not this widget. That is not an
+/// efficiency choice — the backend writes down what it served the moment it
+/// builds a page, so anything hidden here would still be recorded as watched
+/// and would quietly corrupt what the feed learns about this person.
+enum FeedKind { forYou, following, explore, shorts, battles }
 
 /// Instagram/TikTok-style paginated reels feed. Switches its data source
 /// based on `kind` — same UI, different algorithm.
@@ -564,6 +575,19 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
           widget.userId,
           page: page,
           limit: _pageLimit,
+        );
+      case FeedKind.shorts:
+      case FeedKind.battles:
+        // Same ranking as For You; the backend leaves out the other kind.
+        // Asking the smart feed with a filter rather than adding another
+        // algorithm means these tabs keep improving as For You does.
+        return ApiService.getSmartFeed(
+          widget.userId,
+          page: page,
+          limit: _pageLimit,
+          sessionId: sessionId,
+          refresh: refresh,
+          kind: widget.kind == FeedKind.shorts ? 'shorts' : 'battles',
         );
     }
   }

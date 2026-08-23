@@ -940,10 +940,15 @@ class ApiService {
       {int page = 1,
       int limit = 20,
       String sessionId = '',
-      bool refresh = false}) async {
+      bool refresh = false,
+      String kind = ''}) async {
     try {
       var url = '$_base/api/v1/feed/smart?userId=$userId&page=$page&limit=$limit';
       if (sessionId.isNotEmpty) url += '&sessionId=$sessionId';
+      // Which tab is asking. Empty is the normal mixed feed; 'shorts' and
+      // 'battles' ask the backend for this same ranking with the other kind
+      // left out.
+      if (kind.isNotEmpty) url += '&kind=$kind';
       // Send the device's UTC offset (minutes east of UTC) so the backend's
       // hour-of-day routing buckets by the user's LOCAL hour rather than the
       // server's timezone. Absent → backend treats it as UTC (no behaviour change).
