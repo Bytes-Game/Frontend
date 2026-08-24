@@ -328,6 +328,7 @@ class UploadJobManager {
         visibility: meta.visibility,
         category: meta.category,
         emotionTags: meta.emotionTags,
+        tags: meta.tags,
       );
       if (challenge == null) {
         _fail(job, 'create_fail',
@@ -462,6 +463,7 @@ class UploadJobManager {
         visibility: meta.visibility,
         category: meta.category,
         emotionTags: meta.emotionTags,
+        tags: meta.tags,
         // energyLevel removed from the create payload — the server
         // derives it from the metadata it already has. See
         // energy_classifier.go on the backend.
@@ -729,6 +731,9 @@ class UploadJobManager {
             subject: metaJson['subject'] as String? ?? '',
             visibility: metaJson['visibility'] as String? ?? 'arena',
             category: metaJson['category'] as String? ?? 'other',
+            tags: (metaJson['tags'] as List? ?? [])
+                .map((e) => e.toString())
+                .toList(),
             emotionTags: (metaJson['emotionTags'] as List? ?? [])
                 .map((e) => e.toString())
                 .toList(),
@@ -882,6 +887,7 @@ class UploadJob {
             'visibility': _challengeMeta!.visibility,
             'category': _challengeMeta!.category,
             'emotionTags': _challengeMeta!.emotionTags,
+            'tags': _challengeMeta!.tags,
           },
       };
 }
@@ -901,6 +907,13 @@ class ChallengeSubmissionMeta {
   final String visibility;
   final String category;
   final List<String> emotionTags;
+  /// The creator's own words for what the video is about.
+  ///
+  /// These used to ride in on [emotionTags] because the backend had no
+  /// field for them. It has one now, and the two mean different things:
+  /// emotions come from a fixed list the ranker matches against a user's
+  /// mood, while these are free text. Mixed together, neither worked.
+  final List<String> tags;
 
   const ChallengeSubmissionMeta({
     required this.prefix,
@@ -908,6 +921,7 @@ class ChallengeSubmissionMeta {
     required this.visibility,
     required this.category,
     required this.emotionTags,
+    this.tags = const [],
   });
 }
 

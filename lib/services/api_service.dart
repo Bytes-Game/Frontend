@@ -681,6 +681,11 @@ class ApiService {
     List<String> visibleTo = const [],
     String category = 'other',
     List<String> emotionTags = const [],
+    // The creator's own words for what the video is about. Sent raw —
+    // the server lowercases, strips '#', folds separators, dedupes and
+    // caps them, so this side never has to (see content_tags.go). Doing
+    // it here as well would mean two rules to keep in step.
+    List<String> tags = const [],
     // Multi-bitrate map (480p/720p/1080p → public R2 URL). Optional —
     // legacy callers that only pasted one URL still work because the
     // backend treats an empty/missing map as "no variants encoded yet"
@@ -709,6 +714,7 @@ class ApiService {
           'visibleTo': visibleTo,
           'category': category,
           'emotionTags': emotionTags,
+          'tags': tags,
         }),
       );
       if (res.statusCode == 200 || res.statusCode == 201) {
@@ -940,10 +946,15 @@ class ApiService {
       {int page = 1,
       int limit = 20,
       String sessionId = '',
-      bool refresh = false}) async {
+      bool refresh = false,
+      String kind = ''}) async {
     try {
       var url = '$_base/api/v1/feed/smart?userId=$userId&page=$page&limit=$limit';
       if (sessionId.isNotEmpty) url += '&sessionId=$sessionId';
+      // Which tab is asking. Empty is the normal mixed feed; 'shorts' and
+      // 'battles' ask the backend for this same ranking with the other kind
+      // left out.
+      if (kind.isNotEmpty) url += '&kind=$kind';
       // Send the device's UTC offset (minutes east of UTC) so the backend's
       // hour-of-day routing buckets by the user's LOCAL hour rather than the
       // server's timezone. Absent → backend treats it as UTC (no behaviour change).

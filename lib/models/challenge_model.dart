@@ -43,6 +43,7 @@ class ChallengeModel {
   // Content understanding fields
   final String category;          // "comedy","motivation","sports","dance",etc.
   final List<String> emotionTags; // ["happy","intense","inspiring"]
+  final List<String> tags;        // creator's own words, already normalized server-side
   final String energyLevel;       // "low","medium","high"
 
   // Top response (a.k.a. "opponent") fields. Populated by the backend's
@@ -90,6 +91,7 @@ class ChallengeModel {
   required this.responseCount,
   this.category = 'other',
   this.emotionTags = const [],
+  this.tags = const [],
   this.energyLevel = 'medium',
   this.topResponseId = '',
   this.topResponseVideoUrl = '',
@@ -136,6 +138,10 @@ class ChallengeModel {
       responseCount: json['responseCount'] ?? 0,
       category: json['category'] ?? 'other',
       emotionTags: (json['emotionTags'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          [],
+      tags: (json['tags'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
           [],
