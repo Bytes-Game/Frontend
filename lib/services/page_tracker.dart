@@ -35,11 +35,59 @@ import 'package:myapp/services/event_tracker.dart';
 mixin PageTracker<T extends StatefulWidget> on State<T> {
   DateTime? _enteredAt;
 
+  /// The last successfully-read [pageParams], kept so the exit event has
+  /// something to carry.
+  ///
+  /// ## Why the exit event cannot just read pageParams
+  ///
+  /// Because by then the page is gone. A page's params usually describe
+  /// something it looked up while it was open — which profile, whose
+  /// conversation — and looking those up means reading from the widget tree
+  /// above it. In `dispose()` that page has already been detached, so the
+  /// lookup finds nothing and throws.
+  ///
+  /// It threw for real. Leaving the profile page produced, on every exit:
+  ///
+  ///     Null check operator used on a null value
+  ///     #3  _ProfilePageState.pageParams (profile_page.dart:76)
+  ///     #4  PageTracker.dispose (page_tracker.dart:67)
+  ///
+  /// mid-frame, which loses the `page_exit` event and dumps eighty lines of
+  /// stack into the log. Every screen using this mixin was one Provider
+  /// lookup away from the same thing.
+  ///
+  /// So the params are read while the page is alive and remembered. The
+  /// snapshot is also the more honest value: an exit event should describe
+  /// the page the person was on, not whatever could still be resolved after
+  /// it was taken down.
+  Map<String, dynamic> _lastParams = const {};
+
   /// Stable snake_case identifier — used as both contentId and metadata.pageName.
   String get pageName;
 
   /// Optional per-page parameters carried in metadata. Override when useful.
+  ///
+  /// Read while the page is on screen, never during teardown — see
+  /// [_lastParams].
   Map<String, dynamic> get pageParams => const {};
+
+  /// Read [pageParams] and remember it, keeping the previous value if the
+  /// page cannot answer right now.
+  ///
+  /// The catch is deliberate. Tracking is a side effect of being on a screen;
+  /// it must never be the reason a screen fails to open or fails to close.
+  void _rememberParams() {
+    try {
+      _lastParams = pageParams;
+    } catch (_) {
+      // Keep whatever was last known. An analytics event with slightly stale
+      // params beats a crash, and beats no event at all.
+    }
+  }
+
+  /// The description this page will carry out with it.
+  @visibleForTesting
+  Map<String, dynamic> get pageParamsAtExit => _lastParams;
 
   /// Optional referrer (the previous page). Defaults to null. Most pages
   /// don't need to set this — the route observer captures the navigation
@@ -50,21 +98,40 @@ mixin PageTracker<T extends StatefulWidget> on State<T> {
   void initState() {
     super.initState();
     _enteredAt = DateTime.now();
+    _rememberParams();
     EventTracker.instance.trackPageView(
       pageName: pageName,
       referrer: pageReferrer,
-      params: pageParams,
+      params: _lastParams,
     );
+  }
+
+  /// Refresh the snapshot whenever the page's surroundings change.
+  ///
+  /// This is the last moment the page is guaranteed to still be attached, and
+  /// it runs once right after [initState] and again on anything that would
+  /// change what [pageParams] resolves to — so the value carried into
+  /// [dispose] is the one that was true while the page was open.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _rememberParams();
   }
 
   @override
   void dispose() {
     final entered = _enteredAt;
     if (entered != null) {
+      // One more attempt at the live value, because some pages fill their
+      // params in after opening — a conversation id that arrives from the
+      // server, say — and the snapshot would miss it. Pages whose params need
+      // the widget tree fail here and keep the snapshot, which is the whole
+      // point of having one.
+      _rememberParams();
       EventTracker.instance.trackPageExit(
         pageName: pageName,
         dwellMs: DateTime.now().difference(entered).inMilliseconds,
-        params: pageParams,
+        params: _lastParams,
       );
     }
     super.dispose();
