@@ -528,6 +528,8 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     var shorts = 0;
     var mine = 0;
     var noCreatorId = 0;
+    var repeats = 0;
+    var newHere = 0;
     for (final e in parsed) {
       if (e is! _ReelItem || e.type != 'challenge') continue;
       if (e.isBattle) {
@@ -540,13 +542,54 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       } else if (e.creatorId == widget.userId) {
         mine++;
       }
+      // Whether THIS page is new content or the same videos coming round
+      // again. The server has always said so per item; nothing read it.
+      if (e.isRepeat) {
+        repeats++;
+      } else {
+        newHere++;
+      }
+      // Second opinion, from this session alone. See below.
+      if (!_shownThisSession.add('${e.type}:${e.id}')) {
+        _seenAgainThisSession++;
+      }
     }
     ReelDiagnostics.instance.log(
       'feed ${widget.kind.name} page $page: ${parsed.length} items  '
       'battles=$battles shorts=$shorts  mine=$mine noCreatorId=$noCreatorId  '
+      'new=$newHere repeat=$repeats againThisRun=$_seenAgainThisSession  '
       'raw=$rawCount/$_pageLimit said=$declaredHasMore more=$hasMore',
     );
   }
+
+  /// Every video id this tab has been sent since the app started, and how many
+  /// arrived more than once.
+  ///
+  /// ## Why two counters that look like the same thing
+  ///
+  /// `repeat` is the SERVER's answer: it marks an item when its own record
+  /// says this account has already been shown it. `againThisRun` is what this
+  /// screen watched happen with its own eyes.
+  ///
+  /// Apart, neither settles anything. Together they name the problem:
+  ///
+  ///   repeat high, againThisRun high  the catalogue ran out. The server knows
+  ///                                   you have seen these and is serving them
+  ///                                   anyway, on purpose, because an empty
+  ///                                   feed is worse than a repeat.
+  ///   repeat ZERO, againThisRun high  the server does not know. Its memory of
+  ///                                   what you have watched is not being
+  ///                                   written, so the same top-ranked videos
+  ///                                   win every page forever.
+  ///
+  /// Those two need completely different fixes, and a page count alone cannot
+  /// tell them apart — which is exactly where a real investigation stalled.
+  ///
+  /// Per SCREEN, not per app: each tab has its own, and they reset when the
+  /// tab is rebuilt. That is the right scope, because the question being
+  /// answered is "did THIS list repeat itself".
+  final Set<String> _shownThisSession = <String>{};
+  int _seenAgainThisSession = 0;
 
   /// Dispatches to the right backend endpoint based on widget.kind. Each
   /// endpoint runs a different ranking algorithm — see FeedKind doc.

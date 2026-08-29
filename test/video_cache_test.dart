@@ -948,4 +948,52 @@ void _capTests() {
       );
     });
   });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // HOW MANY DOWNLOADS AT ONCE
+  // ══════════════════════════════════════════════════════════════════════════
+  //
+  // Two slots was sized for a feed of single videos. A battle is two — the
+  // challenger and the opponent behind the flip — and a device run right after
+  // battles started ranking properly showed the cost: eight downloads waiting
+  // with both slots busy, twenty warms cancelled, and reels in the Battles tab
+  // taking 2.1 seconds to start moving against 0.8 in Shorts.
+  //
+  // More slots only help where there is bandwidth spare, though. On a
+  // saturated link they make everything finish LATER, including the reel on
+  // screen. So the count follows the connection.
+
+  test('a fast connection gets more download slots than a slow one', () {
+    final cache = VideoCacheService.instance;
+
+    NetworkQualityService.instance.debugSetQuality(NetworkQuality.low);
+    final slow = cache.downloadSlotsForTest;
+
+    NetworkQualityService.instance.debugSetQuality(NetworkQuality.high);
+    final fast = cache.downloadSlotsForTest;
+
+    expect(fast, greaterThan(slow),
+        reason: 'wifi got no more download slots than a weak connection, so '
+            'the battle-heavy feed still queues behind the same bottleneck');
+    expect(fast - slow, VideoCacheService.extraSlotsOnFastNetwork);
+  });
+
+  test('an unknown connection is treated as slow', () {
+    // Mostly the first seconds after launch — which is exactly when the first
+    // reel is opening and the least safe moment to guess generously.
+    final cache = VideoCacheService.instance;
+
+    NetworkQualityService.instance.debugSetQuality(NetworkQuality.low);
+    final slow = cache.downloadSlotsForTest;
+
+    NetworkQualityService.instance.debugSetQuality(NetworkQuality.unknown);
+    expect(cache.downloadSlotsForTest, slow,
+        reason: 'an unmeasured connection was given the fast-network bonus');
+
+    NetworkQualityService.instance.debugSetQuality(NetworkQuality.medium);
+    expect(cache.downloadSlotsForTest, slow,
+        reason: 'LTE was given the bonus; it is usually fine and sometimes '
+            'suddenly is not, and the cost lands on the reel on screen');
+  });
+
 }

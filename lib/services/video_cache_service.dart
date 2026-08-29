@@ -379,13 +379,71 @@ class VideoCacheService {
   /// still holds. Neither mode stands down to zero: a long reel
   /// back-fills for its whole duration, and a feed that only warms
   /// between reels is a feed with no warm reels.
+  /// Extra slots granted on a connection that can clearly carry them.
+  ///
+  /// ════════════════════════════════════════════════════════════════════════
+  /// WHY THE OLD FIXED NUMBER WAS TOO LOW
+  /// ════════════════════════════════════════════════════════════════════════
+  ///
+  /// Two slots was sized for a feed of single videos. A battle is TWO — the
+  /// challenger and the opponent behind the flip — and the warmer queues
+  /// every upcoming challenger first, then every opponent behind them. So a
+  /// battle-heavy feed is double the work through the same two slots.
+  ///
+  /// A device run right after battles started ranking properly shows what
+  /// that costs: eight downloads waiting with both slots busy, twenty warms
+  /// cancelled before they finished, the cache hit rate down from 96% to 87%,
+  /// and reels opening straight against the network up from 4% to 13%. Videos
+  /// took 2.1 seconds to start moving in the Battles tab against 0.8 in
+  /// Shorts.
+  ///
+  /// ════════════════════════════════════════════════════════════════════════
+  /// WHY IT IS NOT JUST A BIGGER NUMBER
+  /// ════════════════════════════════════════════════════════════════════════
+  ///
+  /// Concurrency is only free when there is bandwidth spare. On a saturated
+  /// 3G link, more parallel downloads do not finish sooner — they finish
+  /// LATER, all of them, and they take the reel on screen down with them,
+  /// because it is sharing the same pipe. That is the whole reason this
+  /// number was small.
+  ///
+  /// So it scales with what the connection has already proved it can do.
+  /// Wifi gets the extra slots; a weak or unknown link keeps exactly the
+  /// behaviour it had before. This is the same shape as the variant picker
+  /// next door, which reads the same signal to decide 480p versus 720p — one
+  /// measurement, two decisions.
+  static const int extraSlotsOnFastNetwork = 2;
+
+  /// True when the connection is good enough to be worth loading up.
+  ///
+  /// Wifi only. Deliberately NOT medium: LTE is usually fine and sometimes
+  /// suddenly is not, and the cost of guessing wrong lands on the video the
+  /// user is watching right now. `unknown` is treated as slow for the same
+  /// reason — it is mostly the first seconds after launch, which is exactly
+  /// when the first reel is opening.
+  bool get _networkCanTakeMore =>
+      NetworkQualityService.instance.current == NetworkQuality.high;
+
+  /// The slot count, exposed so a test can assert it reacts to the network
+  /// rather than asserting the constants add up.
+  @visibleForTesting
+  int get downloadSlotsForTest => _downloadSlots;
+
   int get _downloadSlots {
+    final bonus = _networkCanTakeMore ? extraSlotsOnFastNetwork : 0;
     if (LocalMediaServer.instance.backfillsInFlight == 0) {
-      return maxConcurrentDownloads;
+      return maxConcurrentDownloads + bonus;
     }
-    return _prefixMode
-        ? maxConcurrentDownloadsDuringBackfill
-        : maxConcurrentWholeFileDownloadsDuringBackfill;
+    if (!_prefixMode) {
+      // Whole-file mode keeps its single slot on any connection. A whole file
+      // is unbounded up to maxPrefetchBytes, so a second one alongside a
+      // playing reel can be tens of megabytes racing the thing on screen —
+      // which is the case this limit exists for, fast connection or not.
+      return maxConcurrentWholeFileDownloadsDuringBackfill;
+    }
+    // Prefix mode: each warm is a fixed small slice, so more of them in
+    // flight is bounded extra traffic rather than open-ended.
+    return maxConcurrentDownloadsDuringBackfill + bonus;
   }
 
   /// Start downloads until the concurrency limit is reached.
