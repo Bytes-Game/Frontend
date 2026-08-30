@@ -1007,4 +1007,31 @@ void _capTests() {
             'suddenly is not, and the cost lands on the reel on screen');
   });
 
+  test('a fast connection gets no bonus while a reel is playing', () {
+    // The case the two tests above never reach: they run with nothing on
+    // screen, so the bonus is always correct for them.
+    //
+    // While a reel IS playing, read-ahead competes with it for the same
+    // connection, and the bonus was being added there too. That reasoning
+    // held when a warm was 768 KB. At 2 MB, four of them alongside a reel
+    // streaming at up to 3.5 Mbps is eight megabytes racing the picture on
+    // screen — and a device log showed the decoder starving 342 times
+    // across 190 reels, the longest gap 4.5 seconds.
+    final cache = VideoCacheService.instance;
+    addTearDown(() => LocalMediaServer.instance.debugSetBackfills(0));
+
+    LocalMediaServer.instance.debugSetBackfills(1);
+
+    NetworkQualityService.instance.debugSetQuality(NetworkQuality.low);
+    final slowWhilePlaying = cache.downloadSlotsForTest;
+
+    NetworkQualityService.instance.debugSetQuality(NetworkQuality.high);
+    final fastWhilePlaying = cache.downloadSlotsForTest;
+
+    expect(fastWhilePlaying, slowWhilePlaying,
+        reason: 'a fast connection was given extra read-ahead slots while a '
+            'reel was still pulling bytes for itself. Those slots come out '
+            'of the same connection the picture on screen is using.');
+  });
+
 }

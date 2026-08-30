@@ -464,9 +464,30 @@ class VideoCacheService {
       // which is the case this limit exists for, fast connection or not.
       return maxConcurrentWholeFileDownloadsDuringBackfill;
     }
-    // Prefix mode: each warm is a fixed small slice, so more of them in
-    // flight is bounded extra traffic rather than open-ended.
-    return maxConcurrentDownloadsDuringBackfill + bonus;
+    // ════════════════════════════════════════════════════════════════════
+    // NO BONUS WHILE A REEL IS PLAYING
+    // ════════════════════════════════════════════════════════════════════
+    //
+    // This used to add the fast-connection bonus here too, on the reasoning
+    // that "each warm is a fixed small slice, so more of them in flight is
+    // bounded extra traffic". That was written when a slice was 768 KB. It
+    // is now 2 MB, and four of those alongside a reel streaming at up to
+    // 3.5 Mbps is no longer a rounding error — it is eight megabytes of
+    // read-ahead racing the video the viewer is actually watching.
+    //
+    // A device log showed what that costs. The decoder reported 342
+    // starvation events across 190 reels — stretches where it sat with no
+    // input to decode, the longest 4.5 seconds — which is the picture
+    // freezing while the bytes for it are queued behind read-ahead for
+    // reels nobody has reached yet.
+    //
+    // So the bonus is for warming between reels, which is what it was for.
+    // While something is on screen, the ceiling is the ceiling: the reel
+    // being watched gets the connection, and read-ahead takes what is left.
+    // This is also what the test for this behaviour has always asserted —
+    // it passed only because the test environment never reports a fast
+    // connection, so the bonus was never added in the case it covers.
+    return maxConcurrentDownloadsDuringBackfill;
   }
 
   /// Start downloads until the concurrency limit is reached.
