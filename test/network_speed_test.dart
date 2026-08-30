@@ -130,4 +130,48 @@ void main() {
         reason: 'the link got slower and the app kept serving the old '
             'quality, which is the freeze happening again');
   });
+
+  // ── The fast-connection rung ────────────────────────────────────────────
+  //
+  // 720p_hq is the same 1280-wide picture as 720p with more bits spent on it.
+  // It exists so the encoding bitrate stops being one global number set from
+  // one person's link: a fast connection gets the sharp file, a middling one
+  // gets the file that plays, and neither is decided by the other.
+
+  test('a fast link is given the sharper 720p', () {
+    sampleAt(10);
+    final variants = {'480p': 'small', '720p': 'mid', '720p_hq': 'sharp'};
+    expect(net.pickVariantUrl(variants), 'sharp',
+        reason: 'a 10 Mbps link was capped at the middling rung, which is the '
+            'global-number problem this rung exists to end');
+  });
+
+  test('a middling link gets the file that plays, not the sharp one', () {
+    // Comfortably above 720p, comfortably below 720p_hq. The measured phone
+    // that started all of this lived here.
+    sampleAt(4.0);
+    final variants = {'480p': 'small', '720p': 'mid', '720p_hq': 'sharp'};
+    expect(net.pickVariantUrl(variants), 'mid',
+        reason: 'a link that cannot sustain the sharp rung was given it '
+            'anyway, which is a reel that stops part-way through');
+  });
+
+  test('the sharp rung is not withheld from an ordinary phone', () {
+    // The trap in adding it. Decode cost follows PIXELS, and 720p_hq has
+    // exactly as many as 720p — so ranking it above 720p for the DEVICE
+    // ceiling would have hidden it from every mid-range phone, which is most
+    // of them, for a cost it does not impose.
+    sampleAt(10);
+    final variants = {'720p': 'mid', '720p_hq': 'sharp'};
+    expect(net.pickVariantUrl(variants), 'sharp',
+        reason: 'the default 4 GB test device was refused a rendition that '
+            'is the same size as one it is happily given');
+  });
+
+  test('a video with only the old rungs still plays', () {
+    // Everything encoded before this rung existed has no 720p_hq, and the
+    // backfill takes time. Those must not fall through to nothing.
+    sampleAt(10);
+    expect(net.pickVariantUrl({'480p': 'small', '720p': 'mid'}), 'mid');
+  });
 }

@@ -168,7 +168,10 @@ class NetworkQualityService {
   ///
   /// Surfaces where the extra detail is genuinely visible (a full-screen
   /// detail view on a tablet, say) can pass a higher [maxLabel].
-  static const String reelsMaxLabel = '720p';
+  /// The highest rung a reel may use. 720p_hq rather than 720p: both are the
+  /// same 1280-wide picture, and this cap exists to keep 1920-wide video off
+  /// phone screens, not to cap how many bits a 1280-wide one may spend.
+  static const String reelsMaxLabel = '720p_hq';
 
   // ══════════════════════════════════════════════════════════════════════
   // HOW FAST THE CONNECTION ACTUALLY IS
@@ -201,6 +204,7 @@ class NetworkQualityService {
   static const Map<String, int> bitrateNeededFor = <String, int>{
     '480p': 1500000,
     '720p': 2500000,
+    '720p_hq': 3500000,
     '1080p': 6000000,
   };
 
@@ -271,7 +275,16 @@ class NetworkQualityService {
     return best;
   }
 
-  static const Map<String, int> _labelRank = {'480p': 0, '720p': 1, '1080p': 2};
+  /// Quality order — how good each rendition looks, and so which one to
+  /// prefer. Not the same as how hard it is to DECODE: 720p_hq is the same
+  /// 1280-wide picture as 720p with more bits spent on it, so it ranks higher
+  /// here and identically for decode cost. See _preferenceOrder.
+  static const Map<String, int> _labelRank = {
+    '480p': 0,
+    '720p': 1,
+    '720p_hq': 2,
+    '1080p': 3,
+  };
 
   @visibleForTesting
   void debugClearThroughput() => _throughputSamples.clear();
@@ -347,39 +360,46 @@ class NetworkQualityService {
   /// they can spare (MediaCodec frame queues scale with resolution²).
   List<String> _preferenceOrder(
       NetworkQuality q, double ramGb, String? maxLabel) {
-    // Device ceiling — never offer above this on this device.
-    //   < 3 GB  → 480p ceiling   (entry tier)
-    //   < 5 GB  → 720p ceiling   (mid tier — most users)
-    //   ≥ 5 GB  → 1080p          (flagship)
-    final deviceCap = ramGb < 3.0
-        ? '480p'
+    // What a phone can DECODE follows the number of pixels, and nothing else.
+    //   < 3 GB  → 854 wide   (entry tier)
+    //   < 5 GB  → 1280 wide  (mid tier — most users)
+    //   ≥ 5 GB  → 1920 wide  (flagship)
+    //
+    // 720p_hq sits at 1 here, the same as 720p, because it IS 720p — the same
+    // 1280-wide picture with more bits spent on it. A phone that can decode
+    // one can decode the other. Ranking it above 720p here would have hidden
+    // it from every mid-range phone, which is most of them, for a cost it does
+    // not actually impose.
+    const decodeRank = {'480p': 0, '720p': 1, '720p_hq': 1, '1080p': 2};
+    final deviceCapRank = ramGb < 3.0
+        ? 0
         : ramGb < 5.0
-            ? '720p'
-            : '1080p';
+            ? 1
+            : 2;
 
-    const rank = {'480p': 0, '720p': 1, '1080p': 2};
-
-    // Take the LOWER of the device ceiling and the caller's ceiling. The
-    // device cap protects against OOM; the caller's cap reflects what is
-    // worth decoding for the surface being rendered.
-    var capRank = rank[deviceCap] ?? 2;
-    final requested = rank[maxLabel];
-    if (requested != null && requested < capRank) capRank = requested;
+    // What a CONNECTION can carry is the other ceiling, and it is the one that
+    // separates the two 720p rungs. It arrives as maxLabel, already lowered by
+    // the measured link speed — see pickVariantUrl.
+    final requested = _labelRank[maxLabel];
 
     List<String> trim(List<String> order) {
-      return order
-          .where((label) => (rank[label] ?? 99) <= capRank)
-          .toList(growable: false);
+      return order.where((label) {
+        if ((decodeRank[label] ?? 99) > deviceCapRank) return false;
+        if (requested != null && (_labelRank[label] ?? 99) > requested) {
+          return false;
+        }
+        return true;
+      }).toList(growable: false);
     }
 
     switch (q) {
       case NetworkQuality.high:
-        return trim(const ['1080p', '720p', '480p']);
+        return trim(const ['1080p', '720p_hq', '720p', '480p']);
       case NetworkQuality.medium:
       case NetworkQuality.unknown:
-        return trim(const ['720p', '480p', '1080p']);
+        return trim(const ['720p_hq', '720p', '480p', '1080p']);
       case NetworkQuality.low:
-        return trim(const ['480p', '720p', '1080p']);
+        return trim(const ['480p', '720p', '720p_hq', '1080p']);
     }
   }
 }
