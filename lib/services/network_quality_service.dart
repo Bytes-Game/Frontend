@@ -166,6 +166,112 @@ class NetworkQualityService {
   /// detail view on a tablet, say) can pass a higher [maxLabel].
   static const String reelsMaxLabel = '720p';
 
+  // ══════════════════════════════════════════════════════════════════════
+  // HOW FAST THE CONNECTION ACTUALLY IS
+  // ══════════════════════════════════════════════════════════════════════
+  //
+  // Everything above this point answers "what KIND of connection is this?"
+  // — wifi, mobile, none. That is not the same question as "can it carry
+  // this video", and treating it as though it were is what made reels
+  // freeze.
+  //
+  // A device log made the gap plain. 96% of reels started instantly from
+  // cache, the download queue was empty and every slot idle, and the
+  // decoder still ran dry 394 times across 160 reels. Nothing was
+  // competing for the connection. The connection just could not carry a
+  // 3.5 Mbps video, and the app had no way to find that out: it saw wifi,
+  // called it fast, and served 720p to something that could not stream it.
+  //
+  // The comment on the cellular branch above already promised "the player
+  // will downgrade further if first-chunk latency is bad". Nothing ever
+  // did. This is that.
+  //
+  // The measurement is free. Warming a reel already downloads a fixed
+  // slice and already knows how long it took, so every warmed reel is a
+  // throughput sample of exactly the thing we care about — this phone,
+  // this network, this CDN, right now — rather than a guess from the
+  // interface type.
+
+  /// Sustained bits per second each rendition needs, from what the server
+  /// actually encodes to. Kept next to the labels so the two move together.
+  static const Map<String, int> bitrateNeededFor = <String, int>{
+    '480p': 1500000,
+    '720p': 3500000,
+    '1080p': 6000000,
+  };
+
+  /// How much faster than the file's own bitrate the link has to be before
+  /// we will choose it.
+  ///
+  /// Streaming at exactly the file's rate leaves nothing for a slow moment,
+  /// and a reel only has to fall behind once to visibly stop. A third again
+  /// is enough to ride out normal variation without being so cautious that
+  /// good connections get a soft picture.
+  static const double bitrateHeadroom = 1.3;
+
+  /// Recent throughput samples in bits per second, newest last.
+  final List<int> _throughputSamples = <int>[];
+
+  /// Enough samples to trust the answer. Below this the connection type is
+  /// still the best guess available — one slow download is a slow download,
+  /// not a slow network.
+  static const int _minSamples = 3;
+
+  /// How many samples to keep. Short enough to follow someone walking out
+  /// of wifi range, long enough that a single stall does not redefine the
+  /// connection.
+  static const int _maxSamples = 8;
+
+  /// Record how fast a real download went. Called by the warming pipeline,
+  /// which is doing this work anyway.
+  ///
+  /// Tiny or instant downloads are dropped rather than recorded: a slice
+  /// served from a local buffer can look like a gigabit link and would drag
+  /// the median somewhere no real network lives.
+  void recordThroughput(int bytes, Duration elapsed) {
+    if (bytes < 64 * 1024) return;
+    final ms = elapsed.inMilliseconds;
+    if (ms < 50) return;
+    _throughputSamples.add((bytes * 8 * 1000) ~/ ms);
+    if (_throughputSamples.length > _maxSamples) {
+      _throughputSamples.removeAt(0);
+    }
+  }
+
+  /// Measured bits per second, or null when there is not enough to say.
+  ///
+  /// The median rather than the average, because one download finishing
+  /// against a warm CDN edge should not convince us the whole link is fast.
+  int? get measuredBps {
+    if (_throughputSamples.length < _minSamples) return null;
+    final sorted = List<int>.from(_throughputSamples)..sort();
+    return sorted[sorted.length ~/ 2];
+  }
+
+  /// The best rendition this connection can actually carry, or null when we
+  /// have not measured enough to have an opinion.
+  ///
+  /// Never returns nothing: if even the smallest rendition is beyond the
+  /// link, that is still the one to serve — a soft picture that plays beats
+  /// a sharp one that stops.
+  String? get affordableLabel {
+    final bps = measuredBps;
+    if (bps == null) return null;
+    String best = '480p';
+    for (final entry in bitrateNeededFor.entries) {
+      if (bps < entry.value * bitrateHeadroom) continue;
+      if ((_labelRank[entry.key] ?? 0) > (_labelRank[best] ?? 0)) {
+        best = entry.key;
+      }
+    }
+    return best;
+  }
+
+  static const Map<String, int> _labelRank = {'480p': 0, '720p': 1, '1080p': 2};
+
+  @visibleForTesting
+  void debugClearThroughput() => _throughputSamples.clear();
+
   String? pickVariantUrl(Map<String, String> variants,
       {String? maxLabel = reelsMaxLabel}) {
     if (variants.isEmpty) {
@@ -173,7 +279,16 @@ class NetworkQualityService {
       return null;
     }
     final ramGb = DeviceCapabilities.instance.ramGb;
-    final order = _preferenceOrder(_current, ramGb, maxLabel);
+    // Take the lower of what the caller asked for and what the link has
+    // actually been managing. Before this, the ceiling came only from the
+    // connection TYPE, so a slow wifi was handed 720p and starved on it.
+    var ceiling = maxLabel;
+    final affordable = affordableLabel;
+    if (affordable != null) {
+      final asked = _labelRank[ceiling ?? reelsMaxLabel] ?? 2;
+      if ((_labelRank[affordable] ?? 0) < asked) ceiling = affordable;
+    }
+    final order = _preferenceOrder(_current, ramGb, ceiling);
     for (final label in order) {
       final url = variants[label];
       if (url != null && url.isNotEmpty) {
@@ -208,10 +323,17 @@ class NetworkQualityService {
   }
 
   /// Compact "480p:3 720p:17" for a log line, or empty when nothing has been
-  /// picked yet.
+  /// picked yet. Ends with the measured link speed and the best rendition it
+  /// can carry, so a log says WHY a quality was chosen and not just which.
   static String variantPicksSummary() {
-    if (variantPicks.isEmpty) return '';
-    final parts = variantPicks.entries.map((e) => '${e.key}:${e.value}');
+    final parts = variantPicks.entries.map((e) => '${e.key}:${e.value}').toList();
+    final bps = instance.measuredBps;
+    if (bps == null) {
+      parts.add('link=measuring');
+    } else {
+      parts.add('link=${(bps / 1e6).toStringAsFixed(1)}Mbps');
+      parts.add('affords=${instance.affordableLabel}');
+    }
     return parts.join(' ');
   }
 
