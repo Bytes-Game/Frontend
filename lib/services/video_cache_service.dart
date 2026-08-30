@@ -548,6 +548,13 @@ class VideoCacheService {
 
       final file = File(prefixPath);
       sink = file.openWrite();
+      // Time this download so the app can find out how fast the connection
+      // really is. Warming already pulls a fixed slice and already knows
+      // when it started and finished, so a throughput sample costs nothing
+      // and measures the thing that matters — this phone, this network,
+      // this CDN — rather than guessing from "is it wifi".
+      // See NetworkQualityService.recordThroughput.
+      final transferClock = Stopwatch()..start();
       final done = Completer<void>();
       d.done = done;
       // The opening bytes, kept as they stream past so the box order can
@@ -569,9 +576,18 @@ class VideoCacheService {
         cancelOnError: true,
       );
       await done.future;
+      transferClock.stop();
       await sink.flush();
       await sink.close();
       sink = null;
+
+      // Only completed transfers are measured. A cancelled one stopped for
+      // our own reasons, not the network's, and counting it would read as a
+      // slow link every time somebody scrolls quickly.
+      if (!d.cancelled && d.written > 0) {
+        NetworkQualityService.instance
+            .recordThroughput(d.written, transferClock.elapsed);
+      }
 
       if (d.cancelled || d.written <= 0) {
         ReelDiagnostics.instance
