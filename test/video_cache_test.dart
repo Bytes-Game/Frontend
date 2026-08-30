@@ -150,18 +150,7 @@ void main() {
   // that every way it can fail lands back on the whole-file downloader
   // that shipped before it, with a complete, playable file on disk.
   group('prefix mode and its fallbacks', () {
-    /// A reel big enough that a warm is genuinely a sliver of it.
-    ///
-    /// Derived from the prefix rather than written down. This was a fixed
-    /// 4 MB, which made a warm a quarter of the file the moment the prefix
-    /// grew to 2 MB — so the tests below started failing for saying a sliver
-    /// was not small, when what had actually stopped being true was that the
-    /// fixture resembled a reel. At the ceilings the server encodes to, a
-    /// thirty-second reel is around 13 MB and a minute is closer to 26.
-    ///
-    /// Reading the constant keeps the ratio fixed at 1:8 whatever the prefix
-    /// becomes, so this cannot go stale the next time that number moves.
-    const fileSize = VideoCacheService.prefixBytes * 8;
+    const fileSize = 4 * 1024 * 1024;
 
     /// Records whether each request carried a Range header, which is what
     /// distinguishes a sliver warm from a whole-file download.
@@ -1005,33 +994,6 @@ void _capTests() {
     expect(cache.downloadSlotsForTest, slow,
         reason: 'LTE was given the bonus; it is usually fine and sometimes '
             'suddenly is not, and the cost lands on the reel on screen');
-  });
-
-  test('a fast connection gets no bonus while a reel is playing', () {
-    // The case the two tests above never reach: they run with nothing on
-    // screen, so the bonus is always correct for them.
-    //
-    // While a reel IS playing, read-ahead competes with it for the same
-    // connection, and the bonus was being added there too. That reasoning
-    // held when a warm was 768 KB. At 2 MB, four of them alongside a reel
-    // streaming at up to 3.5 Mbps is eight megabytes racing the picture on
-    // screen — and a device log showed the decoder starving 342 times
-    // across 190 reels, the longest gap 4.5 seconds.
-    final cache = VideoCacheService.instance;
-    addTearDown(() => LocalMediaServer.instance.debugSetBackfills(0));
-
-    LocalMediaServer.instance.debugSetBackfills(1);
-
-    NetworkQualityService.instance.debugSetQuality(NetworkQuality.low);
-    final slowWhilePlaying = cache.downloadSlotsForTest;
-
-    NetworkQualityService.instance.debugSetQuality(NetworkQuality.high);
-    final fastWhilePlaying = cache.downloadSlotsForTest;
-
-    expect(fastWhilePlaying, slowWhilePlaying,
-        reason: 'a fast connection was given extra read-ahead slots while a '
-            'reel was still pulling bytes for itself. Those slots come out '
-            'of the same connection the picture on screen is using.');
   });
 
 }

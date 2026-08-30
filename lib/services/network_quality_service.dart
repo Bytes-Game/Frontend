@@ -168,18 +168,51 @@ class NetworkQualityService {
 
   String? pickVariantUrl(Map<String, String> variants,
       {String? maxLabel = reelsMaxLabel}) {
-    if (variants.isEmpty) return null;
+    if (variants.isEmpty) {
+      _countPick('none');
+      return null;
+    }
     final ramGb = DeviceCapabilities.instance.ramGb;
     final order = _preferenceOrder(_current, ramGb, maxLabel);
     for (final label in order) {
       final url = variants[label];
-      if (url != null && url.isNotEmpty) return url;
+      if (url != null && url.isNotEmpty) {
+        _countPick(label);
+        return url;
+      }
     }
     // Last-resort: any variant we have.
+    _countPick('other');
     return variants.values.firstWhere(
       (s) => s.isNotEmpty,
       orElse: () => '',
     );
+  }
+
+  /// How many reels were served at each quality, this run.
+  ///
+  /// This exists because "the video looks soft" and "the video keeps
+  /// stopping" are reported the same way by a viewer, and until now nothing
+  /// said which rendition was actually on screen. Two different faults —
+  /// being handed 480p when 720p exists, versus being handed 720p and
+  /// stalling through it — were indistinguishable in a device log, so
+  /// neither could be ruled out.
+  ///
+  /// `none` counts reels with no rendition map at all, which fall back to
+  /// the original upload. That is not a fault: the server deliberately makes
+  /// no renditions for a video already inside its quality ceiling.
+  static final Map<String, int> variantPicks = <String, int>{};
+
+  void _countPick(String label) {
+    variantPicks[label] = (variantPicks[label] ?? 0) + 1;
+  }
+
+  /// Compact "480p:3 720p:17" for a log line, or empty when nothing has been
+  /// picked yet.
+  static String variantPicksSummary() {
+    if (variantPicks.isEmpty) return '';
+    final parts = variantPicks.entries.map((e) => '${e.key}:${e.value}');
+    return parts.join(' ');
   }
 
   /// Preferred → fallback order for the current network and device.

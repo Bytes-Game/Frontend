@@ -558,7 +558,12 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       'feed ${widget.kind.name} page $page: ${parsed.length} items  '
       'battles=$battles shorts=$shorts  mine=$mine noCreatorId=$noCreatorId  '
       'new=$newHere repeat=$repeats againThisRun=$_seenAgainThisSession  '
-      'raw=$rawCount/$_pageLimit said=$declaredHasMore more=$hasMore',
+      'raw=$rawCount/$_pageLimit said=$declaredHasMore more=$hasMore  '
+      // Which quality is actually being served. "The video looks soft" and
+      // "the video keeps stopping" arrive as the same complaint, and without
+      // this there is no way to tell being handed 480p from being handed
+      // 720p and stalling through it.
+      'quality{${NetworkQualityService.variantPicksSummary()}}',
     );
   }
 
