@@ -33,10 +33,14 @@ enum NetworkQuality {
 /// the answer is constant-time on the hot path (reel scroll), and
 /// updates that cache when [connectivity_plus] reports a change.
 ///
-/// We do NOT do active bandwidth probing here. Probing burns data and
-/// adds a delay before the first frame; the connectivity-type heuristic
-/// is the right tradeoff for a reels app where time-to-first-frame is
-/// the metric users actually feel.
+/// We do NOT do ACTIVE bandwidth probing here — a speed test burns data and
+/// delays the first frame, which is the thing viewers actually feel.
+///
+/// We do measure passively, which costs neither. Warming a reel already
+/// downloads a fixed slice and already knows how long it took, so every
+/// warmed reel is a free reading of the real link. See [recordThroughput].
+/// The connection TYPE still decides how much to read ahead; the measured
+/// speed decides which quality is safe to play.
 class NetworkQualityService {
   NetworkQualityService._();
   static final NetworkQualityService instance = NetworkQualityService._();
@@ -196,7 +200,7 @@ class NetworkQualityService {
   /// actually encodes to. Kept next to the labels so the two move together.
   static const Map<String, int> bitrateNeededFor = <String, int>{
     '480p': 1500000,
-    '720p': 3500000,
+    '720p': 2500000,
     '1080p': 6000000,
   };
 

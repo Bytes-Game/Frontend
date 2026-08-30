@@ -81,15 +81,22 @@ void main() {
   test('headroom is required, not just the bare bitrate', () {
     // A link matching the file exactly has nothing left for a slow moment,
     // and a reel only has to fall behind once to visibly stop.
-    sampleAt(3.6);
+    //
+    // Derived from the constants rather than written down, so lowering a
+    // ceiling does not quietly turn this into a test of nothing — which is
+    // exactly how the encoder's own fixtures went stale three times.
+    final need720 = NetworkQualityService.bitrateNeededFor['720p']! / 1e6;
+    final headroom = NetworkQualityService.bitrateHeadroom;
+
+    sampleAt(need720 * 1.05);
     expect(net.affordableLabel, '480p',
-        reason: '3.6 Mbps barely covers a 3.5 Mbps file and leaves nothing '
-            'for a dip; that is a stall waiting to happen');
+        reason: 'a link barely matching the file leaves nothing for a dip; '
+            'that is a stall waiting to happen');
 
     net.debugClearThroughput();
-    sampleAt(5.0);
+    sampleAt(need720 * headroom * 1.1);
     expect(net.affordableLabel, '720p',
-        reason: '5 Mbps carries a 3.5 Mbps file with room to spare');
+        reason: 'a link comfortably above the file was refused it');
   });
 
   test('never refuses to serve anything at all', () {
