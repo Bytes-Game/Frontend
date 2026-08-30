@@ -92,12 +92,35 @@ class VideoCacheService {
   /// connection should carry.
   static const int maxConcurrentWholeFileDownloadsDuringBackfill = 1;
 
-  /// How much of a reel to warm in prefix mode. Sized to cover roughly
-  /// the first two seconds at the 720p bitrate the feed now caps at
-  /// (2.5 Mbps ≈ 310 KB/s), which is comfortably enough for the player
-  /// to open, decode a first frame, and start rendering before the
-  /// back-fill from origin catches up.
-  static const int prefixBytes = 768 * 1024;
+  /// How much of a reel to warm in prefix mode.
+  ///
+  /// This is a fixed number of BYTES, but what actually stops a reel
+  /// stalling is SECONDS of video, and the two are only the same thing at
+  /// a fixed bitrate. So this number and the server's encoding ceiling are
+  /// one decision made in two places, and moving either alone trades a
+  /// stutter complaint for a picture-quality complaint or the reverse.
+  ///
+  /// What that looked like in practice, on one real feed video:
+  ///
+  ///   server ceiling   picture      768 KB covers
+  ///   none             (source)     1.5s   ← stalled constantly
+  ///   2.0 Mbps         0.970 SSIM   3.1s   ← visibly softer on motion
+  ///   3.5 Mbps         0.990 SSIM   1.8s   ← back to stalling
+  ///
+  /// Every row is a complaint. At 768 KB there is no ceiling that is both
+  /// sharp enough and long enough, which is what makes this the number to
+  /// move rather than the ceiling.
+  ///
+  /// At 2 MB, a 3.5 Mbps reel gets 4.8 seconds of runway — longer than the
+  /// 2 Mbps ceiling ever bought, at a picture close enough to the source
+  /// that there is nothing to see. Weak connections are unaffected: they
+  /// are served the 480p rendition, capped at 1.5 Mbps, where the same
+  /// 2 MB is over eleven seconds.
+  ///
+  /// The cost is bandwidth on reels the viewer scrolls straight past —
+  /// 2 MB instead of 768 KB each. That is the trade being made, and it is
+  /// bounded by the warm window rather than by the size of the feed.
+  static const int prefixBytes = 2 * 1024 * 1024;
 
   /// How much of the END of a moov-at-end file to warm alongside its head.
   ///
