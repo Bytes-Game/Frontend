@@ -150,7 +150,18 @@ void main() {
   // that every way it can fail lands back on the whole-file downloader
   // that shipped before it, with a complete, playable file on disk.
   group('prefix mode and its fallbacks', () {
-    const fileSize = 4 * 1024 * 1024;
+    /// A reel big enough that a warm is genuinely a sliver of it.
+    ///
+    /// Derived from the prefix rather than written down. This was a fixed
+    /// 4 MB, which made a warm a quarter of the file the moment the prefix
+    /// grew to 2 MB — so the tests below started failing for saying a sliver
+    /// was not small, when what had actually stopped being true was that the
+    /// fixture resembled a reel. At the ceilings the server encodes to, a
+    /// thirty-second reel is around 13 MB and a minute is closer to 26.
+    ///
+    /// Reading the constant keeps the ratio fixed at 1:8 whatever the prefix
+    /// becomes, so this cannot go stale the next time that number moves.
+    const fileSize = VideoCacheService.prefixBytes * 8;
 
     /// Records whether each request carried a Range header, which is what
     /// distinguishes a sliver warm from a whole-file download.
