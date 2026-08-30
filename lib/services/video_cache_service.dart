@@ -92,35 +92,47 @@ class VideoCacheService {
   /// connection should carry.
   static const int maxConcurrentWholeFileDownloadsDuringBackfill = 1;
 
-  /// How much of a reel to warm in prefix mode.
+  /// How much of a reel to warm in prefix mode. At the 3.5 Mbps the server
+  /// now caps 720p at, this is about 1.8 seconds — enough for the player to
+  /// open, decode a first frame, and start rendering before the back-fill
+  /// from origin catches up.
   ///
-  /// This is a fixed number of BYTES, but what actually stops a reel
-  /// stalling is SECONDS of video, and the two are only the same thing at
-  /// a fixed bitrate. So this number and the server's encoding ceiling are
-  /// one decision made in two places, and moving either alone trades a
-  /// stutter complaint for a picture-quality complaint or the reverse.
+  /// ══════════════════════════════════════════════════════════════════════
+  /// RAISING THIS IS NOT A LOCAL CHANGE. IT WAS TRIED AND REVERTED.
+  /// ══════════════════════════════════════════════════════════════════════
   ///
-  /// What that looked like in practice, on one real feed video:
+  /// 1.8 seconds looks thin, and the obvious move is to make it bigger. That
+  /// was done — 768 KB to 2 MB — and it made the feed worse, twice, because
+  /// this number is not just "how much of one reel we hold". It is the unit
+  /// two other budgets are denominated in, and both were written down
+  /// against 768 KB:
   ///
-  ///   server ceiling   picture      768 KB covers
-  ///   none             (source)     1.5s   ← stalled constantly
-  ///   2.0 Mbps         0.970 SSIM   3.1s   ← visibly softer on motion
-  ///   3.5 Mbps         0.990 SSIM   1.8s   ← back to stalling
+  ///   * [prefetchDepth] warms up to TEN reels ahead on wifi. Its comment
+  ///     justifies that depth by "prefix mode pulls ~0.75 MB per reel". At
+  ///     2 MB the read-ahead budget went from 7.5 MB to 20 MB.
+  ///   * [_downloadSlots] allowed extra parallel warms because "each warm is
+  ///     a fixed small slice". At 2 MB they are not small.
   ///
-  /// Every row is a complaint. At 768 KB there is no ceiling that is both
-  /// sharp enough and long enough, which is what makes this the number to
-  /// move rather than the ceiling.
+  /// So the change tripled how much read-ahead competes with the reel on
+  /// screen, and the reel on screen is what lost. Device logs, per reel
+  /// played:
   ///
-  /// At 2 MB, a 3.5 Mbps reel gets 4.8 seconds of runway — longer than the
-  /// 2 Mbps ceiling ever bought, at a picture close enough to the source
-  /// that there is nothing to see. Weak connections are unaffected: they
-  /// are served the 480p rendition, capped at 1.5 Mbps, where the same
-  /// 2 MB is over eleven seconds.
+  ///   768 KB, 4 slots    22% opened cold    (baseline)
+  ///   2 MB,   4 slots    22% opened cold    1.80 decoder starvations
+  ///   2 MB,   2 slots    38% opened cold    2.41 decoder starvations
   ///
-  /// The cost is bandwidth on reels the viewer scrolls straight past —
-  /// 2 MB instead of 768 KB each. That is the trade being made, and it is
-  /// bounded by the warm window rather than by the size of the feed.
-  static const int prefixBytes = 2 * 1024 * 1024;
+  /// The middle row was the attempt; the last row was the attempt to fix the
+  /// attempt by cutting parallelism, which starved warming instead and made
+  /// cold opens worse. Both are reverted.
+  ///
+  /// If this genuinely needs to be larger, the blocker to fix first is that
+  /// a reel counts as ready only when the WHOLE slice has landed — see where
+  /// register() and _signalWarm() are called, after the download completes.
+  /// Registering a usable head early would decouple "ready" from "fully
+  /// warmed", and the proxy already serves a prefix file shorter than its
+  /// claimed length. Until then, bigger here means slower to be ready, and
+  /// the depth and slot budgets above have to move with it.
+  static const int prefixBytes = 768 * 1024;
 
   /// How much of the END of a moov-at-end file to warm alongside its head.
   ///
@@ -464,30 +476,9 @@ class VideoCacheService {
       // which is the case this limit exists for, fast connection or not.
       return maxConcurrentWholeFileDownloadsDuringBackfill;
     }
-    // ════════════════════════════════════════════════════════════════════
-    // NO BONUS WHILE A REEL IS PLAYING
-    // ════════════════════════════════════════════════════════════════════
-    //
-    // This used to add the fast-connection bonus here too, on the reasoning
-    // that "each warm is a fixed small slice, so more of them in flight is
-    // bounded extra traffic". That was written when a slice was 768 KB. It
-    // is now 2 MB, and four of those alongside a reel streaming at up to
-    // 3.5 Mbps is no longer a rounding error — it is eight megabytes of
-    // read-ahead racing the video the viewer is actually watching.
-    //
-    // A device log showed what that costs. The decoder reported 342
-    // starvation events across 190 reels — stretches where it sat with no
-    // input to decode, the longest 4.5 seconds — which is the picture
-    // freezing while the bytes for it are queued behind read-ahead for
-    // reels nobody has reached yet.
-    //
-    // So the bonus is for warming between reels, which is what it was for.
-    // While something is on screen, the ceiling is the ceiling: the reel
-    // being watched gets the connection, and read-ahead takes what is left.
-    // This is also what the test for this behaviour has always asserted —
-    // it passed only because the test environment never reports a fast
-    // connection, so the bonus was never added in the case it covers.
-    return maxConcurrentDownloadsDuringBackfill;
+    // Prefix mode: each warm is a fixed small slice, so more of them in
+    // flight is bounded extra traffic rather than open-ended.
+    return maxConcurrentDownloadsDuringBackfill + bonus;
   }
 
   /// Start downloads until the concurrency limit is reached.
