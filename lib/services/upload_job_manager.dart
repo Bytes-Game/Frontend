@@ -220,6 +220,8 @@ class UploadJobManager {
     try {
       job._update((s) => s.copyWith(stage: UploadJobStage.processing));
       final estimatedBytes = await _estimateBytes(job.sourcePath);
+      final videoLabel =
+          await VideoProcessorService.variantLabelFor(job.sourcePath);
 
       final processed = VideoProcessorService.instance.processStream(
         sourcePath: job.sourcePath,
@@ -257,9 +259,12 @@ class UploadJobManager {
         userId: userId,
         artifacts: upstream.stream,
         expectedTotalBytes: estimatedBytes,
-        expectedItems: const [
+        expectedItems: [
           (kind: 'thumbnail', variant: 'default', contentType: 'image/jpeg'),
-          (kind: 'video', variant: '720p', contentType: 'video/mp4'),
+          // Not a fixed '720p': the presign key carries the variant name, so
+          // it has to be the label the pipeline will actually emit for this
+          // file. Both sides read it through VideoProcessorService.
+          (kind: 'video', variant: videoLabel, contentType: 'video/mp4'),
         ],
         onProgress: (p) {
           job._update((s) => s.copyWith(
@@ -383,6 +388,8 @@ class UploadJobManager {
       // bytes are slightly different (compressed output ≠ source) but
       // it's close enough that the bar moves believably from t=0.
       final estimatedBytes = await _estimateBytes(job.sourcePath);
+      final videoLabel =
+          await VideoProcessorService.variantLabelFor(job.sourcePath);
 
       final processed = VideoProcessorService.instance.processStream(
         sourcePath: job.sourcePath,
@@ -424,9 +431,12 @@ class UploadJobManager {
         userId: creatorId,
         artifacts: upstream.stream,
         expectedTotalBytes: estimatedBytes,
-        expectedItems: const [
+        expectedItems: [
           (kind: 'thumbnail', variant: 'default', contentType: 'image/jpeg'),
-          (kind: 'video', variant: '720p', contentType: 'video/mp4'),
+          // Not a fixed '720p': the presign key carries the variant name, so
+          // it has to be the label the pipeline will actually emit for this
+          // file. Both sides read it through VideoProcessorService.
+          (kind: 'video', variant: videoLabel, contentType: 'video/mp4'),
         ],
         onProgress: (p) {
           // 50%..95% of the overall bar comes from the upload phase.
@@ -520,6 +530,8 @@ class UploadJobManager {
     try {
       job._update((s) => s.copyWith(stage: UploadJobStage.processing));
       final estimatedBytes = await _estimateBytes(job.sourcePath);
+      final videoLabel =
+          await VideoProcessorService.variantLabelFor(job.sourcePath);
 
       final processed = VideoProcessorService.instance.processStream(
         sourcePath: job.sourcePath,
@@ -557,9 +569,12 @@ class UploadJobManager {
         userId: responderId,
         artifacts: upstream.stream,
         expectedTotalBytes: estimatedBytes,
-        expectedItems: const [
+        expectedItems: [
           (kind: 'thumbnail', variant: 'default', contentType: 'image/jpeg'),
-          (kind: 'video', variant: '720p', contentType: 'video/mp4'),
+          // Not a fixed '720p': the presign key carries the variant name, so
+          // it has to be the label the pipeline will actually emit for this
+          // file. Both sides read it through VideoProcessorService.
+          (kind: 'video', variant: videoLabel, contentType: 'video/mp4'),
         ],
         onProgress: (p) {
           job._update((s) => s.copyWith(

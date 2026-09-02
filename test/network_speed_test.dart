@@ -174,4 +174,60 @@ void main() {
     sampleAt(10);
     expect(net.pickVariantUrl({'480p': 'small', '720p': 'mid'}), 'mid');
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // NAMING AN UPLOAD HONESTLY
+  // ════════════════════════════════════════════════════════════════════════
+  //
+  // The uploader used to tag every video '720p' and a comment called the
+  // label cosmetic. It stopped being cosmetic once the picker started
+  // reading a label as a bandwidth cost: '720p' is a claim that the file
+  // costs about 2.5 Mbps, so a 1080p camera file wearing that label is the
+  // app being told a 4 Mbps video is affordable — and never stepping down
+  // from it, however badly the phone is coping.
+  //
+  // The server replaces the label with a real rendition once it has
+  // converted the video, so the lie only stood in the window between
+  // uploading and converting. Which is exactly when somebody watches their
+  // own upload back.
+
+  test('a phone that recorded 1080p does not call it 720p', () {
+    expect(NetworkQualityService.labelForLongSide(1920), '1080p',
+        reason: 'a 1080p upload labelled 720p tells the app a 4 Mbps file '
+            'costs 2.5, so it never drops down when it cannot keep up');
+  });
+
+  test('the boundaries match the rungs the server encodes to', () {
+    // Same rule as rungForSize in cmd/hls-worker/progressive.go: the
+    // smallest rung whose picture is not smaller than this one. If these
+    // two drift apart, an upload is filed under a rung the server would
+    // never have put it in.
+    expect(NetworkQualityService.labelForLongSide(640), '480p');
+    expect(NetworkQualityService.labelForLongSide(854), '480p');
+    expect(NetworkQualityService.labelForLongSide(855), '720p');
+    expect(NetworkQualityService.labelForLongSide(1280), '720p');
+    expect(NetworkQualityService.labelForLongSide(1281), '1080p');
+  });
+
+  test('an unmeasurable file keeps the answer this code always gave', () {
+    // getMediaInfo can fail. Guessing '720p' is not a good answer, but it
+    // is the answer every video got until now, so a file we cannot read is
+    // no worse off than it was.
+    expect(NetworkQualityService.labelForLongSide(0), '720p');
+    expect(NetworkQualityService.labelForLongSide(-1), '720p');
+  });
+
+  test('every label the uploader can produce is one the picker knows', () {
+    // The uploader's label is written into video_variants and read back by
+    // pickVariantUrl, and for the minutes before the server has converted
+    // the video it is the ONLY entry in that map. Whatever we chose to call
+    // it, the reel still has to play — including '1080p', which sits above
+    // the reels ceiling and so reaches the picker's last-resort branch.
+    sampleAt(10);
+    for (final side in [640, 854, 1280, 1920]) {
+      final label = NetworkQualityService.labelForLongSide(side);
+      expect(net.pickVariantUrl({label: 'only'}), 'only',
+          reason: 'an upload labelled \'$label\' was not playable');
+    }
+  });
 }

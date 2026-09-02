@@ -286,6 +286,37 @@ class NetworkQualityService {
     '1080p': 3,
   };
 
+  /// The label a video of this picture size belongs under.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// WHY THIS EXISTS AT ALL
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// The upload path used to tag every video it sent as `720p` with a comment
+  /// saying the label was cosmetic. It was, once — nothing read it. It is not
+  /// any more: [pickVariantUrl] decides what this connection can carry by
+  /// looking the label up in [bitrateNeededFor], so `720p` is now a claim
+  /// that the file costs about 2.5 Mbps.
+  ///
+  /// A phone that recorded 1080p therefore uploaded a file the app would go
+  /// on to treat as a modest 720p one — and so never stepped down from,
+  /// however badly it was coping. The server overwrites the label with a real
+  /// rendition once it has converted the video, so the wrong answer only
+  /// stood between upload and conversion. That is exactly the window in which
+  /// somebody watches their own upload back.
+  ///
+  /// Measuring costs nothing: the uploader already reads the file's size to
+  /// build a thumbnail.
+  ///
+  /// The boundaries match the server's ladder (cmd/hls-worker/progressive.go)
+  /// — the smallest rung whose picture is not smaller than this one.
+  static String labelForLongSide(int longSide) {
+    if (longSide <= 0) return '720p'; // unmeasurable: the old default
+    if (longSide <= 854) return '480p';
+    if (longSide <= 1280) return '720p';
+    return '1080p';
+  }
+
   @visibleForTesting
   void debugClearThroughput() => _throughputSamples.clear();
 
