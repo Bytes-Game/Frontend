@@ -6,6 +6,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:video_compress/video_compress.dart';
 import 'package:video_thumbnail/video_thumbnail.dart' as vt;
 
+import 'network_quality_service.dart';
+
 /// Output of one variant transcode. [path] is the local file produced
 /// by [VideoProcessorService] — caller owns the lifecycle (delete after
 /// upload, or rely on the OS temp-dir cleanup).
@@ -125,6 +127,33 @@ class VideoProcessorService {
   /// first and route around (e.g. hide the "Post" button on desktop).
   static bool get isSupported => Platform.isAndroid || Platform.isIOS;
 
+  /// The variant label this source will be uploaded under.
+  ///
+  /// The uploader has to name its slots BEFORE the file exists — the presign
+  /// round-trip happens first and the label is part of the key it signs — so
+  /// this is how the caller learns the answer in advance. It must agree with
+  /// what the pipeline actually emits, so both read the same measurement
+  /// through the same function.
+  static String labelForSize(num? width, num? height) {
+    final w = width?.toInt() ?? 0;
+    final h = height?.toInt() ?? 0;
+    return NetworkQualityService.labelForLongSide(w > h ? w : h);
+  }
+
+  /// [labelForSize] for a file we have not measured yet.
+  ///
+  /// Falls back to the old fixed `720p` if the file cannot be read. That is
+  /// not a good answer, but it is the answer this code gave for every video
+  /// until now, so an unreadable file is no worse off than before.
+  static Future<String> variantLabelFor(String sourcePath) async {
+    try {
+      final info = await VideoCompress.getMediaInfo(sourcePath);
+      return labelForSize(info.width, info.height);
+    } catch (_) {
+      return '720p';
+    }
+  }
+
   /// Run the full pipeline. Emits progress on [onProgress] if provided.
   /// Throws on unrecoverable errors (codec failure, disk full, etc.) —
   /// callers should wrap in try/catch and surface a friendly message.
@@ -189,18 +218,24 @@ class VideoProcessorService {
     // the audio track on user-uploaded reels. Server-side HLS provides
     // the bitrate ladder; on-device re-encoding adds zero quality and
     // strictly more failure surface.
-    onProgress?.call(const ProcessingEvent('720p', 0.10));
+    // Labelled by what we measured, not a fixed "720p" — the picker reads
+    // labels as a bandwidth cost now. See labelForLongSide, and the same
+    // change on processStream() below.
+    final srcW = info.width?.toInt() ?? 0;
+    final srcH = info.height?.toInt() ?? 0;
+    final label = labelForSize(srcW, srcH);
+    onProgress?.call(ProcessingEvent(label, 0.10));
     final dest = File('${stageDir.path}/source.mp4');
     await File(sourcePath).copy(dest.path);
     final sizeBytes = await dest.length();
     final variants = <VideoVariantFile>[
       VideoVariantFile(
-        label: '720p',
+        label: label,
         path: dest.path,
         sizeBytes: sizeBytes,
         duration: Duration(milliseconds: clampedMs ?? sourceMs),
-        width: null,
-        height: null,
+        width: srcW > 0 ? srcW : null,
+        height: srcH > 0 ? srcH : null,
       ),
     ];
 
@@ -300,19 +335,25 @@ class VideoProcessorService {
     // is reliable across every SoC because it's vanilla FFmpeg on a
     // Linux box, not vendor MediaCodec.
     //
-    // We still emit ONE upload variant (labeled "720p" since that's
-    // the bucket NetworkQualityService.pickVariantUrl defaults to —
-    // see network_quality_service.dart) so the client's legacy
-    // variant-picker keeps working until every challenge has HLS.
-    // The label is cosmetic; the bytes are whatever quality the
-    // trim emitted.
-    onProgress?.call(const ProcessingEvent('720p', 0.10));
+    // We still emit ONE upload variant so the client's variant-picker has
+    // something to play in the window before the server has converted this.
+    //
+    // Labelled by the picture we actually measured, NOT a fixed "720p". This
+    // used to be hard-coded with a comment calling the label cosmetic, and it
+    // stopped being cosmetic the day the picker started reading labels as a
+    // bandwidth cost: a 1080p camera file tagged "720p" is the app being told
+    // a 4 Mbps video costs 2.5, so it never drops down when it cannot keep
+    // up. See NetworkQualityService.labelForLongSide.
+    final srcW = info.width?.toInt() ?? 0;
+    final srcH = info.height?.toInt() ?? 0;
+    final label = labelForSize(srcW, srcH);
+    onProgress?.call(ProcessingEvent(label, 0.10));
     final dest = File('${stageDir.path}/source.mp4');
     await File(sourcePath).copy(dest.path);
     final sizeBytes = await dest.length();
     yield ProcessingArtifact(
       kind: ProcessingArtifactKind.video,
-      label: '720p',
+      label: label,
       path: dest.path,
       sizeBytes: sizeBytes,
       contentType: 'video/mp4',
