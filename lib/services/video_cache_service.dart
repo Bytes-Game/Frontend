@@ -630,25 +630,26 @@ class VideoCacheService {
             // this sink's buffer are not on it yet. Registering before that
             // would hand the player an empty file and it would go to origin
             // for everything, which is the cold open we are removing.
-            final s = sink;
-            if (s != null) {
-              unawaited(s.flush().then((_) {
-                if (d.cancelled) return;
-                LocalMediaServer.instance.register(
-                  originUrl: d.url,
-                  prefixPath: prefixPath,
-                  prefixLength: d.written,
-                  totalLength: total,
-                  tailPath: null,
-                );
-                _prefixed.add(d.url);
-                _signalWarm(d.url);
-              }).catchError((Object _) {
-                // A flush that fails costs us the early open and nothing
-                // else — the download carries on and registers normally when
-                // it finishes.
-              }));
-            }
+            final readyAt = d.written;
+            unawaited(sink!.flush().then((_) {
+              // The reel may have left the window while the flush was in
+              // flight. Registering it then would publish a slice we are
+              // about to delete.
+              if (d.cancelled) return;
+              LocalMediaServer.instance.register(
+                originUrl: d.url,
+                prefixPath: prefixPath,
+                prefixLength: readyAt,
+                totalLength: total,
+                tailPath: null,
+              );
+              _prefixed.add(d.url);
+              _signalWarm(d.url);
+            }).catchError((Object _) {
+              // A flush that fails costs us the early open and nothing else
+              // — the download carries on and registers normally when it
+              // finishes.
+            }));
           }
         },
         onDone: () => done.isCompleted ? null : done.complete(),

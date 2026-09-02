@@ -996,7 +996,6 @@ void _capTests() {
             'suddenly is not, and the cost lands on the reel on screen');
   });
 
-\n
   // ── Ready before finished ───────────────────────────────────────────────
   //
   // "It sticks when I scroll fast." Flicking through the feed cancels warms
@@ -1135,4 +1134,4 @@ void _capTests() {
               'stall, which looks worse than opening a moment later');
     });
   });
-}\n
+}
