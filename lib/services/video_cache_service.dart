@@ -92,10 +92,9 @@ class VideoCacheService {
   /// connection should carry.
   static const int maxConcurrentWholeFileDownloadsDuringBackfill = 1;
 
-  /// How much of a reel to warm in prefix mode. At the 3.5 Mbps the server
-  /// now caps 720p at, this is about 1.8 seconds — enough for the player to
-  /// open, decode a first frame, and start rendering before the back-fill
-  /// from origin catches up.
+  /// How much of a reel to warm in prefix mode. Against the ladder the server
+  /// encodes to — 2.5 Mbps at 720p, 3.5 at the fast-connection rung — this is
+  /// between 1.8 and 2.5 seconds of video.
   ///
   /// ══════════════════════════════════════════════════════════════════════
   /// RAISING THIS IS NOT A LOCAL CHANGE. IT WAS TRIED AND REVERTED.
@@ -631,7 +630,7 @@ class VideoCacheService {
             // would hand the player an empty file and it would go to origin
             // for everything, which is the cold open we are removing.
             final readyAt = d.written;
-            unawaited(sink!.flush().then((_) {
+            unawaited(sink.flush().then((_) {
               // The reel may have left the window while the flush was in
               // flight. Registering it then would publish a slice we are
               // about to delete.
