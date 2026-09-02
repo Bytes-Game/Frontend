@@ -629,6 +629,16 @@ class VideoCacheService {
             // this sink's buffer are not on it yet. Registering before that
             // would hand the player an empty file and it would go to origin
             // for everything, which is the cold open we are removing.
+            // Hold the download still for the length of the flush.
+            //
+            // A sink cannot be written to while a flush on it is in flight —
+            // Dart throws "StreamSink is bound to a stream" — and the next
+            // chunk would arrive mid-flush and do exactly that. Pausing the
+            // subscription stops chunks being delivered; they queue and
+            // resume after. A flush of a few hundred kilobytes already
+            // written is quick, and this happens once per reel.
+            final sub = d.subscription;
+            sub?.pause();
             final readyAt = d.written;
             unawaited(sink.flush().then((_) {
               // The reel may have left the window while the flush was in
@@ -648,7 +658,7 @@ class VideoCacheService {
               // A flush that fails costs us the early open and nothing else
               // — the download carries on and registers normally when it
               // finishes.
-            }));
+            }).whenComplete(() => sub?.resume()));
           }
         },
         onDone: () => done.isCompleted ? null : done.complete(),
