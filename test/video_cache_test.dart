@@ -996,4 +996,143 @@ void _capTests() {
             'suddenly is not, and the cost lands on the reel on screen');
   });
 
-}
+\n
+  // ── Ready before finished ───────────────────────────────────────────────
+  //
+  // "It sticks when I scroll fast." Flicking through the feed cancels warms
+  // in flight — 43 of 119 downloads in one session — and a part-finished warm
+  // used to be worth nothing at all: the reel you stopped on opened as if
+  // none of it had been fetched. A quarter of a megabyte is enough for a
+  // player to start, so it is handed over then and keeps filling behind.
+
+  group('opening a reel before its slice has finished', () {
+    /// Opening bytes of an MP4 with its index at the FRONT: ftyp, then moov,
+    /// then the media. This is what our own encoder produces, and what a
+    /// player can start on without reading the end of the file.
+    List<int> headFirstBytes(int len) {
+      final out = List<int>.filled(len, 1);
+      void box(int at, int size, String type) {
+        out[at] = (size >> 24) & 0xff;
+        out[at + 1] = (size >> 16) & 0xff;
+        out[at + 2] = (size >> 8) & 0xff;
+        out[at + 3] = size & 0xff;
+        for (var i = 0; i < 4; i++) {
+          out[at + 4 + i] = type.codeUnitAt(i);
+        }
+      }
+
+      box(0, 16, 'ftyp');
+      box(16, 1024, 'moov');
+      box(16 + 1024, len - 16 - 1024, 'mdat');
+      return out;
+    }
+
+    /// The same, but with the index at the END — ftyp straight into mdat.
+    List<int> indexAtEndBytes(int len) {
+      final out = List<int>.filled(len, 1);
+      void box(int at, int size, String type) {
+        out[at] = (size >> 24) & 0xff;
+        out[at + 1] = (size >> 16) & 0xff;
+        out[at + 2] = (size >> 8) & 0xff;
+        out[at + 3] = size & 0xff;
+        for (var i = 0; i < 4; i++) {
+          out[at + 4 + i] = type.codeUnitAt(i);
+        }
+      }
+
+      box(0, 16, 'ftyp');
+      box(16, len - 16, 'mdat');
+      return out;
+    }
+
+    setUp(() => LocalMediaServer.instance.debugReset());
+    tearDown(() async {
+      await LocalMediaServer.instance.stop();
+      LocalMediaServer.instance.debugReset();
+    });
+
+    test('a reel is playable once the head is down, not the whole slice',
+        () async {
+      await LocalMediaServer.instance.start();
+      const total = VideoCacheService.prefixBytes * 8;
+      // A stream that delivers the head and then stalls, so the only way to
+      // pass is to open on what has already arrived.
+      final stalled = Completer<void>();
+      addTearDown(() { if (!stalled.isCompleted) stalled.complete(); });
+      ApiService.useClient(MockClient.streaming((req, _) async {
+        final head = headFirstBytes(VideoCacheService.prefixReadyBytes + 4096);
+        // Deliver the head, then hang. The only way to pass is to open on
+        // what has already arrived.
+        Stream<List<int>> body() async* {
+          yield head;
+          await stalled.future;
+        }
+
+        return http.StreamedResponse(
+          body(), 206,
+          contentLength: VideoCacheService.prefixBytes,
+          headers: {
+            'content-range':
+                'bytes 0-${VideoCacheService.prefixBytes - 1}/$total'
+          },
+        );
+      }));
+
+      VideoCacheService.instance.warm(['https://cdn/early.mp4']);
+
+      expect(
+          await eventually(() =>
+              LocalMediaServer.instance.localUrlFor('https://cdn/early.mp4') !=
+              null),
+          isTrue,
+          reason: 'the head had arrived and the reel was still not playable. '
+              'That is the fast-scroll stall: a warm that is most of the way '
+              'there counts for nothing.');
+    });
+
+    test('an index-at-the-end reel is NOT opened early', () async {
+      // The one case where a head alone is useless at any size: the player
+      // cannot decode anything until it has read the index from the end, so
+      // opening early would hand it a file it can only stall on.
+      await LocalMediaServer.instance.start();
+      const total = VideoCacheService.prefixBytes * 8;
+      final stalled = Completer<void>();
+      addTearDown(() { if (!stalled.isCompleted) stalled.complete(); });
+      ApiService.useClient(MockClient.streaming((req, _) async {
+        final head = indexAtEndBytes(VideoCacheService.prefixReadyBytes + 4096);
+        Stream<List<int>> body() async* {
+          yield head;
+          await stalled.future;
+        }
+
+        return http.StreamedResponse(
+          body(), 206,
+          contentLength: VideoCacheService.prefixBytes,
+          headers: {
+            'content-range':
+                'bytes 0-${VideoCacheService.prefixBytes - 1}/$total'
+          },
+        );
+      }));
+
+      VideoCacheService.instance.warm(['https://cdn/moovend.mp4']);
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+
+      expect(LocalMediaServer.instance.localUrlFor('https://cdn/moovend.mp4'),
+          isNull,
+          reason: 'a reel with its index at the end was opened on its head '
+              'alone. The player cannot decode that — it would open and '
+              'immediately stall, which is worse than opening later.');
+    });
+
+    test('the early-open threshold is a fraction of the full slice', () {
+      // If these ever meet, opening early stops meaning anything.
+      expect(VideoCacheService.prefixReadyBytes,
+          lessThan(VideoCacheService.prefixBytes),
+          reason: 'the early-open point is not earlier than the full slice');
+      expect(VideoCacheService.prefixReadyBytes, greaterThanOrEqualTo(128 * 1024),
+          reason: 'too little to decode a frame from; the reel would open and '
+              'stall, which looks worse than opening a moment later');
+    });
+  });
+}\n

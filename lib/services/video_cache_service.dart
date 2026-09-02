@@ -125,14 +125,42 @@ class VideoCacheService {
   /// attempt by cutting parallelism, which starved warming instead and made
   /// cold opens worse. Both are reverted.
   ///
-  /// If this genuinely needs to be larger, the blocker to fix first is that
-  /// a reel counts as ready only when the WHOLE slice has landed — see where
-  /// register() and _signalWarm() are called, after the download completes.
-  /// Registering a usable head early would decouple "ready" from "fully
-  /// warmed", and the proxy already serves a prefix file shorter than its
-  /// claimed length. Until then, bigger here means slower to be ready, and
-  /// the depth and slot budgets above have to move with it.
+  /// The blocker that used to be named here — that a reel counted as ready
+  /// only when the WHOLE slice had landed, so a bigger slice meant a later
+  /// start — is fixed. See [prefixReadyBytes]: a reel is playable once its
+  /// opening quarter-megabyte is down, and the rest arrives behind it.
+  ///
+  /// That removes the "later to be ready" half of the argument but NOT the
+  /// other half. This is still the unit [prefetchDepth] and [_downloadSlots]
+  /// are budgeted in, and both are still written down against 768 KB. Raising
+  /// it still multiplies read-ahead across every reel in the window, which is
+  /// what the table above measures. Move all three or none.
   static const int prefixBytes = 768 * 1024;
+
+  /// How much of the opening slice has to exist before a reel counts as
+  /// ready, rather than waiting for the whole of [prefixBytes].
+  ///
+  /// This is what "it sticks when I scroll fast" was. Flicking through the
+  /// feed cancels warms that are part-finished — 43 of 119 downloads in one
+  /// session — and until this existed a part-finished warm was worth exactly
+  /// nothing. The reel you stopped on opened as if nothing had been fetched
+  /// at all, which at 5 Mbps is over a second of black.
+  ///
+  /// A player does not need the whole slice to start. It needs the header
+  /// and enough media to decode a frame. A quarter of a megabyte covers
+  /// that with room to spare on the sizes the server encodes to, and the
+  /// rest keeps arriving behind it.
+  ///
+  /// Not smaller: too little and the player opens, runs out almost at once
+  /// and stalls anyway, which looks worse than opening a moment later.
+  /// Not larger: every extra byte here is time the viewer spends looking at
+  /// nothing.
+  ///
+  /// Only for files with the index at the front. One with its index at the
+  /// end is not playable from the head alone at any size — the player has to
+  /// reach the end before it can decode anything, which is what [tailBytes]
+  /// is for.
+  static const int prefixReadyBytes = 256 * 1024;
 
   /// How much of the END of a moov-at-end file to warm alongside its head.
   ///
@@ -561,6 +589,7 @@ class VideoCacheService {
       // be read without going back to disk. Bounded — see
       // [mp4LayoutProbeBytes].
       final probe = BytesBuilder(copy: false);
+      var openedEarly = false;
       d.subscription = response.stream.listen(
         (chunk) {
           d.written += chunk.length;
@@ -570,6 +599,57 @@ class VideoCacheService {
                 : chunk);
           }
           sink!.add(chunk);
+
+          // ════════════════════════════════════════════════════════════════
+          // READY BEFORE FINISHED
+          // ════════════════════════════════════════════════════════════════
+          //
+          // A reel used to count as ready only when the WHOLE slice had
+          // landed. Everything before that was worth nothing: scroll onto a
+          // reel whose warm was 90% done and it still opened cold.
+          //
+          // That is what "it sticks when I scroll fast" is. Flicking through
+          // cancels warms in flight — 43 of 119 in one session — and the reel
+          // you stop on starts from nothing, which at 5 Mbps is over a second
+          // of black before the first frame.
+          //
+          // A player does not need the whole slice. It needs the header and
+          // enough media to decode a frame. So we hand it over as soon as
+          // that much exists and keep filling behind it.
+          //
+          // Safe by construction: the proxy serves min(bytes actually on
+          // disk, length we claimed) and takes everything past that from
+          // origin — see LocalMediaServer's range handling, which already
+          // has to cope with a prefix evicted mid-playback.
+          if (!openedEarly &&
+              d.written >= prefixReadyBytes &&
+              probe.length >= mp4LayoutProbeBytes &&
+              readMp4Layout(probe.toBytes()) != Mp4Layout.moovAtEnd) {
+            openedEarly = true;
+            // Flush first: the proxy reads the FILE, and bytes sitting in
+            // this sink's buffer are not on it yet. Registering before that
+            // would hand the player an empty file and it would go to origin
+            // for everything, which is the cold open we are removing.
+            final s = sink;
+            if (s != null) {
+              unawaited(s.flush().then((_) {
+                if (d.cancelled) return;
+                LocalMediaServer.instance.register(
+                  originUrl: d.url,
+                  prefixPath: prefixPath,
+                  prefixLength: d.written,
+                  totalLength: total,
+                  tailPath: null,
+                );
+                _prefixed.add(d.url);
+                _signalWarm(d.url);
+              }).catchError((Object _) {
+                // A flush that fails costs us the early open and nothing
+                // else — the download carries on and registers normally when
+                // it finishes.
+              }));
+            }
+          }
         },
         onDone: () => done.isCompleted ? null : done.complete(),
         onError: (Object e) => done.isCompleted ? null : done.completeError(e),
