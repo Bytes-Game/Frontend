@@ -210,10 +210,25 @@ class ReelDiagnostics {
   /// Spare tallies, one group per gesture, warm before cold.
   ///
   /// A lane with nothing in it is printed as `0/0` rather than left out.
-  /// Absence is the answer worth seeing: `flip 0/0` on a battle-heavy
-  /// session means no opponent was ever read ahead for, which is a
-  /// different fault from opponents being read ahead for and arriving
-  /// cold — and a missing line looks like neither.
+  /// Absence is the answer worth seeing, and a missing line looks like no
+  /// answer at all.
+  ///
+  /// The two lanes now count different moments, because they cost
+  /// different things:
+  ///
+  ///   swipe — a player opened AHEAD of the gesture. Warm means its bytes
+  ///           were already down when the read-ahead built it.
+  ///   flip  — a player opened AT the gesture. Nothing is read ahead for
+  ///           an opponent any more; holding a fourth decoder for a
+  ///           gesture most battles never receive was getting decoders
+  ///           reclaimed out from under the reels on screen. Warm means
+  ///           the opponent's bytes were down by the time somebody
+  ///           flipped, so the turn only had to build a decoder.
+  ///
+  /// So `flip 0/0` now means nobody flipped, which is ordinary. Cold
+  /// flips are the fault worth chasing: the bytes are supposed to be
+  /// warmed at position 2 of the read-ahead window, so a cold one says
+  /// that window is not reaching opponents in time.
   String _spares() => SpareLane.values
       .map(
         (l) =>

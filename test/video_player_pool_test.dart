@@ -436,6 +436,41 @@ void main() {
       );
     });
 
+    test('a lane the feed no longer names still works if it is named', () {
+      // The reels feed stopped naming the opponent — holding a fourth
+      // decoder for a gesture most battles never receive was getting
+      // decoders reclaimed out from under the reels on screen, and the
+      // opponent's bytes are read ahead for anyway, so the flip builds a
+      // decoder against a file already on disk.
+      //
+      // The MACHINERY keeps the lane, deliberately. This is the general
+      // answer to "which urls are one gesture away", and a caller that
+      // has a second one is entitled to say so. What changed is the
+      // feed's policy, not this function's contract.
+      final targets = VideoPlayerService.spareTargets(
+        [url(1), url(9)],
+        [(SpareLane.nextReel, url(1)), (SpareLane.opponent, url(9))],
+      );
+      expect(targets[url(9)], SpareLane.opponent);
+    });
+
+    test('naming only the next reel gives exactly one player', () {
+      // What the feed actually asks for now. The opponent url is still in
+      // the WINDOW — its bytes are warmed at position 2 — and the point
+      // is that being in the window does not earn it a decoder.
+      final targets = VideoPlayerService.spareTargets(
+        [url(1), url(9), url(2)],
+        [(SpareLane.nextReel, url(1))],
+      );
+      expect(
+        targets.keys,
+        orderedEquals(<String>[url(1)]),
+        reason: 'a url in the warm window must not pick up a live player '
+            'just by being there; that is the decoder this change gives '
+            'back to the reels on screen',
+      );
+    });
+
     test('naming nothing keeps the old single-spare behaviour', () {
       final targets = VideoPlayerService.spareTargets([
         url(1),
