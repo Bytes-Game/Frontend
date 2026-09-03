@@ -559,28 +559,42 @@ class ApiService {
       }
   }
 
-  /// Returns challenges authored by [userId].
+  /// Returns challenges authored by [userId], newest first.
   ///
-  /// No dedicated backend endpoint exists for this yet (the arena/explore
-  /// feeds don't filter by creator), so we fetch the arena set and filter
-  /// client-side. That's fine at our current content volume — arena
-  /// returns at most a few hundred items — but it's the FIRST thing to
-  /// migrate to a backend `/users/{id}/challenges` route once content
-  /// scales. Listed here as a TODO so it's not invisible later:
+  /// ══════════════════════════════════════════════════════════════════
+  /// WHY THIS IS NOT THE ARENA LIST ANY MORE
+  /// ══════════════════════════════════════════════════════════════════
   ///
-  /// TODO(scale): replace with `GET /api/v1/users/{userId}/challenges`
-  /// once the backend ships that route. The server can index by creatorId
-  /// and avoid shipping the full arena to every profile open.
+  /// It used to download the whole arena and keep the rows with a
+  /// matching creator, with a TODO admitting that was a stopgap. The
+  /// stopgap did more than waste a download: it hid people's videos.
   ///
-  /// Returns newest-first by createdAt where available, otherwise the
-  /// arena's intrinsic order (which the backend already sorts roughly
-  /// by recency).
+  /// The arena list keeps a challenge only while somebody has answered
+  /// it or it is under a day old. Right for an arena, where the point is
+  /// what is live now. Wrong for a profile, where the point is what this
+  /// person has made. So an unanswered post passed twenty-four hours and
+  /// disappeared from its own author's profile — and on production the
+  /// arena held ONE challenge against a catalogue of ninety-two.
+  ///
+  /// The server route has no clock in it, and its rows carry the encoded
+  /// versions, so the profile plays what the worker made rather than the
+  /// file that came off the camera.
   static Future<List<ChallengeModel>> getUserChallenges(
-      String userId) async {
+      String userId, {int limit = 50, int offset = 0}) async {
     if (userId.isEmpty) return const [];
-    final all = await getArenaChallenges();
-    final mine = all.where((c) => c.creatorId == userId).toList();
-    return mine;
+    try {
+      final res = await _authHttp.get(
+        Uri.parse('$_base/api/v1/users/$userId/challenges'
+            '?limit=$limit&offset=$offset'),
+      );
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body) as List;
+        return data.map((j) => ChallengeModel.fromJson(j)).toList();
+      }
+      return const [];
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// GET /api/v1/challenges/friends?userld=..._ friends-only challenges

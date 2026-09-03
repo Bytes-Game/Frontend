@@ -149,8 +149,8 @@ void main() {
       expect(line, contains('swipe 1/0'));
       expect(line, contains('flip 0/0'),
           reason: 'a lane with nothing in it is the finding, not a row to '
-              'omit — "flip 0/0" on a battle-heavy session says no opponent '
-              'was ever read ahead for, which a missing row cannot say');
+              'omit — "flip 0/0" says nobody flipped, and a missing row '
+              'cannot say even that');
       d.debugReset();
     });
   });

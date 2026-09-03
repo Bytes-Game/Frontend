@@ -1326,15 +1326,36 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       final u = entry.videoUrl;
       if (u.isNotEmpty) back.add(u);
     }
-    // The two urls one gesture away from where the user is standing: the
-    // next reel, which a vertical swipe reaches, and — on a battle — the
-    // active reel's opponent, which a horizontal flip reaches. Both get a
-    // live player from the same read-ahead machinery, on the same terms,
-    // so a flip lands on a ready controller exactly the way a swipe does.
+    // ONE url gets a live player: the next reel, which a vertical swipe
+    // reaches.
     //
-    // The order is the priority when the pool cannot hold both: swipes
-    // vastly outnumber flips, so the next reel takes the slot first and
-    // the opponent gets one only if there is another going spare.
+    // ════════════════════════════════════════════════════════════════════
+    // WHY THE OPPONENT IS NOT IN THIS LIST ANY MORE
+    // ════════════════════════════════════════════════════════════════════
+    //
+    // It used to be, on the argument that a flip is one gesture away just
+    // like a swipe is. The argument is sound and the cost turned out to be
+    // wrong, because what runs out is not the pool — it is the phone's
+    // decoders, and the platform takes them back without asking:
+    //
+    //     D/MediaCodec: MediaCodec::reclaim(0x...) c2.mtk.avc.decoder
+    //     E/MediaCodec: Released by resource manager
+    //
+    // Four of those in one session on a device holding its full working
+    // set of four. Whichever reel lost its decoder froze until a new one
+    // was built. The set is already the minimum the screen can run on —
+    // the reel being watched, one up, one down, and the opponent during a
+    // turn — so the only way down is to stop asking for the fourth before
+    // the gesture that needs it.
+    //
+    // The flip does not pay for this. The opponent's BYTES are still
+    // warmed, at position 2 in the window above, so the decoder that
+    // _ensureOpponentState opens on the first dragged frame opens against
+    // a file already on disk. The turn animation covers building it, and
+    // the opponent's poster holds the face until its first frame lands.
+    // What is given up is a decoder standing ready for a gesture most
+    // battles never receive; what is bought is one fewer live decoder on
+    // every battle on screen.
     //
     // Nothing here fires for a reel being scrolled past. prefetch holds a
     // cold spare until its opening bytes land, and by then a fast scroller
@@ -1342,8 +1363,6 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // fling open no players at all.
     final live = <(SpareLane, String)>[
       if (challengers.isNotEmpty) (SpareLane.nextReel, challengers.first),
-      if (current is _ReelItem && current.opponentVideoUrl.isNotEmpty)
-        (SpareLane.opponent, current.opponentVideoUrl),
     ];
     VideoPlayerService.instance.prefetch([...upcoming, ...back], live: live);
   }
@@ -2646,6 +2665,21 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   _ReelPlayerState _ensureOpponentState() {
     if (_opponentState != null) return _opponentState!;
     final url = widget.item.opponentVideoUrl;
+    // This IS the flip's cost now, so this is where it gets counted.
+    //
+    // The read-ahead used to open the opponent ahead of time and record
+    // warm/cold there; it stopped, to hold one fewer decoder — see the
+    // long note beside `live` in _prefetchAround. The question the counter
+    // answers is the same one and it still matters: when somebody flips,
+    // are the opponent's bytes already down? Warm means the decoder is all
+    // the turn has to build. Cold means it is fetching as well, which is
+    // what a flip feels like sticking, and says the read-ahead is not
+    // reaching opponents in time.
+    if (VideoCacheService.instance.isReady(url)) {
+      ReelDiagnostics.instance.recordSpareWarm(SpareLane.opponent);
+    } else {
+      ReelDiagnostics.instance.recordSpareCold(SpareLane.opponent);
+    }
     final controller = VideoPlayerService.instance.getController(url);
     // ignore: discarded_futures
     controller.setLooping(true);
