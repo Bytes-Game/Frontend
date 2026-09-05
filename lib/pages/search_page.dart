@@ -70,6 +70,14 @@ class _SearchPageState extends State<SearchPage>
   // _related = the results are a trending fallback for a zero-hit query;
   // _intent = "user" | "category:<x>" | "general" for section ordering.
   bool _related = false;
+  // WHY the results are related rather than exact. "subjects" means these
+  // videos really are about something near the query; "trending" means the
+  // server gave up and showed what is popular. Saying "trending now" over a
+  // genuine subject match tells the user the wrong thing about their results.
+  String _relatedKind = '';
+  // Subjects that go with the query, learned from which topics keep turning
+  // up on the same videos. Tapping one searches it.
+  List<String> _relatedSearches = const [];
   String _intent = 'general';
 
   // Empty-state suggestion rows (loaded once).
@@ -231,6 +239,11 @@ class _SearchPageState extends State<SearchPage>
         _battles = battles;
         _shorts = shorts;
         _related = result['related'] == true;
+        _relatedKind = (result['relatedKind'] as String?) ?? '';
+        _relatedSearches = ((result['relatedSearches'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .where((e) => e.isNotEmpty)
+            .toList();
         _intent = (result['intent'] as String?) ?? 'general';
         _loading = false;
         _hasSearched = true;
@@ -437,6 +450,80 @@ class _SearchPageState extends State<SearchPage>
   // Only ever rendered after a search has been issued — empty-state goes
   // straight to _buildEmptyStateGrid so no tabs are shown before search.
 
+  /// Says why these results are here when nothing matched the query exactly.
+  ///
+  /// Two different things used to share one message. A search for "aquarium"
+  /// that finds the jellyfish video has genuinely answered the question, and
+  /// telling the user those are "trending now" is simply untrue — it reads as
+  /// the app not having understood, when it understood perfectly.
+  Widget _rescueBanner() {
+    final cs = Theme.of(context).colorScheme;
+    final aboutSubjects = _relatedKind == 'subjects';
+    // The subjects themselves are named by the chips directly below, which
+    // are tappable — repeating them here would be the same words twice, once
+    // uselessly.
+    final message = aboutSubjects
+        ? 'Nothing named "$_lastQuery" — here is what is close:'
+        : 'No exact matches for "$_lastQuery" — trending now:';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      child: Row(
+        children: [
+          Icon(aboutSubjects ? Icons.lightbulb_outline : Icons.trending_up,
+              size: 18, color: cs.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Subjects that go with what was searched for.
+  ///
+  /// The server works these out from which topics keep turning up on the same
+  /// videos, so they are things this app actually has — never a suggestion
+  /// that leads to an empty page.
+  Widget _relatedSearchChips() {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Related',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: cs.onSurfaceVariant)),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            children: _relatedSearches.take(5).map((q) {
+              return ActionChip(
+                label: Text(q, style: const TextStyle(fontSize: 12)),
+                visualDensity: VisualDensity.compact,
+                onPressed: () {
+                  EventTracker.instance.trackTap(
+                    target: 'search_related_subject',
+                    pageName: pageName,
+                    params: {'query': q, 'from': _lastQuery},
+                  );
+                  _searchCtrl.text = q;
+                  _search(q);
+                },
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildTopTab(ColorScheme cs) {
     final accountsHead = _accounts.take(3).toList();
     final battlesHead = _battles.take(4).toList();
@@ -450,8 +537,14 @@ class _SearchPageState extends State<SearchPage>
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           children: [
+            // Suggestions belong here most of all. Somebody who searched a
+            // word this app does not have is exactly the person who needs to
+            // be told what it does have — an empty page with no way forward
+            // is where a search session ends.
+            if (_relatedSearches.isNotEmpty) _relatedSearchChips(),
             SizedBox(
-              height: MediaQuery.of(context).size.height * 0.6,
+              height: MediaQuery.of(context).size.height *
+                  (_relatedSearches.isEmpty ? 0.6 : 0.45),
               child: _emptyState(
                 icon: Icons.search_off,
                 label: 'No results for "$_lastQuery"',
@@ -482,28 +575,13 @@ class _SearchPageState extends State<SearchPage>
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 16),
       children: [
-        // Zero-result rescue banner: these results are trending content,
-        // not matches — say so instead of pretending the query hit.
-        if (_related)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-            child: Row(
-              children: [
-                Icon(Icons.trending_up,
-                    size: 18, color: Theme.of(context).colorScheme.primary),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'No exact matches for "$_lastQuery" — trending now:',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+        // Nothing matched exactly. Say WHICH kind of fallback this is —
+        // videos genuinely about something near the query are not the same
+        // as "here is what is popular", and calling both "trending" tells
+        // the user the wrong thing about what they are looking at.
+        if (_related) _rescueBanner(),
+        // Subjects that go with the query. Tapping one searches it.
+        if (_relatedSearches.isNotEmpty) _relatedSearchChips(),
         // Content-intent queries (intent = "category:x") lead with content;
         // everything else keeps Accounts first.
         if (!_intent.startsWith('category:')) ...accountsSection,
