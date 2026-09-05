@@ -846,6 +846,47 @@ class VideoPlayerService {
     await entry.controller.play();
   }
 
+  /// How many times somebody has dragged a video to a different spot since
+  /// the app started.
+  ///
+  /// The number itself means nothing. What matters is that it CHANGES. The
+  /// feed watches it to tell two things apart that look identical from the
+  /// outside: a video whose position jumped because a person moved it, and
+  /// one that jumped because it reached the end and started over. The feed
+  /// reports those to the backend very differently — see the scrub notes in
+  /// smart_reels_feed.dart.
+  int get seekCount => _seekCount;
+  int _seekCount = 0;
+
+  /// Move a reel to a different point in itself.
+  ///
+  /// Goes through the service for the same reason starting and stopping do.
+  /// This is the one place that knows which reel is on screen, and it is now
+  /// also the one place that knows a person moved one by hand. Code that
+  /// seeks a controller directly is invisible to that, and the feed then
+  /// reports the jump as if the video had finished or looped on its own.
+  ///
+  /// Out-of-range targets are pulled back to the ends rather than refused: a
+  /// finger dragged off the edge of the bar should land on the last frame,
+  /// not do nothing.
+  Future<void> seekTo(String url, Duration position) async {
+    final entry = _pool.where((e) => e.url == url).firstOrNull;
+    if (entry == null) return;
+    final value = entry.controller.value;
+    // Seeking a player that has not opened its file yet does nothing useful
+    // and, on Android, can arrive after the player decides where to start.
+    if (!value.isInitialized) return;
+    var target = position;
+    if (target < Duration.zero) target = Duration.zero;
+    final total = value.duration;
+    if (total > Duration.zero && target > total) target = total;
+    _seekCount++;
+    // A reel somebody is scrubbing is a reel they are using, so it should
+    // not look stale to the eviction pass while they hold the bar.
+    entry.lastUsed = DateTime.now();
+    await entry.controller.seekTo(target);
+  }
+
   _PoolEntry? get _activeEntry {
     final url = _activeUrl;
     if (url == null) return null;

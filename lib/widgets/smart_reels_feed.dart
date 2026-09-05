@@ -261,6 +261,18 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   bool _completeTracked = false;
   int _loopCount = 0;
   Duration _lastPlaybackPos = Duration.zero;
+  // Did somebody drag this reel to a different spot while it was on screen?
+  //
+  // Both signals below are worked out by watching where the playhead is, and
+  // dragging the bar breaks both readings. Drag near the end and the app
+  // would report "watched the whole thing". Drag backwards and it would
+  // report "watched it twice". Neither happened, and both are strong
+  // positives the ranker acts on, so a reel-view that was dragged stops
+  // reporting them. See _attachPlaybackListener.
+  bool _scrubbedThisView = false;
+  // What the app-wide drag counter read when this reel came on screen.
+  // Any change to it means a finger moved a video.
+  int _seekCountAtAttach = 0;
   // Cap loop events per reel-view so a video left running in a pocket
   // doesn't flood the queue — the ranker's loop cache counts rows, and
   // 3 loops already saturates the "they love it" signal.
@@ -1158,6 +1170,8 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     _detachPlaybackListener();
     _completeTracked = false;
     _loopCount = 0;
+    _scrubbedThisView = false;
+    _seekCountAtAttach = VideoPlayerService.instance.seekCount;
     _lastPlaybackPos = c.value.position;
     void listener() {
       final v = c.value;
@@ -1165,6 +1179,28 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       final dur = v.duration;
       if (dur <= Duration.zero) return;
       final pos = v.position;
+
+      // Once somebody has dragged the bar on this reel, stop reporting how
+      // far they got. Both checks below read the playhead, and a finger
+      // moves the playhead in ways watching never does: drag to the end and
+      // the 95% check fires, drag back to the start and the wrap check fires.
+      // The backend treats a completion as a full watch and a loop as
+      // "they liked it enough to sit through it twice", so a fake one of
+      // either teaches the feed the wrong thing about this person.
+      //
+      // Going quiet is the cautious choice, and it is deliberate. A person
+      // who drags back to a moment and then genuinely watches to the end
+      // loses a completion we would have counted. The other way round — one
+      // drag manufacturing a full watch — pollutes the ranking, and the
+      // drag itself already sends its own signal from the bar.
+      if (!_scrubbedThisView &&
+          VideoPlayerService.instance.seekCount != _seekCountAtAttach) {
+        _scrubbedThisView = true;
+      }
+      if (_scrubbedThisView) {
+        _lastPlaybackPos = pos;
+        return;
+      }
 
       // Completion: playhead reached 95%. Fires once per reel-view; a
       // wrap-detected loop below also implies completion, so mark there
@@ -2440,6 +2476,32 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   // if the cube is less than half-turned.
   static const double _cubeFlingVelocity = 300;
 
+  // ── Dragging the video to a different spot ─────────────────────────────
+  // True while a finger is on the bar at the bottom of the reel. While it
+  // is true the bar paints _scrubTarget instead of where the video actually
+  // is, so the line follows the finger exactly even though the picture
+  // catches up a moment later.
+  bool _scrubbing = false;
+  Duration _scrubTarget = Duration.zero;
+  // Where the video was when the finger went down, and whether it was
+  // playing. The first is half of the "they moved it from here to there"
+  // signal; the second decides whether letting go starts it again — a reel
+  // the user had already paused stays paused.
+  Duration _scrubStartedAt = Duration.zero;
+  bool _resumeAfterScrub = false;
+  DateTime _lastScrubSeekAt = DateTime.fromMillisecondsSinceEpoch(0);
+  // How often the video is actually moved while the finger slides.
+  //
+  // The bar follows the finger every frame, but the VIDEO does not. Every
+  // move makes the player go and fetch a different part of the file, and
+  // asking for a hundred different parts during one drag is how you get a
+  // bar that glides and a picture that never settles. Four times a second
+  // is often enough to feel like the picture is following you.
+  static const Duration _scrubSeekInterval = Duration(milliseconds: 250);
+  // Moves smaller than this don't count as "they went looking for
+  // something" — that's a tap that landed near where the video already was.
+  static const Duration _scrubSignalFloor = Duration(milliseconds: 250);
+
   @override
   void initState() {
     super.initState();
@@ -2471,6 +2533,14 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     // _playCurrent unconditionally starts the primary URL on re-entry.
     if (old.isActive && !widget.isActive) {
       _cubeDragging = false;
+      // Drop any half-finished drag on the bar. Normally the gesture is
+      // cancelled for us when the pager takes the touch, but a reel can also
+      // leave the screen without that happening — a video the user tapped
+      // away from, a notification, code that jumps the feed. Leaving the
+      // flag set would hold this reel still and show its clock over it when
+      // the user came back.
+      _scrubbing = false;
+      _resumeAfterScrub = false;
       if (_showingOpponent) {
         _setShowOpponent(false, track: false, animate: false);
       } else if (_cubeCtl.value != 0) {
@@ -2514,6 +2584,112 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
       isPaused: _isPaused,
       positionMs: activeController.value.position.inMilliseconds,
     );
+  }
+
+  // ── Dragging the video to a different spot ─────────────────────────────
+  //
+  // The bar along the bottom of a reel used to only report progress. Now it
+  // is also the handle: press it and drag sideways to move through the
+  // video, or tap a point on it to jump there.
+  //
+  // It has its own narrow strip of the screen and claims every touch that
+  // lands in it, which is what keeps it out of the way of everything else
+  // the tile listens for. A sideways drag anywhere ELSE on a battle still
+  // turns the cube to the other side, taps still pause, double taps still
+  // like. Up-and-down swipes that start on the bar still move to the next
+  // reel, because that gesture belongs to the pager above this widget and
+  // the bar only ever claims sideways ones.
+
+  /// Finger down on the bar.
+  void _onScrubStart() {
+    final st = _activeState;
+    if (st == null) return;
+    final v = st.controller.value;
+    if (!v.isInitialized || v.duration <= Duration.zero) return;
+    HapticFeedback.selectionClick();
+    _scrubStartedAt = v.position;
+    // Hold the video still while the finger is down. Sound played over a
+    // moving playhead is a mess, and a video that keeps advancing fights
+    // the finger for where the bar should be.
+    _resumeAfterScrub = v.isPlaying;
+    if (v.isPlaying) {
+      // ignore: discarded_futures
+      VideoPlayerService.instance.pauseActive();
+    }
+    setState(() {
+      _scrubbing = true;
+      _scrubTarget = v.position;
+    });
+  }
+
+  /// Finger sliding along the bar. [target] is where in the video the
+  /// finger currently is.
+  void _onScrubUpdate(Duration target) {
+    if (!_scrubbing) return;
+    setState(() => _scrubTarget = target);
+    final now = DateTime.now();
+    if (now.difference(_lastScrubSeekAt) < _scrubSeekInterval) return;
+    _lastScrubSeekAt = now;
+    _seekActiveTo(target);
+  }
+
+  /// Finger lifted. Land exactly where they let go, start playing again if
+  /// it was playing before, and tell the backend once that they went
+  /// looking for a different part of the video.
+  ///
+  /// Where they let go is read from [_scrubTarget] rather than passed in by
+  /// the bar. The bar knows it too, but only as of its last rebuild, and a
+  /// finger can lift in the same frame as its last movement — which would
+  /// land the video a few pixels short of where they actually let go.
+  void _onScrubEnd() {
+    if (!_scrubbing) return;
+    final from = _scrubStartedAt;
+    final target = _scrubTarget;
+    setState(() => _scrubbing = false);
+    _seekActiveTo(target);
+    if (_resumeAfterScrub) {
+      // ignore: discarded_futures
+      VideoPlayerService.instance.resumeActive();
+    }
+    _resumeAfterScrub = false;
+
+    // ONE event for one drag, not one per step.
+    //
+    // The backend already understands these: going back to rewatch a moment
+    // counts as real interest, going forward counts as impatient but still
+    // watching. What it was never built for is the dozens of little moves a
+    // single slide of a finger makes. Reporting where the finger went down
+    // and where it came up describes what the person actually did.
+    if ((target - from).abs() < _scrubSignalFloor) return;
+    EventTracker.instance.trackSeek(
+      contentId: widget.item.id,
+      contentType: widget.item.type,
+      fromMs: from.inMilliseconds,
+      toMs: target.inMilliseconds,
+    );
+  }
+
+  /// The touch was taken away mid-drag (the pager won an up-and-down
+  /// swipe). Leave the video where it is and let it play again — no event,
+  /// because the person did not finish the gesture.
+  void _onScrubCancel() {
+    if (!_scrubbing) return;
+    setState(() => _scrubbing = false);
+    if (_resumeAfterScrub) {
+      // ignore: discarded_futures
+      VideoPlayerService.instance.resumeActive();
+    }
+    _resumeAfterScrub = false;
+  }
+
+  /// Move whichever side of the reel is facing the user. Through the
+  /// service, like every other start and stop — it is the only thing that
+  /// knows a person moved a video by hand rather than it moving itself.
+  void _seekActiveTo(Duration target) {
+    final st = _activeState;
+    if (st == null) return;
+    // ignore: discarded_futures
+    VideoPlayerService.instance.seekTo(st.url, target);
   }
 
   void _doubleTapLike() {
@@ -2997,6 +3173,9 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     final activeUrl = _showingOpponent ? item.opponentVideoUrl : item.videoUrl;
     final hasVideo = activeUrl.isNotEmpty;
     final isChallenge = item.type == 'challenge';
+    // The player for the side facing the user — the one the bar reports on
+    // and the one a drag moves.
+    final playerState = _activeState;
 
     return Stack(
       fit: StackFit.expand,
@@ -3148,11 +3327,18 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
         ),
 
         // Bottom-left: creator + caption + optional "open" CTA.
-        // Anchored just above the progress bar with a small breathing margin
-        // and safe-area padding so the home indicator on iOS / nav-gesture
-        // hint on Android doesn't overlap the text.
+        // Anchored just above the bar with a small breathing margin and
+        // safe-area padding so the home indicator on iOS / nav-gesture hint
+        // on Android doesn't overlap the text.
+        //
+        // The gap clears the bar's whole touch strip, not just the painted
+        // line. The strip has to be far taller than the line to be hittable
+        // at all, and it swallows every touch inside it — so anything
+        // tappable that overlapped it (the "View battle" button sits at the
+        // bottom of this column) would quietly stop responding.
         Positioned(
-          bottom: MediaQuery.of(context).padding.bottom + 16,
+          bottom:
+              MediaQuery.of(context).padding.bottom + _ScrubBar.stripHeight,
           left: 16,
           right: 80,
           child: Column(
@@ -3247,9 +3433,13 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
         // share → save), with the vote button pinned at the top of the
         // rail on battles only — that placement mirrors the FeedActionBar
         // widget on the challenge detail page so users learn one layout.
+        // Same clearance as the caption block, and for the same reason: the
+        // lowest icon in this rail must not fall inside the bar's touch
+        // strip, or it stops responding to taps.
         Positioned(
           right: 10,
-          bottom: MediaQuery.of(context).padding.bottom + 24,
+          bottom:
+              MediaQuery.of(context).padding.bottom + _ScrubBar.stripHeight,
           child: Column(
             children: [
               // Owner-only overflow menu. Lives ABOVE the vote/like
@@ -3308,37 +3498,47 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
           ),
         ),
 
-        // Thin progress bar — sits at the very bottom but lifted above the
-        // safe-area inset so it isn't clipped by the home indicator.
-        // video_player's controller is itself a ValueListenable, so
-        // ValueListenableBuilder gives us frame-rate-ish rebuilds
-        // without manually forwarding position ticks through a Stream.
-        // Gated on the player, not just on the reel having a video: an
-        // off-screen tile showing its poster has no controller to track a
-        // position against, and a bar stuck at zero would read as a video
-        // that failed rather than one that has not been opened.
-        if (hasVideo && widget.state != null)
+        // The bar along the bottom: where you are in the video, and the
+        // handle for moving somewhere else in it. Sits at the very bottom
+        // but lifted above the safe-area inset so it isn't clipped by the
+        // home indicator.
+        //
+        // Bound to the side that is FACING THE USER, not always the
+        // challenger. On a battle the two sides are two different videos of
+        // two different lengths, so a bar reading the challenger while the
+        // opponent plays shows a stranger's progress — and, now that the
+        // bar can be dragged, would move the wrong video.
+        //
+        // Gated on there being a player, not just a video: an off-screen
+        // tile showing its poster has no position to report, and a bar
+        // stuck at zero reads as a video that failed rather than one that
+        // has not been opened.
+        if (hasVideo && playerState != null)
           Positioned(
             left: 0,
             right: 0,
             bottom: MediaQuery.of(context).padding.bottom,
-            child: ValueListenableBuilder<VideoPlayerValue>(
-              valueListenable: widget.state!.controller,
-              builder: (context, v, _) {
-                final pos = v.position;
-                final dur = v.duration;
-                final p = dur.inMilliseconds > 0
-                    ? (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0)
-                    : 0.0;
-                return LinearProgressIndicator(
-                  value: p,
-                  minHeight: 2,
-                  backgroundColor: Colors.white24,
-                  valueColor: AlwaysStoppedAnimation(
-                    Theme.of(context).colorScheme.primary,
-                  ),
-                );
-              },
+            child: _ScrubBar(
+              controller: playerState.controller,
+              scrubbing: _scrubbing,
+              scrubTarget: _scrubTarget,
+              onScrubStart: _onScrubStart,
+              onScrubUpdate: _onScrubUpdate,
+              onScrubEnd: _onScrubEnd,
+              onScrubCancel: _onScrubCancel,
+            ),
+          ),
+
+        // Big centered clock while a finger is on the bar — the only way to
+        // know where you are landing, since the video itself is held still
+        // and a 5-pixel line is not a readout.
+        if (_scrubbing && playerState != null)
+          Center(
+            child: IgnorePointer(
+              child: _ScrubTimeBadge(
+                position: _scrubTarget,
+                duration: playerState.controller.value.duration,
+              ),
             ),
           ),
       ],
@@ -3349,6 +3549,232 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
     if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}K';
     return '$n';
+  }
+}
+
+/// The line along the bottom of a reel: how far through the video you are,
+/// and the handle for going somewhere else in it.
+///
+/// ════════════════════════════════════════════════════════════════════════
+/// WHY IT IS ITS OWN STRIP INSTEAD OF THE WHOLE SCREEN
+/// ════════════════════════════════════════════════════════════════════════
+///
+/// The obvious way to let people move through a video is to let them drag
+/// anywhere on it. That slot is taken. A sideways drag on a battle turns the
+/// reel over to the other person's video, which is the main thing you do
+/// with a battle, and it would be a bad trade to lose it.
+///
+/// So the handle is the bar itself, the way it works in most video apps.
+/// The catch is that the bar is two pixels tall and nobody can hit two
+/// pixels. The fix is an invisible strip [stripHeight] tall sitting on top
+/// of it that catches the touch — you aim at the line, you hit the strip.
+///
+/// The strip claims every touch that lands in it, so nothing underneath
+/// fires by accident: no pausing, no accidental likes, no turning a battle
+/// over. It only ever claims SIDEWAYS drags, so flicking up or down from
+/// the bar still moves to the next reel — that gesture belongs to the pager
+/// this whole tile sits inside, which is not underneath the strip but
+/// around it.
+///
+/// Because the strip covers the bottom [stripHeight] of the tile, nothing
+/// tappable may sit inside it — see where the caption block and the action
+/// rail are anchored.
+class _ScrubBar extends StatelessWidget {
+  const _ScrubBar({
+    required this.controller,
+    required this.scrubbing,
+    required this.scrubTarget,
+    required this.onScrubStart,
+    required this.onScrubUpdate,
+    required this.onScrubEnd,
+    required this.onScrubCancel,
+  });
+
+  final VideoPlayerController controller;
+
+  /// True while a finger is down. Changes what the bar reads (the finger,
+  /// not the video) and makes it thick enough to see under a thumb.
+  final bool scrubbing;
+  final Duration scrubTarget;
+
+  final VoidCallback onScrubStart;
+  final ValueChanged<Duration> onScrubUpdate;
+
+  /// Takes no position: the tile it reports to already holds the live one,
+  /// and the copy this widget has is only as fresh as its last rebuild.
+  final VoidCallback onScrubEnd;
+  final VoidCallback onScrubCancel;
+
+  /// Height of the invisible touch strip. Comfortably hittable with a
+  /// thumb, and small enough that it does not eat into the reel.
+  static const double stripHeight = 24;
+
+  /// How far above the bottom of the strip the line is painted. Leaves the
+  /// round handle somewhere to sit without hanging off the bottom of the
+  /// screen, and keeps the line clear of the home indicator.
+  static const double _lineBottom = 5;
+
+  static const double _restingThickness = 2;
+  static const double _draggingThickness = 5;
+  static const double _thumbSize = 14;
+
+  /// Turn a horizontal touch position into a point in the video.
+  Duration _positionFor(double dx, double width, Duration total) {
+    if (width <= 0 || total <= Duration.zero) return Duration.zero;
+    final fraction = (dx / width).clamp(0.0, 1.0);
+    return Duration(
+      milliseconds: (total.inMilliseconds * fraction).round(),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        return ValueListenableBuilder<VideoPlayerValue>(
+          valueListenable: controller,
+          builder: (context, v, _) {
+            final total = v.duration;
+            // While a finger is down the bar shows where the FINGER is, not
+            // where the video is. The video is a moment behind — it has to
+            // go and fetch that part of the file — and a bar that waited
+            // for it would stutter and lag under the thumb.
+            final shown = scrubbing ? scrubTarget : v.position;
+            final progress = total.inMilliseconds > 0
+                ? (shown.inMilliseconds / total.inMilliseconds).clamp(0.0, 1.0)
+                : 0.0;
+            final thickness = scrubbing
+                ? _draggingThickness
+                : _restingThickness;
+
+            return GestureDetector(
+              // Opaque: this strip takes the touch and nothing under it
+              // sees it. That is the whole reason the battle flip and the
+              // tap-to-pause don't fire when you reach for the bar.
+              behavior: HitTestBehavior.opaque,
+              onTapUp: total <= Duration.zero
+                  ? null
+                  : (d) {
+                      // A tap is a drag with no middle: press, aim, let go.
+                      onScrubStart();
+                      onScrubUpdate(
+                        _positionFor(d.localPosition.dx, width, total),
+                      );
+                      onScrubEnd();
+                    },
+              onHorizontalDragStart: (_) => onScrubStart(),
+              onHorizontalDragUpdate: (d) => onScrubUpdate(
+                _positionFor(d.localPosition.dx, width, total),
+              ),
+              onHorizontalDragEnd: (_) => onScrubEnd(),
+              onHorizontalDragCancel: onScrubCancel,
+              child: SizedBox(
+                height: stripHeight,
+                width: double.infinity,
+                child: Stack(
+                  children: [
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: _lineBottom,
+                      height: thickness,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          const ColoredBox(color: Colors.white24),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: FractionallySizedBox(
+                              widthFactor: progress,
+                              heightFactor: 1,
+                              child: ColoredBox(
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // The handle, only while a finger is down. Clamped so
+                    // it stays on screen at both ends instead of hanging
+                    // half off the edge.
+                    if (scrubbing)
+                      Positioned(
+                        left: (progress * width - _thumbSize / 2).clamp(
+                          0.0,
+                          math.max(0.0, width - _thumbSize),
+                        ),
+                        bottom: _lineBottom + thickness / 2 - _thumbSize / 2,
+                        width: _thumbSize,
+                        height: _thumbSize,
+                        child: const DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(blurRadius: 6, color: Colors.black54),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+/// The clock that appears in the middle of the reel while a finger is on
+/// the bar — "0:07 / 0:15". Without it there is no way to tell where you
+/// are landing, because the video is held still while you drag and a
+/// five-pixel line is not a readout.
+class _ScrubTimeBadge extends StatelessWidget {
+  const _ScrubTimeBadge({required this.position, required this.duration});
+
+  final Duration position;
+  final Duration duration;
+
+  static String _clock(Duration d) {
+    final safe = d < Duration.zero ? Duration.zero : d;
+    final minutes = safe.inMinutes;
+    final seconds = safe.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: Text.rich(
+          TextSpan(
+            children: [
+              TextSpan(
+                text: _clock(position),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              TextSpan(
+                text: ' / ${_clock(duration)}',
+                style: const TextStyle(color: Colors.white70, fontSize: 16),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

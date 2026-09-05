@@ -161,13 +161,27 @@ class _VideoPlayerPageState extends State<VideoPlayerPage>
     _startHideTimer();
   }
 
+  /// Move the video, through the player service rather than straight at the
+  /// controller.
+  ///
+  /// This page borrows the SAME player the reels feed is using — the pool
+  /// hands out one per video — so a video scrubbed here is a video the feed
+  /// may still be watching the position of. The feed decides "they watched
+  /// the whole thing" from where the playhead is, and a jump it did not know
+  /// was made by hand looks exactly like reaching the end. The service is
+  /// what records that somebody moved it.
+  void _seek(Duration target) {
+    // ignore: discarded_futures
+    VideoPlayerService.instance.seekTo(widget.videoUrl, target);
+  }
+
   void _seekRelative(Duration offset) {
     final current = _controller.value.position;
     final dur = _controller.value.duration;
     var target = current + offset;
     if (target < Duration.zero) target = Duration.zero;
     if (target > dur) target = dur;
-    _controller.seekTo(target);
+    _seek(target);
 
     final seconds = offset.inSeconds;
     setState(() {
@@ -341,7 +355,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage>
                       final target = Duration(
                           milliseconds:
                               (value * duration.inMilliseconds).round());
-                      _controller.seekTo(target);
+                      _seek(target);
                     },
                   ),
                 ),
