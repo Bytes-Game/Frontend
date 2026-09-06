@@ -458,19 +458,34 @@ class _SearchPageState extends State<SearchPage>
   /// the app not having understood, when it understood perfectly.
   Widget _rescueBanner() {
     final cs = Theme.of(context).colorScheme;
+    // Three different things, and each is a different claim about the
+    // results. Videos genuinely about something near the query are not the
+    // same as popular videos, and neither is the same as "here is what people
+    // uploaded most recently" — which is what comes back on a platform with no
+    // traffic yet, where the trending list is empty. Calling those popular
+    // would invent an engagement signal that does not exist.
     final aboutSubjects = _relatedKind == 'subjects';
-    // The subjects themselves are named by the chips directly below, which
-    // are tappable — repeating them here would be the same words twice, once
-    // uselessly.
-    final message = aboutSubjects
-        ? 'Nothing named "$_lastQuery" — here is what is close:'
-        : 'No exact matches for "$_lastQuery" — trending now:';
+    final recent = _relatedKind == 'recent';
+    final String message;
+    if (aboutSubjects) {
+      message = 'Nothing named "$_lastQuery" — here is what is close:';
+    } else if (recent) {
+      message = 'Nothing for "$_lastQuery" — here is what is new:';
+    } else {
+      message = 'No exact matches for "$_lastQuery" — trending now:';
+    }
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       child: Row(
         children: [
-          Icon(aboutSubjects ? Icons.lightbulb_outline : Icons.trending_up,
-              size: 18, color: cs.primary),
+          Icon(
+              aboutSubjects
+                  ? Icons.lightbulb_outline
+                  : recent
+                      ? Icons.schedule
+                      : Icons.trending_up,
+              size: 18,
+              color: cs.primary),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
