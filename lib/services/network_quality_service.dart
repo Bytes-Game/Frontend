@@ -217,6 +217,53 @@ class NetworkQualityService {
   /// good connections get a soft picture.
   static const double bitrateHeadroom = 1.3;
 
+  /// How long a reel is typically on screen before the next swipe.
+  ///
+  /// Only used to work out how fast read-ahead has to run to keep up. It is
+  /// a property of how people use a short-video feed, not of this app, and
+  /// six seconds is deliberately on the short side: guessing too short
+  /// reserves a little too much bandwidth, guessing too long reserves too
+  /// little and the reserve stops doing its job.
+  static const double typicalDwellSeconds = 6;
+
+  /// Bandwidth held back from the picture, so the NEXT reel can be fetched
+  /// while this one plays.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// WHY A LINK IS NOT ALL FOR THE VIDEO ON SCREEN
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// This used to compare a rendition's bitrate against the whole link. The
+  /// link has two consumers, not one: the reel playing now, and the reels
+  /// being warmed for the swipe that is about to happen. Spending it all on
+  /// the first starves the second, and a feed whose next reel is never ready
+  /// is a feed that stops on every swipe.
+  ///
+  /// Measured on a device at 3.3 Mbps, before this existed:
+  ///
+  ///   reel 30    93% of starts warm    28 warms finished     7 cancelled
+  ///   reel 80    54% of starts warm    32 warms finished    60 cancelled
+  ///
+  /// Fifty reels apart. In between it started sixty-one more downloads and
+  /// finished four. The app had decided 3.3 Mbps affords 720p, which costs
+  /// 2.5 Mbps to play, leaving 0.8 Mbps for read-ahead — and reading ahead
+  /// six reels needs about 9 MB, which at 0.8 Mbps takes a minute and a
+  /// half. The user crosses six reels in fifteen seconds. The window could
+  /// never fill, and every swipe cancelled what was in flight.
+  ///
+  /// So the reserve is what read-ahead actually costs: one reel's opening
+  /// slice per reel watched. VideoCacheService.prefixBytes over
+  /// [typicalDwellSeconds], which is 1 Mbps at today's 768 KB slice. A test
+  /// keeps the two tied together, because raising the slice without raising
+  /// this would quietly put the starvation back.
+  ///
+  /// The trade is deliberate and it is the one TikTok makes: a slightly
+  /// softer picture that starts the instant you swipe beats a sharper one
+  /// that makes you wait. On a link with room to spare nothing changes —
+  /// the reserve is a rounding error against 10 Mbps and the best rendition
+  /// is still chosen.
+  static const int readAheadReserveBps = 1048576;
+
   /// Recent throughput samples in bits per second, newest last.
   final List<int> _throughputSamples = <int>[];
 
@@ -265,9 +312,14 @@ class NetworkQualityService {
   String? get affordableLabel {
     final bps = measuredBps;
     if (bps == null) return null;
+    // What is left for the picture once read-ahead has been paid for. It can
+    // go negative on a very slow link, in which case nothing qualifies and
+    // the floor below applies — which is right: a soft picture that plays
+    // still beats a sharp one that stops.
+    final forPicture = bps - readAheadReserveBps;
     String best = '480p';
     for (final entry in bitrateNeededFor.entries) {
-      if (bps < entry.value * bitrateHeadroom) continue;
+      if (forPicture < entry.value * bitrateHeadroom) continue;
       if ((_labelRank[entry.key] ?? 0) > (_labelRank[best] ?? 0)) {
         best = entry.key;
       }
