@@ -84,6 +84,44 @@ const Duration prefetchMaxStale = Duration(milliseconds: 1200);
 ///
 /// [lastPrefetchAt] is null before the first re-aim of a feed, which is
 /// always immediate — there is nothing warm yet to protect.
+/// Which reels behind the current one the back-buffer should warm.
+///
+/// Pure and separated out because it is the one part of the warm window
+/// that walks BACKWARDS, and walking backwards is where the bound is easy
+/// to get wrong. Counting up towards the end of a list makes you write
+/// `i < length` without thinking. Counting down from where the user is
+/// makes `i >= 0` feel like the whole answer, and it is only the whole
+/// answer while the position is inside the list.
+///
+/// It stopped being inside the list on a refresh. A refresh empties the
+/// list and refills it, and the new feed can be shorter than the old one —
+/// twenty-one reels where there had been thirty-three. The position was
+/// still 26, so the loop started at 25 and read past the end:
+///
+///     RangeError (length): Invalid value: Not in inclusive range 0..20: 25
+///
+/// The position not surviving a refresh is fixed separately, at the place
+/// the list is cleared, which is the real bug. This is the other half: a
+/// loop over a list bounds itself, rather than trusting a number it was
+/// handed.
+///
+/// A position past the end has no meaningful "behind", so it is treated as
+/// standing at the last reel — warming the end of the list is the most
+/// useful thing available and never wrong.
+List<int> reelBackWindow({
+  required int currentIndex,
+  required int itemCount,
+  required int backCount,
+}) {
+  if (itemCount <= 0 || backCount <= 0) return const <int>[];
+  final start = math.min(currentIndex - 1, itemCount - 1);
+  final out = <int>[];
+  for (int i = start; i >= 0 && i > start - backCount; i--) {
+    out.add(i);
+  }
+  return out;
+}
+
 bool shouldReaimPrefetchNow({
   required bool bursting,
   required DateTime? lastPrefetchAt,
@@ -370,6 +408,19 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     setState(() {
       _loadingFirstPage = !hasSeed;
       _items.clear();
+      // The position goes back with the list, here, in the same breath as
+      // emptying it. These two are one fact — which reel the user is on —
+      // and anything that updates one without the other leaves the feed
+      // pointing at a reel that does not exist.
+      //
+      // It used to be reset further down, inside `if (refresh &&
+      // _pageController.hasClients)`. That condition is false at exactly
+      // the moment it matters: the line above sets _loadingFirstPage,
+      // which swaps the PageView for a loader, so the controller has no
+      // clients and the reset was never even scheduled. The position then
+      // survived into the next frame pointing past the end of a shorter
+      // feed — nothing played, and the back-buffer read off the end.
+      _currentIndex = 0;
       _page = 0;
       _hasMore = true;
       if (hasSeed) {
@@ -388,10 +439,10 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // newly-loaded content out of order.
     if (refresh && _pageController.hasClients) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_pageController.hasClients) {
-          _pageController.jumpToPage(0);
-          _currentIndex = 0;
-        }
+        // Visual only. _currentIndex was already reset with the list above,
+        // because whether the pager happens to be attached must not decide
+        // whether the feed knows where it is.
+        if (_pageController.hasClients) _pageController.jumpToPage(0);
       });
     }
     // Kick off autoplay on the first real item — and warm the prefetch
@@ -1352,11 +1403,11 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // both directions warmed, the back-swipe hits the in-pool
     // controller and starts in <30ms.
     final back = <String>[];
-    for (
-      int i = _currentIndex - 1;
-      i >= 0 && i >= _currentIndex - backCount;
-      i--
-    ) {
+    for (final i in reelBackWindow(
+      currentIndex: _currentIndex,
+      itemCount: _items.length,
+      backCount: backCount,
+    )) {
       final entry = _items[i];
       if (entry is! _ReelItem) continue;
       final u = entry.videoUrl;
