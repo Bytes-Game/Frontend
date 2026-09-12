@@ -228,10 +228,23 @@ class LocalMediaServer {
       // response that already ended.
       File? prefixFile;
       var prefixEnd = -1; // last byte index we can serve from disk
-      if (start < entry.prefixLength) {
+      // Asked of the FILE, not of the length recorded when the reel was
+      // registered. The head grows as the video is watched, so a seek to the
+      // middle of something already watched is a cache hit — and gating on
+      // the registered length would send it to origin for bytes sitting on
+      // disk, which is the whole reason scrubbing was slow.
+      //
+      // `usable > start` below is the real test; this outer check only
+      // avoids a stat for a range that starts past the end of the media.
+      if (start < total) {
         final file = File(entry.prefixPath);
         final onDisk = file.existsSync() ? file.lengthSync() : 0;
-        final usable = onDisk < entry.prefixLength ? onDisk : entry.prefixLength;
+        // Whatever is on disk, not just the slice the warmer fetched. The
+        // head GROWS as the video is watched (see the append below), so
+        // capping at the registered prefixLength would keep re-fetching
+        // bytes already saved — which is what made scrubbing back into a
+        // video you had just watched go to the network every time.
+        final usable = onDisk < total ? onDisk : total;
         if (usable > start) {
           prefixFile = file;
           prefixEnd = (end < usable - 1) ? end : usable - 1;
@@ -354,10 +367,63 @@ class LocalMediaServer {
         }
         tailConsumed = true;
         _backfills++;
+        // ────────────────────────────────────────────────────────────────
+        // KEEP WHAT WE ARE ALREADY PAYING FOR
+        // ────────────────────────────────────────────────────────────────
+        //
+        // These bytes are crossing the network right now on their way to
+        // the player. Writing them to the end of the head file as they go
+        // costs a disk write and no extra traffic, and it turns the head
+        // from "the opening slice" into "everything watched so far".
+        //
+        // Without it the middle of every video was fetched again on every
+        // play and every seek. Scrubbing back ten seconds into a reel you
+        // had just watched went to the network for bytes that had been on
+        // the wire a moment earlier, and the diagnostics said so plainly:
+        // `file=0 (0%)` — no reel EVER played from a complete local file,
+        // because nothing ever completed one.
+        //
+        // Only when the range begins exactly where the file ends, so the
+        // file is only ever extended and never gains a hole. That is what
+        // makes this safe under everything: whatever happens — a swipe
+        // away mid-write, the app being killed, a full disk — the file is
+        // still a valid prefix of the video, and every reader already
+        // trusts its length over any recorded number. A short write costs
+        // a cache hit, never correctness.
+        RandomAccessFile? grow;
+        if (prefixFile != null && !entry.growing) {
+          try {
+            final f = await File(entry.prefixPath).open(mode: FileMode.append);
+            // Asked of the FILE, not worked out from the numbers above.
+            // Opened for append, the position IS the current length, so this
+            // is the one check that cannot be fooled by a mistake in how the
+            // ranges were sliced: append only where the file actually ends.
+            // Anywhere else would leave a gap, and a head with a gap is not a
+            // prefix of anything — every later read of those bytes would
+            // hand the player something that is not the video.
+            if (await f.position() == originStart) {
+              grow = f;
+              entry.growing = true;
+            } else {
+              await f.close();
+            }
+          } catch (_) {
+            grow = null; // cache is a nicety; playback continues regardless
+          }
+        }
         try {
-          await _pipeReadAhead(origin.stream, res);
+          await _pipeReadAhead(origin.stream, res, alsoTo: grow);
         } finally {
           _backfills--;
+          if (grow != null) {
+            entry.growing = false;
+            try {
+              await grow.flush();
+            } catch (_) {}
+            try {
+              await grow.close();
+            } catch (_) {}
+          }
         }
       }
 
@@ -426,7 +492,22 @@ class LocalMediaServer {
   /// socket. The cushion is what the player spends during the next slow
   /// patch, which is the whole point — read-ahead is only useful if it
   /// was allowed to get ahead.
-  Future<void> _pipeReadAhead(Stream<List<int>> source, IOSink out) {
+  /// Streams [source] to [out], and — when [alsoTo] is given — appends the
+  /// same bytes to the end of the cached head file as they pass.
+  ///
+  /// The copy never gets in the player's way: the write is started but not
+  /// awaited before the chunk goes out, and a failure disables further
+  /// copying rather than breaking the response. A cache is an accelerator,
+  /// never a requirement.
+  Future<void> _pipeReadAhead(
+    Stream<List<int>> source,
+    IOSink out, {
+    RandomAccessFile? alsoTo,
+  }) {
+    // Local, because it is turned off on the first write failure and the
+    // closure below needs a variable it can promote to non-null after an
+    // await. A parameter cannot be promoted that way.
+    var copyTo = alsoTo;
     final done = Completer<void>();
     final queue = Queue<List<int>>();
     var queued = 0;
@@ -460,6 +541,17 @@ class LocalMediaServer {
             sub.resume();
           }
           out.add(chunk);
+          final copy = copyTo;
+          if (copy != null) {
+            try {
+              await copy.writeFrom(chunk);
+            } catch (_) {
+              // Out of space, or the file went away under us. Stop copying
+              // and keep playing: what is already written is still a valid,
+              // shorter prefix.
+              copyTo = null;
+            }
+          }
           await out.flush();
         }
       } catch (e) {
@@ -587,6 +679,15 @@ class _Entry {
   /// file's last byte, so the absolute offset it starts at is
   /// `totalLength - <its size on disk>`. See [LocalMediaServer.register].
   final String? tailPath;
+
+  /// True while a request is appending to [prefixPath].
+  ///
+  /// Two players can hold the same URL — a reel and the battle opponent
+  /// behind it, or the same reel reached twice. Both appending to one file
+  /// would interleave their bytes and produce a head that is not a prefix of
+  /// anything. One at a time; the other simply does not grow it, which costs
+  /// nothing but a later cache hit.
+  bool growing = false;
 }
 
 class _Range {
