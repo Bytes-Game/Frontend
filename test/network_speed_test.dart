@@ -15,6 +15,23 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:myapp/services/network_quality_service.dart';
 
+/// What a link has to carry, in Mbps, before [label] is offered.
+///
+/// Two things, not one. The rendition's own bitrate with headroom on top, so
+/// a dip mid-playback does not stall the picture — and on top of that the
+/// bandwidth the warmer needs to have the NEXT reel ready, because the link
+/// is shared between the reel playing and the reels about to play.
+///
+/// The headroom multiplies only the playback part on purpose. A dip while
+/// streaming stops the video; a dip while reading ahead only makes a warm
+/// land a moment later.
+double affordFor(String label) {
+  final bitrate = NetworkQualityService.bitrateNeededFor[label]!;
+  final need = bitrate * NetworkQualityService.bitrateHeadroom +
+      NetworkQualityService.readAheadReserveBps;
+  return need / 1e6;
+}
+
 void main() {
   final net = NetworkQualityService.instance;
 
@@ -86,7 +103,6 @@ void main() {
     // ceiling does not quietly turn this into a test of nothing — which is
     // exactly how the encoder's own fixtures went stale three times.
     final need720 = NetworkQualityService.bitrateNeededFor['720p']! / 1e6;
-    final headroom = NetworkQualityService.bitrateHeadroom;
 
     sampleAt(need720 * 1.05);
     expect(net.affordableLabel, '480p',
@@ -94,7 +110,7 @@ void main() {
             'that is a stall waiting to happen');
 
     net.debugClearThroughput();
-    sampleAt(need720 * headroom * 1.1);
+    sampleAt(affordFor('720p') * 1.1);
     expect(net.affordableLabel, '720p',
         reason: 'a link comfortably above the file was refused it');
   });
@@ -147,9 +163,13 @@ void main() {
   });
 
   test('a middling link gets the file that plays, not the sharp one', () {
-    // Comfortably above 720p, comfortably below 720p_hq. The measured phone
-    // that started all of this lived here.
-    sampleAt(4.0);
+    // Comfortably above what 720p costs, comfortably below 720p_hq. The
+    // measured phone that started all of this lived here.
+    //
+    // Derived rather than typed, because the bar moved once: a rendition now
+    // has to fit alongside the read-ahead the warmer needs, not just inside
+    // the link. See NetworkQualityService.readAheadReserveBps.
+    sampleAt(affordFor('720p') * 1.05);
     final variants = {'480p': 'small', '720p': 'mid', '720p_hq': 'sharp'};
     expect(net.pickVariantUrl(variants), 'mid',
         reason: 'a link that cannot sustain the sharp rung was given it '
