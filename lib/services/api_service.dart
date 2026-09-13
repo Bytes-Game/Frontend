@@ -103,6 +103,29 @@ class UpdateProfileResult {
   });
 }
 
+/// What the model noticed about a video, and what the creator already has.
+class TagSuggestions {
+  /// Offered: seen by the model, not already on the video, not already
+  /// turned down.
+  final List<String> suggested;
+
+  /// What the video carries now.
+  final List<String> yours;
+
+  const TagSuggestions({required this.suggested, required this.yours});
+
+  factory TagSuggestions.fromJson(Map<String, dynamic> j) => TagSuggestions(
+        suggested: _strings(j['suggested']),
+        yours: _strings(j['yours']),
+      );
+
+  bool get isEmpty => suggested.isEmpty;
+
+  static List<String> _strings(Object? v) => v is List
+      ? v.map((e) => e.toString()).where((e) => e.isNotEmpty).toList()
+      : const [];
+}
+
 /// The server looked at an upload and said no, with a reason.
 ///
 /// Separate from a null return, which means "could not reach the server, try
@@ -882,6 +905,56 @@ class ApiService {
       throw _refusalOr(res, 'Could not submit your response.');
     } on ApiRefused {
       rethrow;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// What the model noticed about a video, for the person who made it.
+  ///
+  /// GET /api/v1/challenges/{id}/tag-suggestions
+  ///
+  /// Every video is read, listened to and looked at after it is posted — see
+  /// the worker's understanding pass. All of that was for the machine; the
+  /// creator never saw any of it. This is the same information, offered back.
+  ///
+  /// Creator only, enforced on the server. Null means "nothing to show" for
+  /// every reason at once — not yours, not analysed yet, or the request did
+  /// not get through — because none of them is worth interrupting a feed for.
+  static Future<TagSuggestions?> getTagSuggestions(String challengeId) async {
+    try {
+      final res = await _authHttp.get(
+        Uri.parse('$_base/api/v1/challenges/$challengeId/tag-suggestions'),
+      );
+      if (res.statusCode != 200) return null;
+      return TagSuggestions.fromJson(
+          json.decode(res.body) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Record which suggestions the creator kept and which they turned down.
+  ///
+  /// POST /api/v1/challenges/{id}/tag-suggestions
+  ///
+  /// Both in one call, because they are one gesture: the creator looked at
+  /// what was offered and sorted it. Returns the new state, so the caller
+  /// does not have to guess what the server decided.
+  static Future<TagSuggestions?> decideTagSuggestions(
+    String challengeId, {
+    List<String> add = const [],
+    List<String> dismiss = const [],
+  }) async {
+    try {
+      final res = await _authHttp.post(
+        Uri.parse('$_base/api/v1/challenges/$challengeId/tag-suggestions'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'add': add, 'dismiss': dismiss}),
+      );
+      if (res.statusCode != 200) return null;
+      return TagSuggestions.fromJson(
+          json.decode(res.body) as Map<String, dynamic>);
     } catch (_) {
       return null;
     }
