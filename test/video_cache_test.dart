@@ -1050,6 +1050,13 @@ void _capTests() {
       LocalMediaServer.instance.debugReset();
     });
 
+    // Named after a real rendition, because how much of a file is enough to
+    // start playing now depends on its bitrate, and the worker names each
+    // rendition after its label. A URL the app cannot place is assumed to be
+    // the most expensive rung there is — see the test below.
+    const earlyUrl = 'https://cdn/early/480p.mp4';
+    const lateUrl = 'https://cdn/moovend/480p.mp4';
+
     test('a reel is playable once the head is down, not the whole slice',
         () async {
       await LocalMediaServer.instance.start();
@@ -1059,7 +1066,8 @@ void _capTests() {
       final stalled = Completer<void>();
       addTearDown(() { if (!stalled.isCompleted) stalled.complete(); });
       ApiService.useClient(MockClient.streaming((req, _) async {
-        final head = headFirstBytes(VideoCacheService.prefixReadyBytes + 4096);
+        final head = headFirstBytes(
+            VideoCacheService.prefixReadyBytesFor(earlyUrl) + 4096);
         // Deliver the head, then hang. The only way to pass is to open on
         // what has already arrived.
         Stream<List<int>> body() async* {
@@ -1077,12 +1085,11 @@ void _capTests() {
         );
       }));
 
-      VideoCacheService.instance.warm(['https://cdn/early.mp4']);
+      VideoCacheService.instance.warm([earlyUrl]);
 
       expect(
-          await eventually(() =>
-              LocalMediaServer.instance.localUrlFor('https://cdn/early.mp4') !=
-              null),
+          await eventually(
+              () => LocalMediaServer.instance.localUrlFor(earlyUrl) != null),
           isTrue,
           reason: 'the head had arrived and the reel was still not playable. '
               'That is the fast-scroll stall: a warm that is most of the way '
@@ -1098,7 +1105,8 @@ void _capTests() {
       final stalled = Completer<void>();
       addTearDown(() { if (!stalled.isCompleted) stalled.complete(); });
       ApiService.useClient(MockClient.streaming((req, _) async {
-        final head = indexAtEndBytes(VideoCacheService.prefixReadyBytes + 4096);
+        final head = indexAtEndBytes(
+            VideoCacheService.prefixReadyBytesFor(lateUrl) + 4096);
         Stream<List<int>> body() async* {
           yield head;
           await stalled.future;
@@ -1114,24 +1122,87 @@ void _capTests() {
         );
       }));
 
-      VideoCacheService.instance.warm(['https://cdn/moovend.mp4']);
+      VideoCacheService.instance.warm([lateUrl]);
       await Future<void>.delayed(const Duration(milliseconds: 400));
 
-      expect(LocalMediaServer.instance.localUrlFor('https://cdn/moovend.mp4'),
+      expect(LocalMediaServer.instance.localUrlFor(lateUrl),
           isNull,
           reason: 'a reel with its index at the end was opened on its head '
               'alone. The player cannot decode that — it would open and '
               'immediately stall, which is worse than opening later.');
     });
 
-    test('the early-open threshold is a fraction of the full slice', () {
-      // If these ever meet, opening early stops meaning anything.
-      expect(VideoCacheService.prefixReadyBytes,
-          lessThan(VideoCacheService.prefixBytes),
-          reason: 'the early-open point is not earlier than the full slice');
-      expect(VideoCacheService.prefixReadyBytes, greaterThanOrEqualTo(128 * 1024),
+    test('the early-open point is measured in seconds of video', () {
+      // The bug this replaced: a flat quarter-megabyte is 1.29s of 480p and
+      // 0.68s of 720p_hq. The player opened on under a second at the rungs
+      // most people are served, ran dry, and sat there — a device log showed
+      // render intervals with a median of 131ms against 33ms, and Drop: 0
+      // throughout. It was not dropping frames; it had none to render.
+      // An absolute floor, deliberately NOT written in terms of
+      // prefixReadySeconds. Comparing the constant against itself passes
+      // however low somebody sets it, which is the one mistake this test
+      // exists to catch. One second is the line the measured failure sat
+      // under: 720p opened on 0.77s and 720p_hq on 0.68s.
+      const mustHoldSeconds = 1.0;
+      for (final label in NetworkQualityService.bitrateNeededFor.keys) {
+        final url = 'https://cdn/x/$label.mp4';
+        final bytes = VideoCacheService.prefixReadyBytesFor(url);
+        final bps = NetworkQualityService.bitrateNeededFor[label]!;
+        final seconds = bytes * 8 / bps;
+        expect(
+          seconds,
+          greaterThanOrEqualTo(mustHoldSeconds),
+          reason: '$label opens on ${seconds.toStringAsFixed(2)}s of video. '
+              'Under a second is what the stall was: the player starts, runs '
+              'dry before the next bytes arrive, and sits there.',
+        );
+      }
+      expect(VideoCacheService.prefixReadySeconds,
+          greaterThanOrEqualTo(1.5),
+          reason: 'the target itself has been lowered to the point where the '
+              'floor is doing all the work and the bitrate no longer matters');
+    });
+
+    test('the early-open check actually uses the per-file threshold', () {
+      // prefixReadyBytesFor can be perfect and change nothing if the check
+      // still compares against the flat constant. That leaves every test
+      // above green and the stall exactly where it was.
+      final src =
+          File('lib/services/video_cache_service.dart').readAsStringSync();
+      expect(src.contains('d.written >= prefixReadyBytesFor(d.url)'), isTrue,
+          reason: 'the reel is still opened on a flat byte count, so the '
+              'threshold does not vary with what is being played');
+    });
+
+    test('and never waits for more than the slice being fetched', () {
+      for (final label in NetworkQualityService.bitrateNeededFor.keys) {
+        expect(
+          VideoCacheService.prefixReadyBytesFor('https://cdn/x/$label.mp4'),
+          lessThanOrEqualTo(VideoCacheService.prefixBytes),
+          reason: '$label waits for more than the warm will ever fetch, so '
+              'it would never open early at all',
+        );
+      }
+    });
+
+    test('a file it cannot place assumes the worst', () {
+      // A raw upload could be any bitrate. Guessing low means opening too
+      // early and stalling, which is the thing being fixed.
+      final unknown = VideoCacheService.prefixReadyBytesFor('https://cdn/x/raw.mp4');
+      final cheapest = VideoCacheService.prefixReadyBytesFor('https://cdn/x/480p.mp4');
+      expect(unknown, greaterThanOrEqualTo(cheapest),
+          reason: 'an unrecognised file is treated as cheaper than the '
+              'cheapest rung we produce');
+    });
+
+    test('the floor is still enough to decode a frame from', () {
+      expect(VideoCacheService.prefixReadyFloorBytes,
+          greaterThanOrEqualTo(128 * 1024),
           reason: 'too little to decode a frame from; the reel would open and '
               'stall, which looks worse than opening a moment later');
+      expect(VideoCacheService.prefixReadyFloorBytes,
+          lessThan(VideoCacheService.prefixBytes),
+          reason: 'the early-open point is not earlier than the full slice');
     });
   });
 }

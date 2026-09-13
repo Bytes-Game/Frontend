@@ -362,6 +362,31 @@ class NetworkQualityService {
   ///
   /// The boundaries match the server's ladder (cmd/hls-worker/progressive.go)
   /// — the smallest rung whose picture is not smaller than this one.
+  /// The bitrate to expect from a variant URL, or null if it is not one of
+  /// ours.
+  ///
+  /// The worker names each rendition after its label — 480p.mp4, 720p.mp4,
+  /// 720p_hq.mp4 — and that is already what videoVariants is keyed by, so the
+  /// name is a claim about the bitrate the same way the label is. This reads
+  /// it back for the one caller that has a URL and no label: the cache,
+  /// deciding how much of a file is enough to start playing.
+  ///
+  /// Null for a raw upload or anything else unrecognised. The caller decides
+  /// what to assume, and should assume the worst — a file whose bitrate we do
+  /// not know could be anything, and guessing low means starting too early
+  /// and stalling.
+  static int? bitrateForVariantUrl(String url) {
+    if (url.isEmpty) return null;
+    var path = url;
+    final q = path.indexOf('?');
+    if (q >= 0) path = path.substring(0, q);
+    final slash = path.lastIndexOf('/');
+    var name = slash >= 0 ? path.substring(slash + 1) : path;
+    if (!name.endsWith('.mp4')) return null;
+    name = name.substring(0, name.length - 4);
+    return bitrateNeededFor[name];
+  }
+
   static String labelForLongSide(int longSide) {
     if (longSide <= 0) return '720p'; // unmeasurable: the old default
     if (longSide <= 854) return '480p';

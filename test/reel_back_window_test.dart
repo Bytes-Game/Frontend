@@ -97,6 +97,8 @@ void main() {
     });
   });
 
+  group('warming the reel on screen', _currentReelWarming);
+
   group('the position is reset with the list, not separately', () {
     // The bound above makes the crash impossible. This is about the bug
     // that produced the bad number in the first place, and it is a
@@ -141,5 +143,53 @@ void main() {
         reason: 'the position is reset inside a hasClients branch again',
       );
     });
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// THE REEL ON SCREEN IS WARMED TOO
+// ════════════════════════════════════════════════════════════════════════════
+//
+// The warm window used to start at currentIndex + 1, on the reasoning that
+// the reel being watched is already open and needs nothing. True once it is
+// playing; wrong at the moment that matters most.
+//
+// The FIRST reel of a feed has nobody ahead of it, so nothing ever warmed it
+// and it opened straight against the network every time. Worst on a seeded
+// open — tapping a video on a profile hands the feed that one reel and shows
+// it immediately — which is where "even my own upload sticks at the start"
+// came from.
+
+void _currentReelWarming() {
+  final src = File('lib/widgets/smart_reels_feed.dart').readAsStringSync();
+  final body = src.substring(src.indexOf('void _prefetchUpcomingVideos()'));
+  final upTo = body.substring(0, body.indexOf('VideoPlayerService.instance.prefetch'));
+
+  test('the reel being watched is in the warm window', () {
+    expect(
+      upTo.contains('upcoming.insert(0, current.videoUrl)'),
+      isTrue,
+      reason: 'the window still starts after the current reel, so the first '
+          'reel of every feed — and the whole of a seeded open — races the '
+          'origin from byte zero with nothing warmed',
+    );
+  });
+
+  test('and it goes first, ahead of the ones after it', () {
+    // Position matters: only a few downloads run at once, and the reel on
+    // screen is the one being watched right now. Behind the next reel is
+    // still behind.
+    final atCurrent = upTo.indexOf('upcoming.insert(0, current.videoUrl)');
+    final atOpponent = upTo.indexOf('current.opponentVideoUrl);');
+    expect(atCurrent, greaterThan(-1));
+    expect(atOpponent, greaterThan(atCurrent),
+        reason: 'the current reel is queued behind its own opponent');
+  });
+
+  test('the opponent still sits just behind it', () {
+    // A flip is one gesture away with no swipe to warn us, so the opponent
+    // stays near the front — but never ahead of the video actually playing.
+    expect(upTo.contains('upcoming.insert(upcoming.isEmpty ? 0 : 1'), isTrue,
+        reason: "the current reel's opponent lost its place near the front");
   });
 }
