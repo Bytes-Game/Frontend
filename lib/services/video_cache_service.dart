@@ -106,9 +106,10 @@ class VideoCacheService {
   /// two other budgets are denominated in, and both were written down
   /// against 768 KB:
   ///
-  ///   * [prefetchDepth] warms up to TEN reels ahead on wifi. Its comment
-  ///     justifies that depth by "prefix mode pulls ~0.75 MB per reel". At
-  ///     2 MB the read-ahead budget went from 7.5 MB to 20 MB.
+  ///   * [prefetchDepth] divides BY this to work out how many reels the
+  ///     link can finish between swipes. Doubling it halves the window it
+  ///     computes, and at the time this was tried the depth was a flat ten
+  ///     on wifi, so the read-ahead budget went from 7.5 MB to 20 MB.
   ///   * [_downloadSlots] allowed extra parallel warms because "each warm is
   ///     a fixed small slice". At 2 MB they are not small.
   ///
@@ -352,18 +353,80 @@ class VideoCacheService {
     }
   }
 
-  /// How many reels ahead to warm, given the current connection. Wifi
-  /// gets real depth (this is the whole point — many ready reels); on
-  /// cellular we stay shallow because every warmed reel the user never
-  /// reaches is data spent on nothing.
+  /// The most reels ahead we will ever warm, whatever the link measures.
+  ///
+  /// This is the depth the app already used on wifi, kept as a ceiling so
+  /// the measured window can only ever come out the same or SHALLOWER than
+  /// what shipped before it existed — never deeper. Whether a very fast
+  /// link would benefit from more than ten is a separate question and is
+  /// not answered here.
+  static const int maxPrefetchDepth = 10;
+
+  /// Fewest reels ahead we will warm, even on a link that cannot afford it.
+  ///
+  /// The next reel is one gesture away at all times, so it is the last
+  /// thing to give up on. If the link cannot finish even that within a
+  /// dwell, warming it part-way is still worth more than not starting —
+  /// see [prefixReadyBytes], where a part-finished warm is playable.
+  static const int minPrefetchDepth = 1;
+
+  /// How many reels ahead to warm.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// WHY THIS IS MEASURED AND NOT READ OFF THE CONNECTION TYPE
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// It used to be a table against [NetworkQuality], which is the kind of
+  /// connection — wifi, LTE, 3G. Wifi meant ten reels ahead.
+  ///
+  /// Wifi is not a speed. The device logs that prompted this were a wifi
+  /// link measuring 2.1 to 4.5 Mbps, and the app read "wifi" and set out to
+  /// warm ten reels ahead of the thumb. It could not. Of 175 warms started,
+  /// 87 finished and 88 were thrown away when the window moved past them —
+  /// half the read-ahead traffic bought nothing, while competing for the
+  /// link with the reel actually on screen.
+  ///
+  /// This is the same mistake [NetworkQualityService.affordableLabel] was
+  /// written to fix for picture quality, left standing for read-ahead. That
+  /// file says so in as many words: "the connection TYPE still decides how
+  /// much to read ahead; the measured speed decides which quality is safe
+  /// to play." Both now come off the measurement.
+  ///
+  /// The sum is the obvious one, out of numbers that already exist:
+  ///
+  ///   one warm costs          [prefixBytes] × 8 bits
+  ///   a swipe gives us        [NetworkQualityService.typicalDwellSeconds]
+  ///   read-ahead can spend    [NetworkQualityService.spareBpsForReadAhead]
+  ///
+  ///   depth = spare × dwell ÷ (prefixBytes × 8)
+  ///
+  /// In words: how many reels the link can actually FINISH between one
+  /// swipe and the next. Starting more than that is not depth, it is a
+  /// queue of downloads that get cancelled.
+  ///
+  /// Prefix mode only. A whole-file warm is not [prefixBytes], it is the
+  /// entire reel, so the sum above does not describe it — whole-file mode
+  /// keeps the old table. So does the first moment after launch, before
+  /// there are enough samples to have measured anything.
   int get prefetchDepth {
-    // Prefix mode pulls ~0.75 MB per reel instead of ~9 MB, so the same
-    // data budget buys a much deeper window — which is the entire reason
-    // for the proxy. Whole-file mode keeps the conservative numbers.
+    if (_prefixMode) {
+      final spare = NetworkQualityService.instance.spareBpsForReadAhead;
+      if (spare != null) {
+        final perDwell =
+            spare * NetworkQualityService.typicalDwellSeconds / (prefixBytes * 8);
+        final depth = perDwell.round();
+        if (depth < minPrefetchDepth) return minPrefetchDepth;
+        if (depth > maxPrefetchDepth) return maxPrefetchDepth;
+        return depth;
+      }
+    }
+    // Nothing measured yet, or whole-file mode. Fall back to the kind of
+    // connection. Prefix mode pulls ~0.75 MB per reel instead of ~9 MB, so
+    // the same data budget buys a deeper window.
     final deep = _prefixMode;
     switch (NetworkQualityService.instance.current) {
       case NetworkQuality.high:
-        return deep ? 10 : 6;
+        return deep ? maxPrefetchDepth : 6;
       case NetworkQuality.medium:
       case NetworkQuality.unknown:
         return deep ? 6 : 3;
