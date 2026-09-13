@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:video_player/video_player.dart';
 import 'package:provider/provider.dart';
+import 'package:myapp/widgets/tag_suggestion_strip.dart';
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/challenge_detail_page.dart';
@@ -3586,6 +3587,15 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                   style: const TextStyle(color: Colors.white, fontSize: 14),
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
+                ),
+              // What the model noticed, offered back to the person who made
+              // the video. Renders nothing at all unless there is something
+              // to offer, so a reel with no suggestions is unchanged — see
+              // TagSuggestionStrip.
+              if (widget.isOwner && item.id.isNotEmpty)
+                TagSuggestionStrip(
+                  key: ValueKey('tags-${item.id}'),
+                  challengeId: item.id,
                 ),
               if (isChallenge) ...[
                 const SizedBox(height: 10),
