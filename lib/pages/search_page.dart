@@ -931,6 +931,10 @@ class _PreviewCoordinator extends ChangeNotifier {
   /// preview playing right now does not get.
   static const int _warmAhead = 3;
 
+  /// The last list handed to the cache, so an unchanged one is not handed
+  /// over again. See [_warmVisible].
+  List<String> _lastWarmed = const [];
+
   /// Ask the cache for the opening bytes of the previews about to play.
   ///
   /// Without this the grid was starting every preview against the network
@@ -939,6 +943,26 @@ class _PreviewCoordinator extends ChangeNotifier {
   ///
   /// Ordered by how visible each tile is, so the one about to take its turn
   /// is first in the queue rather than behind two the user is scrolling past.
+  ///
+  /// ════════════════════════════════════════════════════════════════════════
+  /// AND ONLY WHEN THE LIST ACTUALLY CHANGES
+  /// ════════════════════════════════════════════════════════════════════════
+  ///
+  /// [report] fires continuously while a finger is moving — every tile, every
+  /// frame. warm() cancels whatever has dropped out of the list it is given,
+  /// so calling it on every one of those reports cancels and restarts the
+  /// same downloads over and over. Measured on device, before and after this
+  /// guard was missing:
+  ///
+  ///	before the grid warmed at all   80% of starts warm   1 of 32 cancelled
+  ///	warming on every report         50% of starts warm  17 of 33 cancelled
+  ///
+  /// Warming made it WORSE than not warming. The fetches never got far
+  /// enough to be worth anything, and they took the bandwidth from the
+  /// preview that was playing.
+  ///
+  /// Visibility changes constantly; the ranked list of three does not. So the
+  /// list is the trigger, not the report.
   void _warmVisible() {
     final ranked = _fractions.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
@@ -949,7 +973,18 @@ class _PreviewCoordinator extends ChangeNotifier {
       urls.add(u);
       if (urls.length >= _warmAhead) break;
     }
-    if (urls.isNotEmpty) VideoCacheService.instance.warm(urls);
+    if (urls.isEmpty) return;
+    if (_sameList(urls, _lastWarmed)) return;
+    _lastWarmed = urls;
+    VideoCacheService.instance.warm(urls);
+  }
+
+  static bool _sameList(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   /// Called by a tile when its video ends. If it's still active, advance.
@@ -1191,10 +1226,25 @@ class _PreviewableTileState extends State<_PreviewableTile> {
   /// So [_previewUrl] is built FROM this rather than repeating the choice.
   /// Two copies of "which rendition" could disagree, and then the tile would
   /// warm one file and play another.
+  String? _origin;
+
   String _originUrl() {
+    // Worked out once per tile. This is called from the visibility report,
+    // which fires every frame a finger is moving, and the picker is not
+    // free — it reads device capabilities and walks a preference order, and
+    // it counts every answer for the diagnostics. On one scroll through the
+    // grid it was called four hundred times and gave the same answer each
+    // time.
+    //
+    // A tile is short-lived, so a connection that changes mid-scroll is
+    // picked up by the tiles built after it.
+    final cached = _origin;
+    if (cached != null) return cached;
     final c = widget.challenge;
     final picked = NetworkQualityService.instance.pickVariantUrl(c.videoVariants);
-    return (picked != null && picked.isNotEmpty) ? picked : c.videoUrl;
+    final chosen = (picked != null && picked.isNotEmpty) ? picked : c.videoUrl;
+    _origin = chosen;
+    return chosen;
   }
 
   Future<void> _ensurePlayerAndPlay() async {
