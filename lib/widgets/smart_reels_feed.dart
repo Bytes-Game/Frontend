@@ -1390,6 +1390,28 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     final current = _currentIndex >= 0 && _currentIndex < _items.length
         ? _items[_currentIndex]
         : null;
+
+    // THE REEL ON SCREEN GOES FIRST.
+    //
+    // The window used to start at currentIndex + 1, on the reasoning that
+    // the reel being watched is already open and needs nothing. That holds
+    // once it is playing and is wrong at the moment that matters most: the
+    // FIRST reel of a feed has nobody ahead of it, so nothing ever warmed
+    // it, and it opened straight against the network every single time.
+    //
+    // Worst on a seeded open — tapping a video on a profile hands the feed
+    // that one reel and shows it immediately — which is exactly where "even
+    // my own upload sticks at the start" came from.
+    //
+    // Asking for it costs nothing when it is already warm (the cache skips
+    // what it holds) and nothing when it is mid-flight (it skips what is
+    // already downloading). What it buys is the reel going through the proxy
+    // with a ready-threshold in front of it, instead of the player racing
+    // the origin from byte zero.
+    if (current is _ReelItem && current.videoUrl.isNotEmpty) {
+      upcoming.remove(current.videoUrl);
+      upcoming.insert(0, current.videoUrl);
+    }
     if (current is _ReelItem && current.opponentVideoUrl.isNotEmpty) {
       upcoming.remove(current.opponentVideoUrl);
       upcoming.insert(upcoming.isEmpty ? 0 : 1, current.opponentVideoUrl);

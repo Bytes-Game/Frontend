@@ -161,6 +161,68 @@ class VideoCacheService {
   /// is for.
   static const int prefixReadyBytes = 256 * 1024;
 
+  /// How many SECONDS of video the player should hold before it starts.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// WHY THE BYTE COUNT ABOVE WAS NOT ENOUGH ON ITS OWN
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// [prefixReadyBytes] is a quarter of a megabyte, chosen as "enough media
+  /// to decode a frame, with room to spare". A quarter of a megabyte is not
+  /// an amount of video, though — it is an amount of video DIVIDED BY THE
+  /// BITRATE, and the app serves three:
+  ///
+  ///   480p     1.6 Mbps    256 KB = 1.29s of video
+  ///   720p     2.7 Mbps    256 KB = 0.77s
+  ///   720p_hq  3.1 Mbps    256 KB = 0.68s
+  ///
+  /// Under a second at the rungs most people are served. The player opens on
+  /// that, and the rest of the slice — sharing the link with four other reels
+  /// being warmed — is several seconds away:
+  ///
+  ///   link 2.1 Mbps, reel's share ~0.4 Mbps -> remaining 512 KB in 10.0s
+  ///   link 4.5 Mbps, reel's share ~0.9 Mbps -> remaining 512 KB in  4.7s
+  ///
+  /// So it played for a moment, ran dry, and sat there. A device log caught
+  /// it exactly: render intervals with a median of 131ms against the 33ms of
+  /// a 30fps video, the worst windows reading `Render: 1` over five seconds —
+  /// and `Drop: 0` throughout. Nothing was being dropped. The decoder was
+  /// rendering every frame it was given and being given almost none.
+  ///
+  /// The comment on [prefixReadyBytes] predicted this failure in words — "too
+  /// little and the player opens, runs out almost at once and stalls anyway,
+  /// which looks worse than opening a moment later" — and then sized it in
+  /// bytes, which cannot express it.
+  ///
+  /// Two seconds is what a short-video app opens on: long enough that the
+  /// download has a runway to get ahead, short enough that the wait is not
+  /// what anybody notices. It is bounded by [prefixBytes] at the top, so a
+  /// high rung simply waits for the whole slice rather than asking for more
+  /// than is being fetched.
+  static const double prefixReadySeconds = 2.0;
+
+  /// The least the player will ever be asked to wait for, whatever the
+  /// arithmetic says. A file whose bitrate we cannot work out still has to
+  /// open on something, and this is the old fixed threshold — the behaviour
+  /// everything had before.
+  static const int prefixReadyFloorBytes = prefixReadyBytes;
+
+  /// How much of [url] is enough to start playing it.
+  ///
+  /// Answered in seconds of video and converted to bytes, rather than the
+  /// other way round. An unrecognised file — a raw upload, someone else's
+  /// URL — is assumed to be the most expensive rung there is: guessing low
+  /// means opening too early and stalling, which is the thing being fixed.
+  static int prefixReadyBytesFor(String url) {
+    final bps = NetworkQualityService.bitrateForVariantUrl(url) ??
+        NetworkQualityService.bitrateNeededFor.values
+            .reduce((a, b) => a > b ? a : b);
+    final want = (bps * prefixReadySeconds / 8).round();
+    if (want < prefixReadyFloorBytes) return prefixReadyFloorBytes;
+    if (want > prefixBytes) return prefixBytes;
+    return want;
+  }
+
   /// How much of the END of a moov-at-end file to warm alongside its head.
   ///
   /// Those files keep their index (`moov`) after the media, so a player
@@ -621,7 +683,7 @@ class VideoCacheService {
           // origin — see LocalMediaServer's range handling, which already
           // has to cope with a prefix evicted mid-playback.
           if (!openedEarly &&
-              d.written >= prefixReadyBytes &&
+              d.written >= prefixReadyBytesFor(d.url) &&
               probe.length >= mp4LayoutProbeBytes &&
               readMp4Layout(probe.toBytes()) != Mp4Layout.moovAtEnd) {
             openedEarly = true;
