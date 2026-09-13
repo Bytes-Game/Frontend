@@ -452,8 +452,15 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // long the user watched reel 0.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _playCurrent();
+      // Warm FIRST, play second. The window now includes the reel about to
+      // be shown, and asking for it after opening the player is asking too
+      // late — the player has already gone to the network by then.
+      //
+      // This is the whole of a seeded open: tapping a video on a profile
+      // hands the feed one reel and shows it immediately, so there is no
+      // earlier moment at which anything could have warmed it.
       _prefetchUpcomingVideos();
+      _playCurrent(waitForWarm: true);
     });
     // Cut the cold-connection tax for the media origin: the app can't
     // know the R2/CDN hostname until real video URLs arrive, so the
@@ -787,8 +794,8 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       _currentItemStart = DateTime.now();
     });
 
-    _playCurrent();
     _schedulePrefetch();
+    _playCurrent();
     _maybePrefetchNextPage();
   }
 
@@ -909,7 +916,22 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     _currentItemStart = null;
   }
 
-  Future<void> _playCurrent() async {
+  /// How long a reel that is not yet warm may be held back before it is
+  /// opened against the network anyway.
+  ///
+  /// Only ever spent on a reel somebody deliberately opened — a tap from a
+  /// profile, the first reel of a feed — never on a swipe. A swipe is a
+  /// gesture with a rhythm, and pausing it to buy a smoother start trades a
+  /// fault the viewer notices for one they notice more.
+  ///
+  /// Short on purpose. It exists to catch a warm that is nearly there, not
+  /// to wait for one that has barely begun: at the rates measured on device
+  /// a reel's opening seconds take a few seconds to fetch, so anything long
+  /// enough to guarantee a warm start would be long enough to feel broken.
+  /// Past this it opens cold, which is exactly what it did before.
+  static const Duration _coldOpenGrace = Duration(milliseconds: 400);
+
+  Future<void> _playCurrent({bool waitForWarm = false}) async {
     if (_currentIndex < 0 || _currentIndex >= _items.length) return;
     final index = _currentIndex;
     final item = _items[_currentIndex];
@@ -925,6 +947,22 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       VideoPlayerService.instance.pauseAll();
       return;
     }
+    // Give a deliberately-opened reel a moment to become warm.
+    //
+    // VideoCacheService.awaitReady has existed for a while and nothing
+    // called it, so every reel opened against whatever happened to be on
+    // disk at that instant — which on a seeded open is nothing at all.
+    // It returns immediately when the reel is already warm, so the common
+    // case costs nothing.
+    //
+    // The index is re-checked afterwards: 400ms is long enough for somebody
+    // to swipe, and opening a player for a reel they have left is worse than
+    // the cold open this is avoiding.
+    if (waitForWarm && !VideoCacheService.instance.isReady(url)) {
+      await VideoCacheService.instance.awaitReady(url, _coldOpenGrace);
+      if (!mounted || _currentIndex != index) return;
+    }
+
     // The one place a player is opened. Everything else — every tile the
     // pager builds on the way past — takes one that already exists or
     // renders its poster, which is what stops a fling costing a decoder
