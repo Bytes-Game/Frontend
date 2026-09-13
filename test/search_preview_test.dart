@@ -103,6 +103,8 @@ void main() {
     });
   });
 
+  group('warming does not fight itself', _churn);
+
   group('the previews about to play are fetched first', () {
     test('visible tiles are warmed', () {
       final body = bodyOf(src, 'void _warmVisible()');
@@ -141,5 +143,52 @@ void main() {
           reason: 'warming only when a tile activates is warming a video at '
               'the moment it needs to play, which is too late');
     });
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// WARMING MADE IT WORSE BEFORE IT MADE IT BETTER
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Measured on device across three builds:
+//
+//   no warming on the grid at all      80% of starts warm    1 of 32 cancelled
+//   warming on every visibility report 50% of starts warm   17 of 33 cancelled
+//
+// report() fires every frame a finger is moving. warm() cancels whatever has
+// dropped out of the list it is handed, so calling it on each report cancels
+// and restarts the same downloads over and over — they never got far enough
+// to be worth anything, and they took the bandwidth from the preview that was
+// actually playing.
+
+void _churn() {
+  final src = File('lib/pages/search_page.dart').readAsStringSync();
+
+  test('an unchanged list is not handed over again', () {
+    final body = bodyOf(src, 'void _warmVisible()');
+    expect(body, contains('_sameList(urls, _lastWarmed)'),
+        reason: 'every visibility frame re-warms, which cancels the '
+            'downloads it started on the frame before');
+    expect(body, contains('_lastWarmed = urls'),
+        reason: 'the comparison never updates, so it either always fires '
+            'or never does');
+  });
+
+  test('the rendition is picked once per tile, not once per frame', () {
+    final body = bodyOf(src, 'String _originUrl()');
+    expect(body, contains('final cached = _origin;'),
+        reason: 'the picker runs on every visibility report — four hundred '
+            'times in one scroll, for the same answer');
+    expect(body, contains('_origin = chosen;'));
+  });
+
+  test('the list comparison is by order too', () {
+    // Order is the whole point: the tile about to take its turn has to be
+    // first in the queue. A comparison that ignored order would skip a
+    // re-warm that reprioritised.
+    final body = bodyOf(src, 'static bool _sameList(');
+    expect(body, contains('a[i] != b[i]'),
+        reason: 'comparing as sets would treat a reordered list as '
+            'unchanged and leave the wrong preview at the front');
   });
 }
