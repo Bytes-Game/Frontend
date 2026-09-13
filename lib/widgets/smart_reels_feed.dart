@@ -1368,6 +1368,55 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     return span <= _burstWindow;
   }
 
+  /// How many reels ahead to fetch cover images for.
+  ///
+  /// Three, and not the video window's depth. See the note in
+  /// [_prefetchUpcomingVideos]: a cover is 35 KB at the median and 109 KB at
+  /// the worst, so a deep window spends a video prefix on pictures.
+  static const int _posterLookahead = 3;
+
+  /// Pull the cover images for the next few reels into Flutter's image
+  /// cache, so the poster is already there when the reel builds.
+  ///
+  /// Nothing here can fail a swipe: every await is guarded and every error
+  /// is swallowed, because the fallback is exactly the behaviour that
+  /// existed before — the reel shows black and the video paints over it.
+  void _precacheUpcomingPosters() {
+    if (!mounted) return;
+    final wanted = <String>[];
+
+    void add(String url) {
+      if (url.isNotEmpty && !wanted.contains(url)) wanted.add(url);
+    }
+
+    // The reel on screen first, for the same reason the video window starts
+    // there: on a seeded open — tapping a video on a profile — nothing came
+    // before it, so nothing else will ever have asked for its cover.
+    final current = _currentIndex >= 0 && _currentIndex < _items.length
+        ? _items[_currentIndex]
+        : null;
+    if (current is _ReelItem) {
+      add(current.thumbnailUrl);
+      // A battle's other side is one tap away with no swipe to warn us.
+      add(current.opponentThumbnailUrl);
+    }
+
+    for (
+      var i = _currentIndex + 1;
+      i < _items.length && i <= _currentIndex + _posterLookahead;
+      i++
+    ) {
+      final entry = _items[i];
+      if (entry is! _ReelItem) continue;
+      add(entry.thumbnailUrl);
+    }
+
+    for (final url in wanted) {
+      // ignore: discarded_futures
+      precacheImage(NetworkImage(url), context).catchError((Object _) {});
+    }
+  }
+
   void _prefetchUpcomingVideos() {
     _lastPrefetchAt = DateTime.now();
     final cfg = VideoPlayerService.instance.config;
@@ -1454,6 +1503,33 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       upcoming.remove(current.opponentVideoUrl);
       upcoming.insert(upcoming.isEmpty ? 0 : 1, current.opponentVideoUrl);
     }
+    // ════════════════════════════════════════════════════════════════════
+    // THE COVER IMAGE, BEFORE IT IS NEEDED
+    // ════════════════════════════════════════════════════════════════════
+    //
+    // This is the "black screen for a few milliseconds before every video".
+    //
+    // Every reel already draws its poster behind the player, so there is
+    // supposed to be a picture there the whole time the video is opening.
+    // There was not, because the poster is an Image.network and nothing
+    // asked for it until the reel BUILT — which is the same instant the
+    // video starts opening. So the viewer waited for a picture that was
+    // only requested when they arrived, and saw black until it landed.
+    //
+    // Warming the video and not its cover is warming the slow half and
+    // leaving the fast half to chance.
+    //
+    // Deliberately SHALLOWER than the video window. Posters are not free:
+    // measured across this feed they run 3 KB to 109 KB, median 35 KB. Ten
+    // of the larger ones is 662 KB — most of a video prefix — spent on
+    // pictures instead of on the video they sit in front of. Three is about
+    // 105 KB, an eighth of one prefix, for the swipes that actually happen.
+    //
+    // Fire-and-forget. A cover that fails to load is what the code did
+    // before this existed: the reel falls back to black and the video plays
+    // over it.
+    _precacheUpcomingPosters();
+
     // Also warm a small back-buffer. TikTok-style scrubbing is bi-
     // directional — users often flick back to the previous reel right
     // after committing to a new one. Without this leg, the previous
