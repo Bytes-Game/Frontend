@@ -103,6 +103,24 @@ class UpdateProfileResult {
   });
 }
 
+/// The server looked at an upload and said no, with a reason.
+///
+/// Separate from a null return, which means "could not reach the server, try
+/// again". A refusal is a decision — the video is too long, too short, a
+/// duplicate — and retrying it forever will never work. The reason is the
+/// server's own words and is meant to be shown to the person.
+///
+/// This exists because the upload pipeline turned every failure into "Could
+/// not save the challenge. Tap retry to try again." A person whose video is
+/// four minutes long would have tapped retry until they gave up, with the
+/// answer sitting in a response body nobody read.
+class ApiRefused implements Exception {
+  final String reason;
+  ApiRefused(this.reason);
+  @override
+  String toString() => reason;
+}
+
 /// Centralised HTTP client. Every REST call goes through here so the
 /// network layer is in one place (separation of concerns).
 ///
@@ -706,6 +724,12 @@ class ApiService {
     // and falls back to videoUrl. New flows ALWAYS send a map so the
     // adaptive player has alternatives.
     Map<String, String> videoVariants = const {},
+    // How long the video runs. The server refuses anything over
+    // [AppConstants.maxVideoDuration] and measures the file itself to be
+    // sure, so this is a courtesy that gets the refusal back before the
+    // server fetches anything. Zero means "not known" and is allowed
+    // through to that measurement.
+    Duration duration = Duration.zero,
   }) async {
     try {
       final res = await _authHttp.post(
@@ -720,6 +744,7 @@ class ApiService {
         body: json.encode({
           'creatorId': creatorId,
           'videoUrl': videoUrl,
+          'durationMs': duration.inMilliseconds,
           'videoVariants': videoVariants,
           'thumbnailUrl': thumbnailUrl,
           'prefix': prefix,
@@ -734,10 +759,25 @@ class ApiService {
       if (res.statusCode == 200 || res.statusCode == 201) {
         return ChallengeModel.fromJson(json.decode(res.body));
       }
-      return null;
+      throw _refusalOr(res, 'Could not save the challenge.');
+    } on ApiRefused {
+      rethrow;
     } catch (_) {
       return null;
     }
+  }
+
+  /// Turn a rejected response into something worth showing someone.
+  ///
+  /// Only for the 4xx range: those are decisions the server made and
+  /// explained. A 5xx or anything else is a fault, not a verdict, and stays
+  /// a plain retry.
+  static Object _refusalOr(http.Response res, String fallback) {
+    if (res.statusCode >= 400 && res.statusCode < 500) {
+      final body = res.body.trim();
+      return ApiRefused(body.isEmpty ? fallback : body);
+    }
+    return StateError('status ${res.statusCode}');
   }
 
   // ─── Challenge-creation autocomplete ────────────────────────────────
@@ -815,6 +855,13 @@ class ApiService {
     required String videoUrl,
     Map<String, String> videoVariants = const {},
     String thumbnailUrl = '',
+    // REQUIRED in practice, even though it has a default so older callers
+    // still compile. The server has always refused an answer shorter than
+    // two seconds, and this side has never sent a length — so every real
+    // answer arrived claiming zero and was turned away as "too short",
+    // with the reason thrown away by the catch below. Nobody could post a
+    // battle answer at all.
+    Duration duration = Duration.zero,
   }) async {
     try {
       final res = await _authHttp.post(
@@ -824,6 +871,7 @@ class ApiService {
           'challengeId': challengeId,
           'responderId': responderId,
           'videoUrl': videoUrl,
+          'durationMs': duration.inMilliseconds,
           if (videoVariants.isNotEmpty) 'videoVariants': videoVariants,
           'thumbnailUrl': thumbnailUrl,
         }),
@@ -831,7 +879,9 @@ class ApiService {
       if (res.statusCode == 200 || res.statusCode == 201) {
         return ChallengeResponseModel.fromJson(json.decode(res.body));
       }
-      return null;
+      throw _refusalOr(res, 'Could not submit your response.');
+    } on ApiRefused {
+      rethrow;
     } catch (_) {
       return null;
     }

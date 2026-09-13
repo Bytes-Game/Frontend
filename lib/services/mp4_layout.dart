@@ -103,3 +103,80 @@ String _boxType(Uint8List b, int at) =>
 /// is generous enough to survive an unusual amount of leading padding
 /// while staying small enough to hold in memory for every warming reel.
 const int mp4LayoutProbeBytes = 4096;
+
+/// Where the index ends — the first byte after `moov` — or null when the
+/// bytes given do not say.
+///
+/// ══════════════════════════════════════════════════════════════════════
+/// WHY THIS MATTERS, AND WHY IT IS NOT A CONSTANT
+/// ══════════════════════════════════════════════════════════════════════
+///
+/// [readMp4Layout] answers "is the index at the front?". That is not the
+/// whole question. A faststart file is only playable from its opening
+/// bytes once ALL of the index is in them, and how much that is depends
+/// entirely on how long the video runs.
+///
+/// `moov` holds a table with an entry per frame. It grows with the
+/// running time, and it grows fast:
+///
+///   10 seconds      ~12 KB
+///   30 seconds      ~35 KB
+///   3 minutes      ~195 KB
+///   10 minutes     ~653 KB
+///
+/// Those are measured off this app's own catalog, not estimated.
+///
+/// Everything warming-related was written against the first line of that
+/// table. The reel is handed to the player once a couple of seconds'
+/// worth of BYTES have landed — 375 KB at 480p — on the reasoning that a
+/// player needs "the header and enough media to decode a frame". For a
+/// ten-second clip whose header is 12 KB that is true. For a ten-minute
+/// one it is not: at 375 KB the player has 57% of an index and no media
+/// at all. It cannot decode anything, so it goes to the network for the
+/// rest of the header while the viewer looks at black — which is slower
+/// than never having warmed it, and was being counted as a cache hit.
+///
+/// Reading the real number costs nothing. `moov` declares its own size in
+/// its header, so the answer is in the first few dozen bytes of the file,
+/// long before the index itself has arrived.
+///
+/// Returns null when the opening bytes do not settle it — a short read, a
+/// file whose index is at the end, or anything not an MP4. Null means "no
+/// opinion", and callers must carry on as they did before this existed.
+int? mp4IndexEndsAt(Uint8List head) {
+  var offset = 0;
+  while (offset + _headerBytes <= head.length) {
+    final declared = _uint32(head, offset);
+    final type = _boxType(head, offset + 4);
+
+    final int size;
+    if (declared == 1) {
+      if (offset + 16 > head.length) return null;
+      // A 64-bit size whose high word is set is larger than any reel, and
+      // larger than an int can hold on the web. Not something to reason
+      // further about.
+      if (_uint32(head, offset + 8) != 0) return null;
+      size = _uint32(head, offset + 12);
+    } else if (declared == 0) {
+      // "Extends to the end of the file", so nothing follows it.
+      return null;
+    } else {
+      size = declared;
+    }
+
+    // A box cannot be smaller than its own header. One claiming to be
+    // would either loop forever or walk backwards.
+    if (size < _headerBytes) return null;
+
+    // The index ends where its box ends. This is reachable long before
+    // the index itself has been downloaded — the size is in the header.
+    if (type == 'moov') return offset + size;
+
+    // Media before the index: the file is moov-at-end and there is no
+    // index up here to wait for. Caller handles that shape separately.
+    if (type == 'mdat') return null;
+
+    offset += size;
+  }
+  return null;
+}

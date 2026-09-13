@@ -1167,11 +1167,18 @@ void _capTests() {
       // prefixReadyBytesFor can be perfect and change nothing if the check
       // still compares against the flat constant. That leaves every test
       // above green and the stall exactly where it was.
+      //
+      // It has to pass the index size too. Without it the threshold is
+      // "some bytes" rather than "the index, then some video", which is
+      // the whole bug on a long file.
       final src =
           File('lib/services/video_cache_service.dart').readAsStringSync();
-      expect(src.contains('d.written >= prefixReadyBytesFor(d.url)'), isTrue,
-          reason: 'the reel is still opened on a flat byte count, so the '
-              'threshold does not vary with what is being played');
+      expect(
+          src.contains('d.written >= '
+              'prefixReadyBytesFor(d.url, indexEndsAt: indexEndsAt)'),
+          isTrue,
+          reason: 'the reel is opened without asking where this file\'s '
+              'index ends, so the threshold is a flat byte count again');
     });
 
     test('and never waits for more than the slice being fetched', () {

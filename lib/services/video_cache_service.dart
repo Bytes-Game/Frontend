@@ -208,13 +208,17 @@ class VideoCacheService {
   /// everything had before.
   static const int prefixReadyFloorBytes = prefixReadyBytes;
 
-  /// How much of [url] is enough to start playing it.
+  /// How many bytes of actual VIDEO are worth waiting for before starting.
   ///
   /// Answered in seconds of video and converted to bytes, rather than the
   /// other way round. An unrecognised file — a raw upload, someone else's
   /// URL — is assumed to be the most expensive rung there is: guessing low
   /// means opening too early and stalling, which is the thing being fixed.
-  static int prefixReadyBytesFor(String url) {
+  ///
+  /// This is media only. It says nothing about the file's index, which
+  /// also has to be downloaded first and is not a fixed size — see
+  /// [prefixReadyBytesFor], which adds the two together.
+  static int mediaReadyBytesFor(String url) {
     final bps = NetworkQualityService.bitrateForVariantUrl(url) ??
         NetworkQualityService.bitrateNeededFor.values
             .reduce((a, b) => a > b ? a : b);
@@ -223,6 +227,62 @@ class VideoCacheService {
     if (want > prefixBytes) return prefixBytes;
     return want;
   }
+
+  /// How much of [url] is enough to start playing it: the file's index,
+  /// then [prefixReadySeconds] of video behind it.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// WHY THE INDEX HAS TO BE COUNTED SEPARATELY
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// This used to be [mediaReadyBytesFor] on its own — "two seconds of
+  /// video" — and it quietly assumed the index in front of that video was
+  /// small enough not to matter.
+  ///
+  /// It is small enough for a ten-second clip, where it is about 12 KB. It
+  /// is not for a long one. The index carries a row per frame, so it grows
+  /// with the running time: 195 KB at three minutes, 653 KB at ten. See
+  /// [mp4IndexEndsAt], where those are measured off this app's own catalog.
+  ///
+  /// What that did to a ten-minute upload in the feed: the threshold said
+  /// 375 KB, so the reel was handed to the player at 375 KB — 57% of an
+  /// index and not one byte of video. The player cannot decode from that.
+  /// It went to the network for the rest of the index while the viewer
+  /// looked at a black screen. Warming had made the reel SLOWER than not
+  /// warming it, and the reel was counted as a cache hit while doing it.
+  ///
+  /// [indexEndsAt] is where the index finishes, read out of the opening
+  /// bytes. Null means the file has not said — a short read, an index at
+  /// the end of the file, something that is not an MP4 — and then this
+  /// behaves exactly as it did before, because a guess in either direction
+  /// would be worse than the behaviour that was already there.
+  ///
+  /// Still capped at [prefixBytes]: this decides when to hand over what is
+  /// being fetched, not how much to fetch. A file whose index alone fills
+  /// the slice is refused earlier, by [prefixWorthWarming].
+  static int prefixReadyBytesFor(String url, {int? indexEndsAt}) {
+    final media = mediaReadyBytesFor(url);
+    if (indexEndsAt == null) return media;
+    final want = indexEndsAt + media;
+    if (want > prefixBytes) return prefixBytes;
+    return want;
+  }
+
+  /// Whether warming the opening slice of a file with this index can
+  /// actually make it start faster.
+  ///
+  /// It cannot if the index alone leaves no room for video. The player
+  /// would read the whole slice, still have nothing to decode, and go to
+  /// the network anyway — with the warm having competed for the link on
+  /// the way. Saying no is the honest answer, and it keeps the reel out of
+  /// the cache-hit count, which is the mistake [Mp4Layout.moovAtEnd] was
+  /// added to stop making.
+  ///
+  /// The line is [prefixReadyFloorBytes] of room left over: the smallest
+  /// amount of video the app will ever open on. Below that there is no
+  /// version of this that helps.
+  static bool prefixWorthWarming(int indexEndsAt) =>
+      indexEndsAt + prefixReadyFloorBytes <= prefixBytes;
 
   /// How much of the END of a moov-at-end file to warm alongside its head.
   ///
@@ -714,6 +774,10 @@ class VideoCacheService {
       // [mp4LayoutProbeBytes].
       final probe = BytesBuilder(copy: false);
       var openedEarly = false;
+      // Where this file's index ends, once the opening bytes have said.
+      // Null means they have not — see [prefixReadyBytesFor].
+      int? indexEndsAt;
+      var indexRead = false;
       d.subscription = response.stream.listen(
         (chunk) {
           d.written += chunk.length;
@@ -745,8 +809,29 @@ class VideoCacheService {
           // disk, length we claimed) and takes everything past that from
           // origin — see LocalMediaServer's range handling, which already
           // has to cope with a prefix evicted mid-playback.
+          // The file's index has to be counted before "enough to start"
+          // means anything — it sits in front of the video and it is not a
+          // fixed size. Read once, off the opening bytes, and remembered:
+          // the answer is in the first few dozen bytes, so it is settled
+          // long before the index itself has finished arriving.
+          if (!indexRead && probe.length >= mp4LayoutProbeBytes) {
+            indexRead = true;
+            indexEndsAt = mp4IndexEndsAt(probe.toBytes());
+            // An index too big to leave room for any video means warming
+            // this slice cannot make the reel start sooner. Stop, rather
+            // than spend the link on a slice that will not be used and
+            // then report it as a cache hit.
+            if (indexEndsAt != null && !prefixWorthWarming(indexEndsAt!)) {
+              ReelDiagnostics.instance.recordPrefixBailed('indexTooBig');
+              d.cancelled = true;
+              unawaited(d.subscription?.cancel());
+              if (!done.isCompleted) done.complete();
+              return;
+            }
+          }
+
           if (!openedEarly &&
-              d.written >= prefixReadyBytesFor(d.url) &&
+              d.written >= prefixReadyBytesFor(d.url, indexEndsAt: indexEndsAt) &&
               probe.length >= mp4LayoutProbeBytes &&
               readMp4Layout(probe.toBytes()) != Mp4Layout.moovAtEnd) {
             openedEarly = true;
