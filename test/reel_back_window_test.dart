@@ -99,6 +99,8 @@ void main() {
 
   group('warming the reel on screen', _currentReelWarming);
 
+  group('warm before play', _warmBeforePlay);
+
   group('the position is reset with the list, not separately', () {
     // The bound above makes the crash impossible. This is about the bug
     // that produced the bad number in the first place, and it is a
@@ -191,5 +193,108 @@ void _currentReelWarming() {
     // stays near the front — but never ahead of the video actually playing.
     expect(upTo.contains('upcoming.insert(upcoming.isEmpty ? 0 : 1'), isTrue,
         reason: "the current reel's opponent lost its place near the front");
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// WARM FIRST, PLAY SECOND
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Both paths that open a reel used to play it and then ask for it to be
+// warmed. Asking after the player has opened is asking too late — it has
+// already gone to the network.
+//
+// Worst on a seeded open, where the feed is handed one reel and shows it
+// immediately, so there is no earlier moment at which anything could have
+// warmed it. That is the "my own upload sticks at the start" case.
+
+void _warmBeforePlay() {
+  final src = File('lib/widgets/smart_reels_feed.dart').readAsStringSync();
+
+  /// The body of one function, so a mention of a name elsewhere in the file
+  /// cannot be mistaken for the code being checked. That is exactly what the
+  /// first version of this did: it matched a comment three hundred lines
+  /// above the function and compared offsets that meant nothing.
+  String bodyOf(String decl) {
+    final i = src.indexOf(decl);
+    expect(i, greaterThan(-1), reason: 'lost $decl');
+    final rest = src.substring(i);
+    final end = rest.indexOf('\n  }\n');
+    return end > 0 ? rest.substring(0, end) : rest;
+  }
+
+  test('the first reel of a feed is warmed before it is played', () {
+    final body = bodyOf('Future<void> _loadInitialPage(');
+    final warm = body.indexOf('_prefetchUpcomingVideos();');
+    final play = body.indexOf('_playCurrent(');
+    expect(warm, greaterThan(-1));
+    expect(play, greaterThan(-1));
+    expect(warm, lessThan(play),
+        reason: 'the player opens before anything asks for the reel, so it '
+            'goes straight to the network every time');
+  });
+
+  test('and so is the one a swipe lands on', () {
+    final body = bodyOf('void _onPageChanged(');
+    final warm = body.indexOf('_schedulePrefetch();');
+    final play = body.indexOf('_playCurrent();');
+    expect(warm, greaterThan(-1));
+    expect(play, greaterThan(-1));
+    expect(warm, lessThan(play),
+        reason: 'the swipe opens its player before re-aiming the window');
+  });
+
+  test('a deliberate open waits briefly for the warm', () {
+    expect(src.contains('awaitReady('), isTrue,
+        reason: 'nothing ever waits for a reel to become warm. '
+            'VideoCacheService.awaitReady exists precisely for this and was '
+            'never called, so every reel opened against whatever happened to '
+            'be on disk at that instant.');
+    expect(src.contains('_playCurrent(waitForWarm: true)'), isTrue,
+        reason: 'the initial open does not ask to wait');
+  });
+
+  test('but a swipe never does', () {
+    // A swipe has a rhythm. Pausing it to buy a smoother start trades a
+    // fault the viewer notices for one they notice more.
+    final body = bodyOf('void _onPageChanged(');
+    final upTo = body.substring(0, body.indexOf('_maybePrefetchNextPage();'));
+    expect(upTo.contains('waitForWarm: true'), isFalse,
+        reason: 'swiping now pauses before it plays');
+  });
+
+  test('and the wait is short enough not to read as broken', () {
+    final m = RegExp(r'_coldOpenGrace = Duration\(milliseconds: (\d+)\)')
+        .firstMatch(src);
+    expect(m, isNotNull, reason: 'the grace period is gone');
+    final ms = int.parse(m!.group(1)!);
+    expect(ms, lessThanOrEqualTo(600),
+        reason: '${ms}ms of nothing before a video starts is a pause the '
+            'viewer notices in its own right');
+    expect(ms, greaterThanOrEqualTo(150),
+        reason: 'too short to catch a warm that is nearly there, which is '
+            'the only thing it is for');
+  });
+
+  test('a reel the viewer has left is not opened after the wait', () {
+    // 400ms is long enough to swipe. Opening a player for a reel they have
+    // gone past is worse than the cold open this avoids.
+    // Checked as the very NEXT line, not merely somewhere later. There is
+    // another index guard further down _playCurrent, and a player is opened
+    // in between — so "somewhere later" is satisfied while the wrong reel
+    // still gets a decoder. The first version of this test passed with the
+    // guard deleted for exactly that reason.
+    final body = bodyOf('Future<void> _playCurrent(');
+    final lines = body.split('\n');
+    final at = lines.indexWhere((l) => l.contains('awaitReady('));
+    expect(at, greaterThan(-1), reason: 'nothing waits for the warm');
+    expect(
+      lines[at + 1].contains('_currentIndex != index'),
+      isTrue,
+      reason: 'the line after the wait is "${lines[at + 1].trim()}". It has '
+          'to be the check that the viewer is still on this reel — 400ms is '
+          'long enough to swipe, and the next thing this function does is '
+          'open a player.',
+    );
   });
 }
