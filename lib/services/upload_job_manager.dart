@@ -234,12 +234,20 @@ class UploadJobManager {
         },
       );
 
+      // How long the video we are about to send runs. The transcode knows
+      // it and reports it on every video artifact; the server refuses
+      // anything over the limit and has to be told, so it is picked up
+      // here rather than measured again.
+      var uploadedDuration = Duration.zero;
+
       final upstream = StreamController<ProcessingArtifact>();
       // ignore: discarded_futures
       () async {
         try {
           await for (final a in processed) {
             pathsToCleanup.add(a.path);
+            final d = a.duration;
+            if (d != null && d > uploadedDuration) uploadedDuration = d;
             upstream.add(a);
           }
           await upstream.close();
@@ -289,6 +297,7 @@ class UploadJobManager {
         return;
       }
 
+      job._preparedDuration = uploadedDuration;
       job._prepared?.complete(uploaded);
       if (job._abandoned) {
         dismiss(job.id);
@@ -317,6 +326,7 @@ class UploadJobManager {
   Future<void> _finalizePrepared(
       UploadJob job, UploadResult uploaded, ChallengeSubmissionMeta meta) async {
     final start = DateTime.now();
+    final uploadedDuration = job._preparedDuration;
     try {
       job._update((s) => s.copyWith(
             stage: UploadJobStage.finalizing,
@@ -328,6 +338,7 @@ class UploadJobManager {
         videoUrl: uploaded.defaultVideoUrl,
         videoVariants: uploaded.videoVariants,
         thumbnailUrl: uploaded.thumbnailUrl,
+        duration: uploadedDuration,
         prefix: meta.prefix,
         subject: meta.subject,
         visibility: meta.visibility,
@@ -355,6 +366,10 @@ class UploadJobManager {
       _completedCtl.add(job);
       _scheduleAutoDismiss(job);
       await _removePersisted(job.id);
+    } on ApiRefused catch (e) {
+      // The server looked at it and said no, and said why. Retrying will
+      // never change that, so show the reason instead of "try again".
+      _fail(job, 'refused', e.reason);
     } catch (e) {
       _fail(job, 'unknown', 'Something went wrong: $e');
     }
@@ -406,12 +421,20 @@ class UploadJobManager {
       // uploader AND (b) collect every path for cleanup at the end.
       // dart's StreamController<broadcast> doesn't preserve order/back
       // pressure for async generators, so we wrap manually.
+      // How long the video we are about to send runs. The transcode knows
+      // it and reports it on every video artifact; the server refuses
+      // anything over the limit and has to be told, so it is picked up
+      // here rather than measured again.
+      var uploadedDuration = Duration.zero;
+
       final upstream = StreamController<ProcessingArtifact>();
       // ignore: discarded_futures
       () async {
         try {
           await for (final a in processed) {
             pathsToCleanup.add(a.path);
+            final d = a.duration;
+            if (d != null && d > uploadedDuration) uploadedDuration = d;
             upstream.add(a);
           }
           await upstream.close();
@@ -468,6 +491,7 @@ class UploadJobManager {
         videoUrl: uploaded.defaultVideoUrl,
         videoVariants: uploaded.videoVariants,
         thumbnailUrl: uploaded.thumbnailUrl,
+        duration: uploadedDuration,
         prefix: meta.prefix,
         subject: meta.subject,
         visibility: meta.visibility,
@@ -501,6 +525,10 @@ class UploadJobManager {
       await _removePersisted(job.id);
     } on _PipelineFailure catch (f) {
       _fail(job, f.code, f.message);
+    } on ApiRefused catch (e) {
+      // The server looked at it and said no, and said why. Retrying will
+      // never change that, so show the reason instead of "try again".
+      _fail(job, 'refused', e.reason);
     } catch (e) {
       _fail(job, 'unknown', 'Something went wrong: $e');
     } finally {
@@ -544,12 +572,20 @@ class UploadJobManager {
         },
       );
 
+      // How long the video we are about to send runs. The transcode knows
+      // it and reports it on every video artifact; the server refuses
+      // anything over the limit and has to be told, so it is picked up
+      // here rather than measured again.
+      var uploadedDuration = Duration.zero;
+
       final upstream = StreamController<ProcessingArtifact>();
       // ignore: discarded_futures
       () async {
         try {
           await for (final a in processed) {
             pathsToCleanup.add(a.path);
+            final d = a.duration;
+            if (d != null && d > uploadedDuration) uploadedDuration = d;
             upstream.add(a);
           }
           await upstream.close();
@@ -605,6 +641,7 @@ class UploadJobManager {
         videoUrl: uploaded.defaultVideoUrl,
         videoVariants: uploaded.videoVariants,
         thumbnailUrl: uploaded.thumbnailUrl,
+        duration: uploadedDuration,
       );
       if (response == null) {
         throw _PipelineFailure('submit_fail',
@@ -629,6 +666,10 @@ class UploadJobManager {
       await _removePersisted(job.id);
     } on _PipelineFailure catch (f) {
       _fail(job, f.code, f.message);
+    } on ApiRefused catch (e) {
+      // The server looked at it and said no, and said why. Retrying will
+      // never change that, so show the reason instead of "try again".
+      _fail(job, 'refused', e.reason);
     } catch (e) {
       _fail(job, 'unknown', 'Something went wrong: $e');
     } finally {
@@ -869,6 +910,14 @@ class UploadJob {
   // whose create-flow was backed out of before Post.
   Completer<UploadResult?>? _prepared;
   bool _abandoned = false;
+
+  /// How long the prepared video runs, measured during the prepare leg.
+  ///
+  /// The prepare leg transcodes and uploads; the finalize leg posts. Only
+  /// the first of those sees the video, so the length has to be carried
+  /// across. Zero means the prepare leg never got to measure it, which the
+  /// server treats as "not stated" and settles by measuring the file.
+  Duration _preparedDuration = Duration.zero;
 
   UploadJob._({
     required this.id,

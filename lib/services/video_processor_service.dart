@@ -36,11 +36,23 @@ class ProcessedVideo {
   final int thumbnailSizeBytes;
   final Duration sourceDuration;
 
+  /// How long the video we are actually going to upload runs.
+  ///
+  /// Not the same as [sourceDuration] when the source was longer than
+  /// [VideoProcessorService.maxReelDuration] — the transcode cuts it, so
+  /// the source can be ten minutes and the upload one.
+  ///
+  /// This is the number the server has to be told. It measures the file it
+  /// receives, so telling it about the source instead would mean refusing
+  /// uploads that are actually inside the limit.
+  final Duration uploadedDuration;
+
   const ProcessedVideo({
     required this.variants,
     required this.thumbnailPath,
     required this.thumbnailSizeBytes,
     required this.sourceDuration,
+    required this.uploadedDuration,
   });
 
   /// Convenience: total bytes across all artifacts. Used to surface a
@@ -246,6 +258,7 @@ class VideoProcessorService {
       thumbnailPath: thumbFile.path,
       thumbnailSizeBytes: thumbSize,
       sourceDuration: Duration(milliseconds: sourceMs),
+      uploadedDuration: Duration(milliseconds: clampedMs ?? sourceMs),
     );
   }
 
