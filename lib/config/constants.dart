@@ -50,6 +50,20 @@ class AppConstants {
     defaultValue: 'wss://gobackend-9nd8.onrender.com',
   );
 
+  /// The longest video this app takes.
+  ///
+  /// The same three minutes the server enforces — see maxUploadDuration in
+  /// the backend, which refuses anything over it and measures the file
+  /// itself rather than trusting what this side reports.
+  ///
+  /// Kept here, next to the server's address, because it is part of the
+  /// contract with the server rather than a preference of the recorder or
+  /// the trim screen. Both of those read it; neither owns it. Before this,
+  /// the trim screen carried its own copy with the comment "mirrors
+  /// processor cap", which is how two numbers that must agree start not
+  /// agreeing.
+  static const Duration maxVideoDuration = Duration(minutes: 3);
+
   /// Number of posts loaded per page in the home feed.
   static const int defaultPageSize = 20;
 

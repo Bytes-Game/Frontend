@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:video_compress/video_compress.dart';
 import 'package:video_thumbnail/video_thumbnail.dart' as vt;
 
+import '../config/constants.dart';
 import 'network_quality_service.dart';
 
 /// Output of one variant transcode. [path] is the local file produced
@@ -126,10 +127,17 @@ class VideoProcessorService {
   VideoProcessorService._();
   static final VideoProcessorService instance = VideoProcessorService._();
 
-  /// Hard cap on how long a reel can be. Anything longer is silently
-  /// truncated by [process] via video_compress's startTime/duration
-  /// args so users don't accidentally upload a 10-minute file.
-  static const Duration maxReelDuration = Duration(seconds: 60);
+  /// Hard cap on how long a reel can be. Anything longer is cut by
+  /// [process] via video_compress's startTime/duration args, so a source
+  /// picked from a camera roll cannot become a ten-minute upload.
+  ///
+  /// This was sixty seconds and is now the three minutes the server
+  /// enforces. It is READ from [AppConstants.maxVideoDuration] rather than
+  /// written again, because the server refuses anything over that number
+  /// and a second copy here could only ever disagree with it — either
+  /// cutting video the server would have accepted, or letting through
+  /// video it will refuse after the upload has already been paid for.
+  static const Duration maxReelDuration = AppConstants.maxVideoDuration;
 
   /// Whether [process] can run on the current platform. Both of the
   /// underlying plugins (video_compress + video_thumbnail) only ship

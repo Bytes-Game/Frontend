@@ -16,7 +16,9 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:myapp/config/constants.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/video_processor_service.dart';
 
 void main() {
   group('the length is actually sent', () {
@@ -73,6 +75,8 @@ void main() {
     });
   });
 
+  group('one length limit, not three', _oneLimit);
+
   group('a refusal says why', () {
     test('a 4xx carries the server\'s own words', () {
       final e = ApiRefused('video too long — maximum 180 seconds');
@@ -107,5 +111,50 @@ void main() {
       expect(body, contains('ApiRefused('),
           reason: 'a 4xx has to come back as a refusal, not a null');
     });
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ONE LENGTH LIMIT, NOT THREE
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Added as its own group because the limit lived in three places at once:
+// the trim screen (60s, commented "mirrors processor cap"), the transcode
+// (60s), and the server (3 minutes, and only for battle answers). A mirror
+// is a second number, and a second number is one that can stop matching.
+
+void _oneLimit() {
+  test('the app takes the same three minutes the server does', () {
+    expect(AppConstants.maxVideoDuration, const Duration(minutes: 3),
+        reason: 'the server refuses anything over three minutes and '
+            'measures the file to be sure — a different number here only '
+            'means uploads that are paid for and then thrown away');
+  });
+
+  test('the transcode reads it rather than keeping its own', () {
+    expect(VideoProcessorService.maxReelDuration,
+        AppConstants.maxVideoDuration);
+
+    final src =
+        File('lib/services/video_processor_service.dart').readAsStringSync();
+    expect(src, contains('maxReelDuration = AppConstants.maxVideoDuration'),
+        reason: 'written out again rather than read, so the two can drift');
+  });
+
+  test('the trim screen reads it rather than keeping its own', () {
+    final src = File('lib/pages/video_trim_page.dart').readAsStringSync();
+    expect(src,
+        contains('_maxClipMs = VideoProcessorService.maxReelDuration.inMilliseconds'),
+        reason: 'this is where the copy was, with a comment admitting it');
+    expect(src, isNot(contains('60 * 1000')),
+        reason: 'the old copy is back');
+  });
+
+  test('recording stops at the same place', () {
+    // Not a separate number either — the record screen already reads the
+    // processor's, and it has to keep doing that or someone records four
+    // minutes and is refused after the upload.
+    final src = File('lib/pages/record_video_page.dart').readAsStringSync();
+    expect(src, contains('VideoProcessorService.maxReelDuration'));
   });
 }

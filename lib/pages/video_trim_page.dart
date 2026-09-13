@@ -68,7 +68,10 @@ class _VideoTrimPageState extends State<VideoTrimPage>
   bool _trimming = false;
   String? _initError;
 
-  static const _maxClipMs = 60 * 1000; // mirrors processor cap
+  /// Read from the processor, not copied. The comment here used to read
+  /// "mirrors processor cap" — and a mirror is a second number that can
+  /// stop matching the first without anything saying so.
+  static final _maxClipMs = VideoProcessorService.maxReelDuration.inMilliseconds;
   static const _minClipMs = 1500;       // anything < 1.5s is a misclick
 
   @override
