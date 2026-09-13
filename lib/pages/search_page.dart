@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import 'package:video_player/video_player.dart';
+import 'package:myapp/services/video_cache_service.dart';
+import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
@@ -903,15 +905,51 @@ class _PreviewCoordinator extends ChangeNotifier {
 
   Timer? _advanceTimer;
 
+  /// tileId -> what that tile would play. Kept so the coordinator can warm
+  /// the ones about to take a turn; see [_warmVisible].
+  final Map<String, String> _urls = {};
+
   /// Tile reports its visibility. The coordinator picks/repicks the active
   /// tile and notifies listeners only when the active id changes.
-  void report(String tileId, double fraction) {
+  void report(String tileId, double fraction, {String url = ''}) {
     if (fraction <= 0.01) {
       _fractions.remove(tileId);
+      _urls.remove(tileId);
     } else {
       _fractions[tileId] = fraction;
+      if (url.isNotEmpty) _urls[tileId] = url;
     }
     _maybePick();
+    _warmVisible();
+  }
+
+  /// How many previews ahead to fetch the opening bytes for.
+  ///
+  /// Three. Previews take turns rather than being swiped through, so the
+  /// order is known and shallow depth is enough — and the same measurement
+  /// that set the feed's window applies: bytes spent ahead are bytes the
+  /// preview playing right now does not get.
+  static const int _warmAhead = 3;
+
+  /// Ask the cache for the opening bytes of the previews about to play.
+  ///
+  /// Without this the grid was starting every preview against the network
+  /// from byte zero. The feed has not done that for a while; this page was
+  /// never connected to any of it.
+  ///
+  /// Ordered by how visible each tile is, so the one about to take its turn
+  /// is first in the queue rather than behind two the user is scrolling past.
+  void _warmVisible() {
+    final ranked = _fractions.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final urls = <String>[];
+    for (final e in ranked) {
+      final u = _urls[e.key];
+      if (u == null || u.isEmpty) continue;
+      urls.add(u);
+      if (urls.length >= _warmAhead) break;
+    }
+    if (urls.isNotEmpty) VideoCacheService.instance.warm(urls);
   }
 
   /// Called by a tile when its video ends. If it's still active, advance.
@@ -1110,8 +1148,57 @@ class _PreviewableTileState extends State<_PreviewableTile> {
     if (mounted) setState(() {});
   }
 
+  /// What this preview should actually stream.
+  ///
+  /// ════════════════════════════════════════════════════════════════════════
+  /// IT WAS STREAMING THE RAW UPLOAD
+  /// ════════════════════════════════════════════════════════════════════════
+  ///
+  /// [ChallengeModel.videoUrl] is the file the phone sent, before the server
+  /// re-encoded it. The feed has never played that — it picks a rendition
+  /// sized for the connection. This grid played the original, and the
+  /// difference is not small. Measured across ten videos in this app:
+  ///
+  ///   video 43     1.0 MB raw     1.0 MB chosen     same
+  ///   video 48     3.6 MB raw     2.0 MB chosen     1.8x
+  ///   video 49    13.9 MB raw     2.4 MB chosen     5.8x
+  ///   video 38    57.8 MB raw     4.5 MB chosen    12.9x
+  ///
+  /// On the link this app actually sees, 2 to 4 Mbps, 57 MB is not a video
+  /// that plays. That is "every video on the search page sticks".
+  ///
+  /// Two lines, both reusing what the feed already does: pick the rendition
+  /// the measured connection can carry, then ask the cache whether it is
+  /// already holding the opening bytes.
+  ///
+  /// Note this deliberately does NOT route through VideoPlayerService. The
+  /// comment below explains why — it is about the shared pool's volume
+  /// handling, and it still stands. The cache is a different thing: it
+  /// answers "which bytes", not "which player", and has no opinion on audio.
+  String _previewUrl() {
+    final origin = _originUrl();
+    if (origin.isEmpty) return '';
+    return VideoCacheService.instance.playbackUrlFor(origin);
+  }
+
+  /// The same choice, before the cache is asked about it.
+  ///
+  /// Warming is keyed by the ORIGIN url — that is the name the cache files
+  /// bytes under. Handing it the proxy address instead would store them
+  /// under something nothing ever looks up: a warm that costs the bandwidth
+  /// and helps nobody.
+  ///
+  /// So [_previewUrl] is built FROM this rather than repeating the choice.
+  /// Two copies of "which rendition" could disagree, and then the tile would
+  /// warm one file and play another.
+  String _originUrl() {
+    final c = widget.challenge;
+    final picked = NetworkQualityService.instance.pickVariantUrl(c.videoVariants);
+    return (picked != null && picked.isNotEmpty) ? picked : c.videoUrl;
+  }
+
   Future<void> _ensurePlayerAndPlay() async {
-    final url = widget.challenge.videoUrl;
+    final url = _previewUrl();
     if (url.isEmpty) return;
     if (_controller == null) {
       // Dedicated controller per preview tile, NOT routed through
@@ -1181,7 +1268,7 @@ class _PreviewableTileState extends State<_PreviewableTile> {
       key: Key('preview_${ch.id}'),
       onVisibilityChanged: (info) {
         if (!mounted) return;
-        widget.coordinator.report(_id, info.visibleFraction);
+        widget.coordinator.report(_id, info.visibleFraction, url: _originUrl());
       },
       child: GestureDetector(
         onTap: widget.onTap,
