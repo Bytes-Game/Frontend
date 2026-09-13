@@ -327,6 +327,46 @@ class NetworkQualityService {
     return best;
   }
 
+  /// Bits per second left over for reading ahead, once the reel on screen
+  /// has been paid for. Null while there is not enough measurement to say.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// WHY THIS IS NOT JUST [readAheadReserveBps]
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// [readAheadReserveBps] is a FLOOR. It is bandwidth the quality picker
+  /// refuses to spend on the picture, so that read-ahead always has
+  /// something. It is not what read-ahead actually gets — on a link with
+  /// room to spare, read-ahead gets the floor plus everything the picture
+  /// did not use.
+  ///
+  /// This is the real figure: what is measured, minus what the reel on
+  /// screen actually costs.
+  ///
+  /// It subtracts the rendition's own bitrate, NOT the bitrate times
+  /// [bitrateHeadroom]. The headroom is how much faster the link has to be
+  /// before we will PICK a rendition; it is not bandwidth the rendition
+  /// spends. Subtracting it here would charge read-ahead for a margin
+  /// nobody consumes, and understate the spare by a third of the picture —
+  /// most of a reel's worth per swipe at 720p.
+  ///
+  /// Capped at [reelsMaxLabel], because that is the ceiling the feed
+  /// actually asks for. Without the cap, a fast link would be charged for
+  /// a 1080p reel the feed will never request.
+  ///
+  /// Never negative. On a link too slow for even the smallest rendition
+  /// the honest answer is "nothing spare", not a negative budget.
+  int? get spareBpsForReadAhead {
+    final bps = measuredBps;
+    if (bps == null) return null;
+    var label = affordableLabel ?? reelsMaxLabel;
+    final cap = _labelRank[reelsMaxLabel] ?? 2;
+    if ((_labelRank[label] ?? 0) > cap) label = reelsMaxLabel;
+    final picture = bitrateNeededFor[label] ?? bitrateNeededFor[reelsMaxLabel]!;
+    final spare = bps - picture;
+    return spare < 0 ? 0 : spare;
+  }
+
   /// Quality order — how good each rendition looks, and so which one to
   /// prefer. Not the same as how hard it is to DECODE: 720p_hq is the same
   /// 1280-wide picture as 720p with more bits spent on it, so it ranks higher
