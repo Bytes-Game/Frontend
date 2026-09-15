@@ -437,6 +437,75 @@ class NetworkQualityService {
   @visibleForTesting
   void debugClearThroughput() => _throughputSamples.clear();
 
+  /// Renditions already chosen, keyed by whatever the caller calls a video.
+  ///
+  /// Capped, and oldest-first, because a long session scrolls past far more
+  /// videos than it will ever come back to.
+  final Map<String, String> _chosenFor = {};
+
+  /// How many choices to remember. A URL per video is tens of bytes, and a
+  /// feed session that revisits something five hundred videds ago is not a
+  /// session anyone has.
+  static const int _chosenMemory = 500;
+
+  /// Pick a rendition for [key] and KEEP that choice for the session.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// WHY THE CHOICE HAS TO STICK
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// [pickVariantUrl] answers for the link as it is right now, and the link
+  /// moves. Measured in one session:
+  ///
+  ///	link=5.9Mbps  affords=720p_hq
+  ///	link=2.9Mbps  affords=480p
+  ///	link=3.7Mbps  affords=480p
+  ///
+  /// The feed re-parses the same videos constantly — the server deliberately
+  /// re-sends them, `repeat=20` of 20 on most pages — and every re-parse
+  /// asked again. So one video would be warmed as 720p_hq and, minutes
+  /// later, opened as 480p: a different file, with none of it on disk.
+  ///
+  /// The arithmetic in the same session says exactly that. 67 distinct URLs
+  /// were warmed out of a catalogue of 56 videos, so at least eleven videos
+  /// were fetched under TWO addresses. And warming pulled away from
+  /// playback as it went:
+  ///
+  ///	starts=50  warmed=40  served from cache=30
+  ///	starts=60  warmed=51  served from cache=32
+  ///
+  /// Eleven more videos warmed, two more used.
+  ///
+  /// So a video keeps the rendition it was first given. The cost is a
+  /// slightly soft picture if the link improves a lot while someone is
+  /// still scrolling; the thing it buys is that the bytes fetched for a
+  /// video are the bytes that video is opened with. A stall is far more
+  /// noticeable than a rung of quality, and videos entering the feed for
+  /// the first time still get the current answer.
+  String? stickyVariantUrl(String key, Map<String, String> variants,
+      {String? maxLabel = reelsMaxLabel}) {
+    // One guard, checked once. An earlier version tested the key on the way
+    // in AND on the way out, which reads as careful and is not: with the
+    // read guarded, the write guard could never change what any caller saw,
+    // so deleting it broke nothing and no test could notice.
+    if (key.isEmpty) return pickVariantUrl(variants, maxLabel: maxLabel);
+
+    final already = _chosenFor[key];
+    if (already != null) return already;
+
+    final picked = pickVariantUrl(variants, maxLabel: maxLabel);
+    if (picked != null && picked.isNotEmpty) {
+      if (_chosenFor.length >= _chosenMemory) {
+        _chosenFor.remove(_chosenFor.keys.first);
+      }
+      _chosenFor[key] = picked;
+    }
+    return picked;
+  }
+
+  @visibleForTesting
+  void debugClearChosenVariants() => _chosenFor.clear();
+
   String? pickVariantUrl(Map<String, String> variants,
       {String? maxLabel = reelsMaxLabel}) {
     if (variants.isEmpty) {
