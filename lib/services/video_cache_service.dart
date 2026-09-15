@@ -784,8 +784,73 @@ class VideoCacheService {
     return maxConcurrentDownloadsDuringBackfill + bonus;
   }
 
+  /// True while read-ahead has stood down for the reel on screen.
+  bool _held = false;
+
+  /// Whether warming is currently standing down. Diagnostics and tests.
+  bool get isHeld => _held;
+
+  /// Stand read-ahead down: the reel on screen has run out of video.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// WHY READ-AHEAD HAS TO YIELD, AND WHY A STATIC RESERVE WAS NOT ENOUGH
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// The arithmetic on the device this app is tested on:
+  ///
+  ///   the link measures            2.9 Mbps
+  ///   480p needs, sustained        1.6 Mbps
+  ///   read-ahead runs              up to four downloads, flat out
+  ///
+  /// Five streams share one link, so the reel being WATCHED gets about a
+  /// fifth of it — 0.58 Mbps against the 1.6 it needs. It plays from the
+  /// slice already on disk, reaches the end of it, and starves.
+  ///
+  /// That is "it sticks at the start and then plays": the start is the part
+  /// that was already downloaded.
+  ///
+  /// The decoder statistics say the same thing from the other side. Across
+  /// one session, 2,661 frames rendered and ZERO dropped. A decoder that
+  /// never drops a frame is never behind — it is always waiting.
+  ///
+  /// [NetworkQualityService.readAheadReserveBps] was meant to cover this and
+  /// cannot: it is an input to choosing a RENDITION, and nothing downstream
+  /// makes read-ahead actually stay inside it. Four sockets pulling as hard
+  /// as TCP allows do not know a reserve exists.
+  ///
+  /// So the rule is not a budget, it is a priority: while the reel on screen
+  /// has nothing to play, nothing else may use the link.
+  ///
+  /// Paused, NOT cancelled. A cancelled warm throws away everything already
+  /// fetched, and the reel it was for is usually still coming. Pausing the
+  /// subscription stops reading the socket, TCP closes its window, and the
+  /// bandwidth goes to the reel that needs it — and Dart stops the stall
+  /// clock on a paused subscription, so a held download is not mistaken for
+  /// a dead one. That last part is verified rather than assumed; see the
+  /// test.
+  void holdWarming() {
+    if (_held) return;
+    _held = true;
+    for (final d in _active.values) {
+      d.subscription?.pause();
+    }
+  }
+
+  /// The reel on screen is playing again; read-ahead may resume.
+  void releaseWarming() {
+    if (!_held) return;
+    _held = false;
+    for (final d in _active.values) {
+      d.subscription?.resume();
+    }
+    _pump();
+  }
+
   /// Start downloads until the concurrency limit is reached.
   void _pump() {
+    // Standing down for the reel on screen. Starting another download now
+    // would take the bandwidth it is waiting for.
+    if (_held) return;
     while (_active.length < _downloadSlots && _queue.isNotEmpty) {
       final url = _queue.removeAt(0);
       _start(url);

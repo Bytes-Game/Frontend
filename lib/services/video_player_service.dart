@@ -236,6 +236,66 @@ class VideoPlayerService {
   /// about the reel on screen, not about how the controller was created.
   String? _activeUrl;
 
+  /// The controller currently being watched for starvation, and the
+  /// listener attached to it, so it can be detached when the reel changes.
+  VideoPlayerController? _starvationWatched;
+  VoidCallback? _starvationListener;
+
+  /// Watch the reel on screen and stand read-ahead down while it has
+  /// nothing to play.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// THE REEL ON SCREEN WINS
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// Nothing in this app used to notice that the video being watched had
+  /// run dry. Read-ahead kept four downloads going regardless, and on the
+  /// 2.9 Mbps link this is tested against that leaves the reel the person
+  /// is actually looking at about a fifth of the bandwidth it needs.
+  ///
+  /// `isBuffering` is the player saying exactly that — it has reached the
+  /// end of what it holds. It appeared nowhere in this codebase.
+  ///
+  /// One listener, on one controller, swapped when the reel changes. The
+  /// hold is released on every exit — playing again, the reel changing,
+  /// the controller being disposed — because a hold that is never lifted
+  /// is worse than no hold at all.
+  void _watchForStarvation(String activeUrl) {
+    final previous = _starvationWatched;
+    final listener = _starvationListener;
+    if (previous != null && listener != null) {
+      previous.removeListener(listener);
+    }
+    _starvationWatched = null;
+    _starvationListener = null;
+    // Whatever the last reel was doing, it is not on screen now.
+    VideoCacheService.instance.releaseWarming();
+
+    final entry = _pool.where((e) => e.url == activeUrl).firstOrNull;
+    final controller = entry?.controller;
+    if (controller == null) return;
+
+    void onChange() {
+      // Not live any more: the pool disposed it. Let go, or read-ahead
+      // stays held for the rest of the session.
+      if (!isLive(controller)) {
+        VideoCacheService.instance.releaseWarming();
+        return;
+      }
+      final v = controller.value;
+      if (v.isBuffering && v.isPlaying) {
+        VideoCacheService.instance.holdWarming();
+      } else {
+        VideoCacheService.instance.releaseWarming();
+      }
+    }
+
+    controller.addListener(onChange);
+    _starvationWatched = controller;
+    _starvationListener = onChange;
+    onChange();
+  }
+
   /// The volume a freshly-initialised controller for [url] should take.
   ///
   /// Every controller used to come up at [activeVolume] on the theory
@@ -750,6 +810,7 @@ class VideoPlayerService {
     // controller that finishes initialising later comes up at the right
     // volume instead of racing this sweep.
     _activeUrl = activeUrl;
+    _watchForStarvation(activeUrl);
     final stopping = <Future<void>>[];
     for (final entry in _pool) {
       if (entry.url != activeUrl) {
