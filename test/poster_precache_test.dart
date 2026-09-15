@@ -17,27 +17,7 @@ import 'dart:io';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// The body of one function, so a check cannot match a line somewhere else
-/// in a five-thousand-line file and pass for the wrong reason.
-String bodyOf(String src, String signature) {
-  final at = src.indexOf(signature);
-  expect(at, greaterThan(-1), reason: 'could not find $signature');
-  // Start counting at the brace that opens the BODY, not at any brace in
-  // the signature — a named-parameter list is written {required bool x},
-  // and counting from there closes on the parameter list and returns
-  // nothing. That is a check that quietly stops checking.
-  final open = src.indexOf(') {', at);
-  expect(open, greaterThan(-1), reason: 'no body found for $signature');
-  var depth = 0;
-  for (var i = open + 2; i < src.length; i++) {
-    if (src[i] == '{') depth++;
-    if (src[i] == '}') {
-      depth--;
-      if (depth == 0) return src.substring(at, i + 1);
-    }
-  }
-  fail('never found the end of $signature');
-}
+import 'support/dart_source.dart';
 
 void main() {
   final src = File('lib/widgets/smart_reels_feed.dart').readAsStringSync();

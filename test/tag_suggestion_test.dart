@@ -9,30 +9,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/dart_source.dart';
+
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/widgets/tag_suggestion_strip.dart';
-
-/// One function's body, so a check cannot match a line elsewhere in the file
-/// and pass for the wrong reason.
-String bodyOf(String src, String signature) {
-  final at = src.indexOf(signature);
-  expect(at, greaterThan(-1), reason: 'could not find $signature');
-  // Start at the brace that opens the BODY, not at any brace in the
-  // signature. A named-parameter list is written ({String? add, ...}), and
-  // counting from there closes on the parameters and returns nothing — a
-  // check that quietly stops checking.
-  final open = src.indexOf(') {', at);
-  expect(open, greaterThan(-1), reason: 'no body found for $signature');
-  var depth = 0;
-  for (var i = open + 2; i < src.length; i++) {
-    if (src[i] == '{') depth++;
-    if (src[i] == '}') {
-      depth--;
-      if (depth == 0) return src.substring(at, i + 1);
-    }
-  }
-  fail('never found the end of $signature');
-}
 
 void main() {
   group('reading what the server sent', () {
