@@ -2317,7 +2317,11 @@ class _ReelItem implements _FeedEntry {
       // Empty hlsManifestUrl means the worker hasn't finished yet (or
       // isn't deployed) — fall back to the per-bitrate MP4 picker.
       final hlsUrl = (c['hlsManifestUrl'] as String?) ?? '';
-      final variantPick = NetworkQualityService.instance.pickVariantUrl(
+      // Sticky per video. The same video is re-parsed constantly — the
+      // server deliberately re-sends it — and asking again each time meant
+      // warming one rendition and opening another. See stickyVariantUrl.
+      final variantPick = NetworkQualityService.instance.stickyVariantUrl(
+        'challenge:${c['id']}',
         _coerceVariantsMap(c['videoVariants']),
       );
       final mp4Url = variantPick?.isNotEmpty == true
@@ -2347,7 +2351,9 @@ class _ReelItem implements _FeedEntry {
       // challenger played fine.
       final opponentHls = (c['topResponseHlsManifestUrl'] as String?) ?? '';
       final opponentFallback = (c['topResponseVideoUrl'] as String?) ?? '';
-      final opponentVariantPick = NetworkQualityService.instance.pickVariantUrl(
+      final opponentVariantPick =
+          NetworkQualityService.instance.stickyVariantUrl(
+        'response:${c['topResponseId']}',
         _coerceVariantsMap(c['topResponseVideoVariants']),
       );
       return _ReelItem(
@@ -2402,10 +2408,14 @@ class _ReelItem implements _FeedEntry {
     // Same HLS preference as fromFeedEntry above — when the worker has
     // produced the segmented manifest, use it; else fall back to the
     // per-bitrate MP4 selection.
-    final variantPick = NetworkQualityService.instance.pickVariantUrl(
+    // Same keys as the feed parse, so a video opened from a profile and the
+    // same video reached by scrolling are one file, not two.
+    final variantPick = NetworkQualityService.instance.stickyVariantUrl(
+      'challenge:${c.id}',
       c.videoVariants,
     );
-    final opponentVariantPick = NetworkQualityService.instance.pickVariantUrl(
+    final opponentVariantPick = NetworkQualityService.instance.stickyVariantUrl(
+      'response:${c.topResponseId}',
       c.topResponseVideoVariants,
     );
     final mp4Url = variantPick?.isNotEmpty == true ? variantPick! : c.videoUrl;
