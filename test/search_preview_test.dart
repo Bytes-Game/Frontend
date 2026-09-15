@@ -42,11 +42,34 @@ void main() {
           reason: 'the raw file must be the fallback, not the first choice');
     });
 
-    test('the player is handed the cache, not the origin', () {
+    test('the player is handed the origin, not the proxy', () {
+      // This was the other way round for one build, and that is the build
+      // where previews stopped playing altogether rather than merely
+      // starting slowly. The proxy was the only new thing on this path and
+      // the grid never needed it: it exists so the FEED can start a
+      // full-screen reel from bytes already on disk. A muted tile a third
+      // of the screen wide, running for twenty-five seconds, does not.
+      //
+      // What this page actually needed was to stop streaming the raw
+      // upload, and that is the variant pick — which stays.
       final body = bodyOf(src, 'String _previewUrl()');
-      expect(body, contains('playbackUrlFor('),
-          reason: 'the preview goes straight to the CDN even when the '
-              'opening bytes are already on disk');
+      expect(body, isNot(contains('playbackUrlFor(')),
+          reason: 'the preview is back on the loopback proxy, which is the '
+              'change that coincided with nothing playing at all');
+      expect(body, contains('_originUrl()'));
+    });
+
+    test('a preview that cannot open says so', () {
+      // It used to `catch (_) { return; }`. A page where every preview
+      // failed looked exactly like a page where every preview was slow:
+      // no error, no log line, nothing to tell them apart. A whole round
+      // of diagnosis went into guessing at it.
+      final body = bodyOf(src, 'Future<void> _ensurePlayerAndPlay()');
+      expect(body, contains('search preview failed to open'),
+          reason: 'the failure is swallowed again, so the next time this '
+              'breaks there will be no evidence of it');
+      expect(body, isNot(contains('} catch (_) {')),
+          reason: 'the reason is discarded');
     });
 
     test('and it is actually used', () {
@@ -69,6 +92,13 @@ void main() {
           reason: 'the play path picks the rendition again on its own');
       expect(body, isNot(contains('pickVariantUrl')),
           reason: 'the choice is repeated here instead of reused');
+    });
+
+    test('warming still uses the cache, even though playback does not', () {
+      // Warming is not wasted by playing the origin: tapping a result opens
+      // the real reels feed, and THAT goes through the proxy.
+      final body = bodyOf(src, 'void _warmVisible()');
+      expect(body, contains('VideoCacheService.instance.warm('));
     });
 
     test('warming is keyed by the origin, not the proxy address', () {

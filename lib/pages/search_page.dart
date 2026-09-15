@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import 'package:video_player/video_player.dart';
+import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/models/challenge_model.dart';
@@ -1210,11 +1211,30 @@ class _PreviewableTileState extends State<_PreviewableTile> {
   /// comment below explains why — it is about the shared pool's volume
   /// handling, and it still stands. The cache is a different thing: it
   /// answers "which bytes", not "which player", and has no opinion on audio.
-  String _previewUrl() {
-    final origin = _originUrl();
-    if (origin.isEmpty) return '';
-    return VideoCacheService.instance.playbackUrlFor(origin);
-  }
+  /// A preview plays the ORIGIN, not the cache's loopback address.
+  ///
+  /// ════════════════════════════════════════════════════════════════════════
+  /// WHY THIS DOES NOT GO THROUGH THE PROXY
+  /// ════════════════════════════════════════════════════════════════════════
+  ///
+  /// It did, for one build, and that build is the one where previews stopped
+  /// playing altogether rather than merely starting slowly.
+  ///
+  /// I cannot prove the proxy address was the cause — see the log line added
+  /// to the failure path below, which is what should have existed before any
+  /// of this. What is true is that it was the only new thing on this path,
+  /// and that the grid never needed it.
+  ///
+  /// The proxy exists so the FEED can start a full-screen reel from bytes
+  /// already on disk, with no round trip. A search preview is a muted tile
+  /// one third of the screen wide that runs for twenty-five seconds and then
+  /// hands over to the next one. What it actually needed was to stop
+  /// streaming the raw upload — up to 57 MB where the feed streams 4.5 MB —
+  /// and that is the variant pick below, which stays.
+  ///
+  /// Warming stays too, and still pays: tapping a result opens the real
+  /// reels feed, and THAT goes through the proxy.
+  String _previewUrl() => _originUrl();
 
   /// The same choice, before the cache is asked about it.
   ///
@@ -1227,6 +1247,14 @@ class _PreviewableTileState extends State<_PreviewableTile> {
   /// Two copies of "which rendition" could disagree, and then the tile would
   /// warm one file and play another.
   String? _origin;
+
+  /// Enough of a url to tell which file failed, without filling the log
+  /// with query strings and hashes.
+  static String _shortUrl(String u) {
+    final i = u.indexOf('/hls/');
+    if (i > -1) return u.substring(i);
+    return u.length > 60 ? '...${u.substring(u.length - 60)}' : u;
+  }
 
   String _originUrl() {
     // Worked out once per tile. This is called from the visibility report,
@@ -1284,10 +1312,17 @@ class _PreviewableTileState extends State<_PreviewableTile> {
 
       try {
         await c.initialize();
-      } catch (_) {
+      } catch (e) {
         // Init failed (404, codec issue, etc.). Leave the thumbnail
         // visible — the coordinator will move on after its watchdog
         // timer fires.
+        //
+        // SAY SO. This used to swallow the reason entirely, and a page
+        // where every preview fails looked exactly like a page where every
+        // preview was slow: no error, no log line, nothing to tell the two
+        // apart. A whole round of diagnosis went into guessing at it.
+        ReelDiagnostics.instance
+            .log('search preview failed to open ${_shortUrl(url)}: $e');
         return;
       }
       // Guard: the widget may have been disposed (and c.dispose()
