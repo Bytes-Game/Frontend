@@ -19,26 +19,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-/// One function's body, so a check cannot match a line elsewhere in a
-/// two-thousand-line file and pass for the wrong reason.
-String bodyOf(String src, String signature) {
-  final at = src.indexOf(signature);
-  expect(at, greaterThan(-1), reason: 'could not find $signature');
-  // Start at the brace that opens the BODY. A named-parameter list is
-  // written ({String url = ''}), and counting from the signature closes on
-  // the parameters and returns nothing — a check that stops checking.
-  final open = src.indexOf(') {', at);
-  expect(open, greaterThan(-1), reason: 'no body found for $signature');
-  var depth = 0;
-  for (var i = open + 2; i < src.length; i++) {
-    if (src[i] == '{') depth++;
-    if (src[i] == '}') {
-      depth--;
-      if (depth == 0) return src.substring(at, i + 1);
-    }
-  }
-  fail('never found the end of $signature');
-}
+import 'support/dart_source.dart';
 
 void main() {
   final src = File('lib/pages/search_page.dart').readAsStringSync();

@@ -92,6 +92,66 @@ class VideoCacheService {
   /// connection should carry.
   static const int maxConcurrentWholeFileDownloadsDuringBackfill = 1;
 
+  /// How long a download may go WITHOUT RECEIVING A BYTE before it is given
+  /// up.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// A STALLED DOWNLOAD USED TO HOLD ITS SLOT FOR EVER
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// There was no deadline of any kind on a warm. Not on getting a response,
+  /// not on the bytes arriving afterwards. A connection that went quiet
+  /// mid-body simply sat there, holding one of the download slots until the
+  /// app was killed.
+  ///
+  /// Four of those and warming is over for the session. From a device log,
+  /// each line a summary taken ten reels apart:
+  ///
+  ///   downloads=45  warmed=25  queue=0  active=4/4
+  ///   downloads=47  warmed=26  queue=1  active=4/4
+  ///   downloads=50  warmed=26  queue=3  active=4/4
+  ///   downloads=50  warmed=26  queue=1  active=4/4
+  ///   downloads=50  warmed=26  queue=1  active=4/4
+  ///
+  /// Downloads stop at 50 and warmed stops at 26 while reels keep opening.
+  /// Every slot is busy and nothing finishes; the queue behind them grows.
+  /// The hit rate fell through that session, 60% to 48%, as slots died one
+  /// by one. That is "it sticks more the longer I use it".
+  ///
+  /// INACTIVITY, not total time. A slow link is not a broken one: at the
+  /// 2.9 Mbps this app measures, a 768 KB slice legitimately takes a couple
+  /// of seconds, and longer again when several share the link. What is never
+  /// legitimate is bytes stopping and never resuming. So the clock resets on
+  /// every chunk, and only a silence this long gives up.
+  ///
+  /// Ten seconds is far longer than any real gap between packets and short
+  /// enough that a dead connection costs one slot for a moment rather than
+  /// for the rest of the session.
+  static const Duration stallTimeout = Duration(seconds: 10);
+
+  /// How long to wait for the response headers before giving up.
+  ///
+  /// Separate from [stallTimeout] because nothing has started yet: there are
+  /// no bytes to be idle between. Matches the ceiling the API client applies
+  /// to its own requests — which this path does NOT get, because it uses the
+  /// raw client rather than that wrapper.
+  static const Duration responseTimeout = Duration(seconds: 30);
+
+  /// Every byte stream in this file goes through here.
+  ///
+  /// Three download paths — the opening slice, the tail of a moov-at-end
+  /// file, and a whole file — and all three had the same hole. One helper so
+  /// a fourth cannot be added without it.
+  ///
+  /// The error lands on the same path a network failure already takes: the
+  /// slot is freed, anything waiting is woken, and the reel falls back to
+  /// streaming from origin.
+  static Stream<List<int>> _bounded(Stream<List<int>> body) => body.timeout(
+        stallTimeout,
+        onTimeout: (sink) =>
+            sink.addError(TimeoutException('download stalled', stallTimeout)),
+      );
+
   /// How much of a reel to warm in prefix mode. Against the ladder the server
   /// encodes to — 2.5 Mbps at 720p, 3.5 at the fast-connection rung — this is
   /// between 1.8 and 2.5 seconds of video.
@@ -663,13 +723,44 @@ class VideoCacheService {
 
   /// True when the connection is good enough to be worth loading up.
   ///
-  /// Wifi only. Deliberately NOT medium: LTE is usually fine and sometimes
-  /// suddenly is not, and the cost of guessing wrong lands on the video the
-  /// user is watching right now. `unknown` is treated as slow for the same
-  /// reason — it is mostly the first seconds after launch, which is exactly
-  /// when the first reel is opening.
-  bool get _networkCanTakeMore =>
-      NetworkQualityService.instance.current == NetworkQuality.high;
+  /// ══════════════════════════════════════════════════════════════════════
+  /// WIFI IS NOT A SPEED — THE LAST PLACE THAT STILL BELIEVED IT WAS
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// This asked [NetworkQuality], which is the KIND of connection. Wifi meant
+  /// extra download slots.
+  ///
+  /// The device this app is tested on reports wifi and measures 2.9 Mbps. It
+  /// was being given five parallel warms on a link that cannot carry two —
+  /// each one crawling, none finishing, all of them competing with the video
+  /// on screen for the same 2.9 Mbps.
+  ///
+  /// [prefetchDepth] was fixed for exactly this and this was left behind, so
+  /// the window narrowed while the number of things fetched at once did not.
+  ///
+  /// The measurement is already here. Extra slots are worth it when there is
+  /// bandwidth spare after the picture — [spareBpsForReadAhead] is what that
+  /// means — and the bar is one extra slot's worth of a reel arriving inside
+  /// a dwell, which is the same arithmetic [prefetchDepth] uses.
+  ///
+  /// Falls back to the kind of connection only before anything is measured,
+  /// which is the first seconds after launch.
+  bool get _networkCanTakeMore {
+    final spare = NetworkQualityService.instance.spareBpsForReadAhead;
+    if (spare != null) {
+      // Room for at least two reels inside one dwell: one for the window to
+      // keep pace, one more to be worth fetching alongside it.
+      final perDwell = spare *
+          NetworkQualityService.typicalDwellSeconds /
+          (prefixBytes * 8);
+      return perDwell >= 2;
+    }
+    // Nothing measured yet. Wifi only, and deliberately NOT medium: LTE is
+    // usually fine and sometimes suddenly is not, and the cost of guessing
+    // wrong lands on the video the user is watching right now. `unknown` is
+    // treated as slow for the same reason.
+    return NetworkQualityService.instance.current == NetworkQuality.high;
+  }
 
   /// The slot count, exposed so a test can assert it reacts to the network
   /// rather than asserting the constants add up.
@@ -737,7 +828,11 @@ class VideoCacheService {
     try {
       final request = http.Request('GET', Uri.parse(d.url))
         ..headers[HttpHeaders.rangeHeader] = 'bytes=0-${prefixBytes - 1}';
-      final response = await ApiService.httpClient.send(request);
+      // Bounded, because httpClient.send is the RAW client — the timeout the
+      // API wrapper applies to its own calls is not on this path.
+      final response = await ApiService.httpClient
+          .send(request)
+          .timeout(responseTimeout);
       // No 206 means the origin ignored the range and is about to send
       // the whole file — not what we asked for, so let the whole-file
       // path own it rather than half-handling it here.
@@ -778,7 +873,7 @@ class VideoCacheService {
       // Null means they have not — see [prefixReadyBytesFor].
       int? indexEndsAt;
       var indexRead = false;
-      d.subscription = response.stream.listen(
+      d.subscription = _bounded(response.stream).listen(
         (chunk) {
           d.written += chunk.length;
           if (probe.length < mp4LayoutProbeBytes) {
@@ -986,7 +1081,11 @@ class VideoCacheService {
     try {
       final request = http.Request('GET', Uri.parse(d.url))
         ..headers[HttpHeaders.rangeHeader] = 'bytes=$from-${total - 1}';
-      final response = await ApiService.httpClient.send(request);
+      // Bounded, because httpClient.send is the RAW client — the timeout the
+      // API wrapper applies to its own calls is not on this path.
+      final response = await ApiService.httpClient
+          .send(request)
+          .timeout(responseTimeout);
       // The head came back 206, so the origin does ranges; anything else
       // here is a transient we do not try to interpret.
       if (response.statusCode != HttpStatus.partialContent) return null;
@@ -995,7 +1094,7 @@ class VideoCacheService {
       sink = file.openWrite();
       final done = Completer<void>();
       d.done = done;
-      d.subscription = response.stream.listen(
+      d.subscription = _bounded(response.stream).listen(
         (chunk) {
           d.written += chunk.length;
           sink!.add(chunk);
@@ -1051,7 +1150,11 @@ class VideoCacheService {
       final request = http.Request('GET', Uri.parse(d.url));
       // Raw client, NOT the authed wrapper: media lives on R2 behind
       // presigned/public URLs and must not carry our bearer token.
-      final response = await ApiService.httpClient.send(request);
+      // Bounded, because httpClient.send is the RAW client — the timeout the
+      // API wrapper applies to its own calls is not on this path.
+      final response = await ApiService.httpClient
+          .send(request)
+          .timeout(responseTimeout);
       if (response.statusCode != 200) return;
       final declared = response.contentLength ?? 0;
       if (declared > maxPrefetchBytes) return;
@@ -1061,7 +1164,7 @@ class VideoCacheService {
       final done = Completer<void>();
       d.done = done;
 
-      d.subscription = response.stream.listen(
+      d.subscription = _bounded(response.stream).listen(
         (chunk) {
           d.written += chunk.length;
           if (d.written > maxPrefetchBytes) {
