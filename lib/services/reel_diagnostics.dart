@@ -280,4 +280,11 @@ class ReelDiagnostics {
   int get debugWholeFile => _wholeFile;
   @visibleForTesting
   int get debugOrigin => _origin;
+
+  /// Reels whose opening slice reached the proxy. Read against the
+  /// cancelled tally: that pair is how warming is judged from a log, and
+  /// the summary line only prints once a reel has actually started, so a
+  /// test that wants the number has to ask for it.
+  @visibleForTesting
+  int get debugPrefixWarmed => _prefixWarmed;
 }
