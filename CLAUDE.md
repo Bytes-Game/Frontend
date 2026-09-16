@@ -24,3 +24,39 @@ forever and the new video never starts."
 
 Same rule for commit messages, PR descriptions, and code comments: plain and
 direct.
+
+## When I send you a log
+
+**Read the whole thing. All of it.**
+
+Not the lines you expect to matter. Not a grep for the words you already have
+a theory about. The whole file, and a count of what is actually in it.
+
+This is not a style preference, it is the difference between finding the bug
+and not finding it. A real example from this repo:
+
+A log was 43,000 lines. The app's own diagnostic summary was 13 of them. Those
+13 lines were read, for several rounds, and produced several fixes that each
+made sense and none of which fixed the problem — because the cause was in the
+other 42,987 lines, which nobody had counted.
+
+What those lines said, once counted:
+
+    57 video decoders    2,661 frames rendered    0 frames dropped
+
+A decoder only drops frames when it cannot keep up. Zero dropped means it was
+never behind — it was always WAITING for video that had not arrived. Every fix
+so far had been about which file to download. None of them could have helped.
+
+So, before forming any theory:
+
+- Count what kinds of lines are in the file, and how many of each. The biggest
+  group is often not the one you were looking at.
+- Read the error lines, even the ones from Android or the decoder that look
+  like noise. Three thousand of them is not noise.
+- Look for the numbers that CONTRADICT the theory, not the ones that fit it.
+
+And never answer "I cannot find it" or "I have no fix I can defend". If the
+evidence is not in the log, add a log line and say what the next run should
+show. Silent failure paths are bugs in their own right — `catch (_) { return; }`
+hid a whole page failing for two rounds of diagnosis.
