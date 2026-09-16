@@ -87,6 +87,78 @@ void main() {
     });
   });
 
+  group('which buttons are worth showing', () {
+    test('a twelve second clip gets no picker at all', () {
+      // Every option would take the whole video, so every button would
+      // mean the same thing. A row of buttons that all do nothing reads
+      // as broken, not generous.
+      expect(ClipLength.worthShowing(totalMs: 12000, cap: cap), isFalse);
+    });
+
+    test('a three minute clip gets the picker', () {
+      expect(ClipLength.worthShowing(totalMs: 180000, cap: cap), isTrue);
+    });
+
+    test('the line is the shortest option, not the longest', () {
+      expect(ClipLength.worthShowing(totalMs: 30000, cap: cap), isFalse,
+          reason: 'exactly 30s fits the 30s option whole');
+      expect(ClipLength.worthShowing(totalMs: 30001, cap: cap), isTrue,
+          reason: 'a hair over and 30s genuinely cuts it');
+    });
+
+    test('a 45 second clip offers 30s and 1 min, and nothing else', () {
+      final shown = ClipLength.optionsWithin(cap)
+          .where((o) => ClipLength.isUseful(o, totalMs: 45000, cap: cap))
+          .toList();
+      expect(shown,
+          [const Duration(seconds: 30), const Duration(minutes: 1)],
+          reason: '2 min and 3 min would do exactly what 1 min does for a '
+              '45 second clip — two buttons with one result');
+    });
+
+    test('a three minute clip offers all four', () {
+      final shown = ClipLength.optionsWithin(cap)
+          .where((o) => ClipLength.isUseful(o, totalMs: 180000, cap: cap))
+          .toList();
+      expect(shown, ClipLength.optionsWithin(cap));
+    });
+
+    test('exactly one option ever means "the whole video"', () {
+      for (final total in [31000, 45000, 61000, 90000, 121000, 179000]) {
+        final covering = ClipLength.optionsWithin(cap)
+            .where((o) =>
+                o.inMilliseconds >= total &&
+                ClipLength.isUseful(o, totalMs: total, cap: cap))
+            .toList();
+        expect(covering.length, 1,
+            reason: 'at ${total}ms the picker offers ${covering.length} '
+                'buttons that all post the whole video');
+      }
+    });
+
+    test('whenever the picker shows, something in it is tappable', () {
+      for (final total in [31000, 45000, 61000, 90000, 121000, 179000, 180000]) {
+        if (!ClipLength.worthShowing(totalMs: total, cap: cap)) continue;
+        final shown = ClipLength.optionsWithin(cap)
+            .where((o) => ClipLength.isUseful(o, totalMs: total, cap: cap));
+        expect(shown, isNotEmpty, reason: 'an empty picker at ${total}ms');
+      }
+    });
+
+    test('and the default is one of them', () {
+      // Otherwise the screen opens with no button selected.
+      for (final total in [31000, 45000, 61000, 90000, 121000, 179000, 180000]) {
+        if (!ClipLength.worthShowing(totalMs: total, cap: cap)) continue;
+        final shown = ClipLength.optionsWithin(cap)
+            .where((o) => ClipLength.isUseful(o, totalMs: total, cap: cap))
+            .toList();
+        expect(shown, contains(ClipLength.defaultWithin(cap)),
+            reason: 'at ${total}ms the screen opens on '
+                '${ClipLength.defaultWithin(cap)}, which is not on offer');
+      }
+    });
+  });
+
   group('where the window lands', () {
     test('a video shorter than the choice is taken whole', () {
       // The ask that started this: a clip that fits should not be cut, and

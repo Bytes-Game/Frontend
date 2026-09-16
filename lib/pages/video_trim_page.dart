@@ -416,35 +416,40 @@ class _VideoTrimPageState extends State<VideoTrimPage>
                 ),
               ),
               const SizedBox(height: 16),
-              Text(
-                'Clip length',
-                style: TextStyle(
-                  color: cs.onSurface.withValues(alpha: 0.7),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
+              // Hidden outright when the whole video fits inside the
+              // shortest option: every button would mean the same thing,
+              // and a row that all does nothing reads as broken.
+              if (ClipLength.worthShowing(
+                  totalMs: totalMs,
+                  cap: VideoProcessorService.maxReelDuration)) ...[
+                Text(
+                  'Clip length',
+                  style: TextStyle(
+                    color: cs.onSurface.withValues(alpha: 0.7),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final option in _lengthOptions)
-                    // An option longer than the video itself is offered but
-                    // does nothing, so it is turned off rather than left to
-                    // look broken when tapping it changes nothing.
-                    ChoiceChip(
-                      label: Text(ClipLength.label(option)),
-                      selected: _limitMs == option.inMilliseconds,
-                      onSelected: (_trimming ||
-                              (option.inMilliseconds > totalMs &&
-                                  _limitMs != option.inMilliseconds))
-                          ? null
-                          : (_) => _setLimit(option),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 10),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final option in _lengthOptions)
+                      if (ClipLength.isUseful(option,
+                          totalMs: totalMs,
+                          cap: VideoProcessorService.maxReelDuration))
+                        ChoiceChip(
+                          label: Text(ClipLength.label(option)),
+                          selected: _limitMs == option.inMilliseconds,
+                          onSelected: _trimming
+                              ? null
+                              : (_) => _setLimit(option),
+                        ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+              ],
               Text(
                 totalMs > _limitMs
                     ? 'Your video is ${_fmt(totalMs)} long. Drag the handles '

@@ -49,6 +49,39 @@ abstract final class ClipLength {
   static String label(Duration d) =>
       d.inSeconds < 60 ? '${d.inSeconds}s' : '${d.inMinutes} min';
 
+  /// Whether offering [option] for a source of [totalMs] would do
+  /// anything.
+  ///
+  /// An option shorter than the source genuinely cuts it, so it is worth
+  /// offering. The FIRST option at or past the source length means "the
+  /// whole video". Everything beyond that does exactly the same thing —
+  /// offering 2 min and 3 min for a 45-second clip is two buttons that
+  /// produce an identical result, which reads as broken rather than
+  /// generous.
+  static bool isUseful(
+    Duration option, {
+    required int totalMs,
+    required Duration cap,
+  }) {
+    if (option.inMilliseconds < totalMs) return true;
+    // The shortest option that covers the whole source, and only it.
+    final covering = optionsWithin(cap)
+        .where((d) => d.inMilliseconds >= totalMs)
+        .toList(growable: false);
+    return covering.isNotEmpty && covering.first == option;
+  }
+
+  /// Whether the picker is worth showing at all for a source of [totalMs].
+  ///
+  /// It is not, when the whole video fits inside the shortest option:
+  /// every button would then mean the same thing, and a row of buttons
+  /// that all do nothing is worse than no row at all.
+  static bool worthShowing({required int totalMs, required Duration cap}) {
+    final options = optionsWithin(cap);
+    if (options.isEmpty) return false;
+    return totalMs > options.first.inMilliseconds;
+  }
+
   /// Where the trim window should sit after a length is chosen.
   ///
   /// [totalMs] is how long the source runs, [limitMs] the length chosen,
