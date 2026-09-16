@@ -7,6 +7,7 @@ import 'package:video_player/video_player.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'package:myapp/pages/challenge_metadata_page.dart';
+import 'package:myapp/services/clip_length.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/video_processor_service.dart';
@@ -68,11 +69,23 @@ class _VideoTrimPageState extends State<VideoTrimPage>
   bool _trimming = false;
   String? _initError;
 
-  /// Read from the processor, not copied. The comment here used to read
-  /// "mirrors processor cap" — and a mirror is a second number that can
-  /// stop matching the first without anything saying so.
-  static final _maxClipMs = VideoProcessorService.maxReelDuration.inMilliseconds;
+  /// The furthest the app will ever let a clip run. Read from the
+  /// processor, not copied. The comment here used to read "mirrors
+  /// processor cap" — and a mirror is a second number that can stop
+  /// matching the first without anything saying so.
+  static final _hardCapMs = VideoProcessorService.maxReelDuration.inMilliseconds;
   static const _minClipMs = 1500;       // anything < 1.5s is a misclick
+
+  /// The lengths offered on the picker, and the one chosen by default.
+  /// Both come from [ClipLength], which is where they can be tested.
+  static final List<Duration> _lengthOptions =
+      ClipLength.optionsWithin(VideoProcessorService.maxReelDuration);
+
+  /// The longest this clip may run, as chosen on the picker. The slider
+  /// cannot select more than this; it can select less.
+  late int _limitMs =
+      ClipLength.defaultWithin(VideoProcessorService.maxReelDuration)
+          .inMilliseconds;
 
   @override
   void initState() {
@@ -125,7 +138,9 @@ class _VideoTrimPageState extends State<VideoTrimPage>
       // clip can hit "Use clip" without touching the slider.
       final dur = controller.value.duration;
       _total = dur;
-      final endMs = dur.inMilliseconds.clamp(0, _maxClipMs);
+      // A clip shorter than the chosen length is taken whole — the point
+      // of the picker is a ceiling, not a target.
+      final endMs = dur.inMilliseconds.clamp(0, _limitMs);
       _range = RangeValues(0, endMs.toDouble());
 
       controller.addListener(_onControllerUpdate);
@@ -175,10 +190,13 @@ class _VideoTrimPageState extends State<VideoTrimPage>
       _toast('Clip is too short — pick at least 1.5 seconds.');
       return;
     }
-    if (spanMs > _maxClipMs) {
+    if (spanMs > _hardCapMs) {
       // Should be impossible because the slider clamps, but defense
       // in depth is cheap and prevents shipping out-of-spec clips.
-      _toast('Clip is too long — max ${_maxClipMs ~/ 1000}s.');
+      // Checked against the HARD cap rather than the picker: the picker
+      // is what this person asked for, the cap is what the server will
+      // take, and only the second one makes an upload fail.
+      _toast('Clip is too long — max ${_hardCapMs ~/ 1000}s.');
       return;
     }
 
@@ -397,10 +415,47 @@ class _VideoTrimPageState extends State<VideoTrimPage>
                   onChanged: _trimming ? null : _onSliderChanged,
                 ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 16),
+              // Hidden outright when the whole video fits inside the
+              // shortest option: every button would mean the same thing,
+              // and a row that all does nothing reads as broken.
+              if (ClipLength.worthShowing(
+                  totalMs: totalMs,
+                  cap: VideoProcessorService.maxReelDuration)) ...[
+                Text(
+                  'Clip length',
+                  style: TextStyle(
+                    color: cs.onSurface.withValues(alpha: 0.7),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final option in _lengthOptions)
+                      if (ClipLength.isUseful(option,
+                          totalMs: totalMs,
+                          cap: VideoProcessorService.maxReelDuration))
+                        ChoiceChip(
+                          label: Text(ClipLength.label(option)),
+                          selected: _limitMs == option.inMilliseconds,
+                          onSelected: _trimming
+                              ? null
+                              : (_) => _setLimit(option),
+                        ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+              ],
               Text(
-                'Reels are capped at ${_maxClipMs ~/ 1000}s — drag the handles '
-                'to pick the best moment.',
+                totalMs > _limitMs
+                    ? 'Your video is ${_fmt(totalMs)} long. Drag the handles '
+                        'to pick which ${ClipLength.label(Duration(milliseconds: _limitMs))} to post.'
+                    : 'Your whole video fits. Drag the handles to trim it '
+                        'further if you want.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: cs.onSurface.withValues(alpha: 0.6),
@@ -444,13 +499,42 @@ class _VideoTrimPageState extends State<VideoTrimPage>
     );
   }
 
+  /// Choose how long the clip may run.
+  ///
+  /// Opens the window to that length from wherever the start handle
+  /// currently sits, so picking a longer option keeps the moment the
+  /// person has already found instead of jumping back to the beginning.
+  /// If that would run off the end of the source, the window slides back
+  /// to fit rather than being truncated — a clip that fits should always
+  /// get its full length.
+  void _setLimit(Duration choice) {
+    final totalMs = _total.inMilliseconds;
+    if (totalMs <= 0) return;
+    final w = ClipLength.window(
+      totalMs: totalMs,
+      limitMs: choice.inMilliseconds,
+      startMs: (_range?.start ?? 0).round(),
+    );
+    setState(() {
+      _limitMs = choice.inMilliseconds;
+      _range = RangeValues(w.startMs.toDouble(), w.endMs.toDouble());
+    });
+    final c = _controller;
+    if (c != null) {
+      // Put the playhead back at the top of the new window so the preview
+      // shows what was just chosen.
+      // ignore: discarded_futures
+      c.seekTo(Duration(milliseconds: w.startMs));
+    }
+  }
+
   /// Slider listener that enforces the max-clip-length invariant by
   /// pushing whichever handle the user is moving back into the
   /// allowed window. Without this RangeSlider would happily let the
   /// user select the full source even if it's 5 minutes long.
   void _onSliderChanged(RangeValues v) {
     final span = v.end - v.start;
-    if (span <= _maxClipMs) {
+    if (span <= _limitMs) {
       setState(() => _range = v);
       return;
     }
@@ -461,7 +545,7 @@ class _VideoTrimPageState extends State<VideoTrimPage>
       // User dragged the start handle right beyond the cap — pin it.
       setState(() {
         _range = RangeValues(
-          v.end - _maxClipMs,
+          v.end - _limitMs,
           v.end,
         );
       });
@@ -469,7 +553,7 @@ class _VideoTrimPageState extends State<VideoTrimPage>
       setState(() {
         _range = RangeValues(
           v.start,
-          v.start + _maxClipMs,
+          v.start + _limitMs,
         );
       });
     }
