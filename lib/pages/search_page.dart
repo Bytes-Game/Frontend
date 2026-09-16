@@ -1157,17 +1157,9 @@ class _PreviewableTileState extends State<_PreviewableTile> {
   void dispose() {
     widget.coordinator.removeListener(_onCoordinatorChanged);
     widget.coordinator.report(_id, 0);
-    final c = _controller;
-    final ref = _listenerRef;
-    _controller = null;
-    _listenerRef = null;
-    if (c != null) {
-      if (ref != null) c.removeListener(ref);
-      // Dedicated per-tile controller — not pooled — so dispose
-      // fully. Fire-and-forget; the engine cleans up async.
-      // ignore: discarded_futures
-      c.dispose();
-    }
+    // Same job as going inactive: give the decoder back. One copy of that
+    // code, so the two paths cannot drift apart.
+    _releasePlayer();
     super.dispose();
   }
 
@@ -1178,8 +1170,43 @@ class _PreviewableTileState extends State<_PreviewableTile> {
     if (_isActive) {
       _ensurePlayerAndPlay();
     } else {
-      // ignore: discarded_futures
-      _controller?.pause();
+      // Let the decoder GO, not just stop.
+      //
+      // ══════════════════════════════════════════════════════════════════
+      // THIS TILE USED TO KEEP ITS HARDWARE DECODER FOR EVER
+      // ══════════════════════════════════════════════════════════════════
+      //
+      // It paused, which stops playback and keeps everything else: the
+      // controller, and with it one of the phone's video decoders. The
+      // controller was only let go when the WIDGET was disposed, and a grid
+      // keeps tiles alive well past the edge of the screen.
+      //
+      // The coordinator gives every visible tile a turn. So every tile that
+      // had ever taken one held a decoder, and they piled up. From a device
+      // log:
+      //
+      //   video decoders created over the session : 112
+      //   PEAK alive at the same time             :  16
+      //   still alive at the end                  :  15
+      //
+      // The feed's pool is capped at FOUR, deliberately, because that is
+      // what the screen needs and what the hardware is comfortable with.
+      // This page had no cap at all.
+      //
+      // What sixteen looks like in the same log: 71 "codec sleep" events,
+      // where the chip powers down a decoder it thinks is idle, and nine
+      // outright "Decoder failed: c2.mtk.avc.decoder" crashes when one was
+      // asked to wake up again. Three quarters of all decoders were
+      // rendering slower than 100ms a frame; a quarter slower than three
+      // SECONDS a frame. They were starving each other.
+      //
+      // Exactly one preview plays at a time — the coordinator guarantees
+      // it — so exactly one decoder is needed for the whole grid.
+      //
+      // The cost is rebuilding the player if this tile takes another turn.
+      // That is a fraction of a second, against a page where nothing plays
+      // at all.
+      _releasePlayer();
     }
     if (mounted) setState(() {});
   }
@@ -1273,6 +1300,19 @@ class _PreviewableTileState extends State<_PreviewableTile> {
     final chosen = (picked != null && picked.isNotEmpty) ? picked : c.videoUrl;
     _origin = chosen;
     return chosen;
+  }
+
+  /// Hand back the decoder. The poster is what the tile shows without one.
+  void _releasePlayer() {
+    final c = _controller;
+    if (c == null) return;
+    final ref = _listenerRef;
+    _controller = null;
+    _listenerRef = null;
+    _completionReported = false;
+    if (ref != null) c.removeListener(ref);
+    // ignore: discarded_futures
+    c.dispose();
   }
 
   Future<void> _ensurePlayerAndPlay() async {
