@@ -84,7 +84,20 @@ class VideoCacheService {
 
   /// The ceiling while a reel on screen is still pulling bytes from
   /// origin AND warming is fetching prefixes. See [_downloadSlots].
-  static const int maxConcurrentDownloadsDuringBackfill = 2;
+  ///
+  /// Three, the same as [maxConcurrentDownloads], because in prefix mode a
+  /// warm is a bounded slice and not an open-ended file. It was two, and
+  /// that is where a session ended up spending most of its time: a device
+  /// log shows the lane count walking 5 → 4 → 2 and staying at 2, with 41
+  /// of 80 warms cancelled and one swipe in five landing on a reel that
+  /// was not ready. Two lanes cannot get ahead of somebody scrolling.
+  ///
+  /// Safe because warming is not what protects the reel on screen —
+  /// [holdWarming] is. The moment the playing reel starts waiting for
+  /// bytes, every warm stands down until it recovers, so an extra lane
+  /// cannot starve it. The lane count only decides how fast the app gets
+  /// ahead while the thing on screen is healthy.
+  static const int maxConcurrentDownloadsDuringBackfill = 3;
 
   /// The ceiling while a reel is back-filling and warming is fetching
   /// WHOLE files. A whole file is unbounded up to [maxPrefetchBytes], so
@@ -977,6 +990,10 @@ class VideoCacheService {
           if (!indexRead && probe.length >= mp4LayoutProbeBytes) {
             indexRead = true;
             indexEndsAt = mp4IndexEndsAt(probe.toBytes());
+            // Now that the index is measured, this download knows how much
+            // IT needs — which is what decides whether abandoning it wastes
+            // the work. See [_Download.spareAtBytes].
+            d.needBytes = prefixReadyBytesFor(d.url, indexEndsAt: indexEndsAt);
             // An index too big to leave room for any video means warming
             // this slice cannot make the reel start sooner. Stop, rather
             // than spend the link on a slice that will not be used and
@@ -1015,6 +1032,7 @@ class VideoCacheService {
               // flight. Registering it then would publish a slice we are
               // about to delete.
               if (d.cancelled) return;
+              d.readyAt = readyAt;
               LocalMediaServer.instance.register(
                 originUrl: d.url,
                 prefixPath: prefixPath,
@@ -1049,6 +1067,34 @@ class VideoCacheService {
             .recordThroughput(d.written, transferClock.elapsed);
       }
 
+      // ══════════════════════════════════════════════════════════════════
+      // A CANCELLED DOWNLOAD USED TO DELETE WORK THAT WAS ALREADY WORKING
+      // ══════════════════════════════════════════════════════════════════
+      //
+      // A slice is handed to the proxy the moment enough of it exists to
+      // start a player — that is the early open above, and from then on the
+      // reel opens from the device instead of the network. Then, if the
+      // viewer scrolled past and the download was cancelled, THIS deleted
+      // the file anyway. The registration survived and pointed at nothing.
+      //
+      // So the app did the work, banked it, announced it was warm, and then
+      // threw it away. In one session 41 of 80 warms were cancelled, and
+      // every one of them that had got this far was binned at the moment it
+      // became useful.
+      //
+      // Scrolling fast is the normal way to use this app, not a mistake to
+      // punish. Keep what arrived.
+      if (d.cancelled && d.readyAt > 0) {
+        // Nothing to re-register: the entry went in at the hand-over, and
+        // the proxy measures the file itself rather than trusting the
+        // length it was given — see LocalMediaServer's range handling and
+        // the `usable` it computes there. So everything that landed
+        // between the hand-over and the cancel is already being served.
+        // Keeping the file IS the fix; there is no second step.
+        ReelDiagnostics.instance.recordPrefixWarmed();
+        unawaited(_enforceSizeCap());
+        return true;
+      }
       if (d.cancelled || d.written <= 0) {
         ReelDiagnostics.instance
             .recordPrefixBailed(d.cancelled ? 'cancelled' : 'empty');
@@ -1280,7 +1326,11 @@ class VideoCacheService {
     // reported more cancellations than there were downloads.
     if (d == null || d.cancelled) return;
 
-    if (d.isPrefix && d.written >= cancelGraceBytes) {
+    // Once a slice has been handed to the proxy its bytes are kept whether
+    // this download finishes or not, so cancelling is free and gives the
+    // slot straight to the next reel. Only work that is NOT yet usable is
+    // worth protecting, and only when it is more than halfway there.
+    if (d.isPrefix && d.readyAt == 0 && d.written >= d.spareAtBytes) {
       if (!d.spared) {
         d.spared = true;
         _spared++;
@@ -1403,6 +1453,9 @@ class VideoCacheService {
   /// one's downloads drain or it measures the leftovers too.
   @visibleForTesting
   int get debugActive => _active.length;
+
+  @visibleForTesting
+  String get debugPipeline => _pipelineSnapshot();
 }
 
 class _Download {
@@ -1422,6 +1475,38 @@ class _Download {
   /// Set once when a cancellation was declined, so the tally counts the
   /// download rather than the number of times the window moved past it.
   bool spared = false;
+
+  /// Bytes on disk when this slice was handed to the proxy, or 0 if that
+  /// has not happened yet.
+  ///
+  /// Past zero the work is BANKED: the bytes stay on the device and the
+  /// reel opens from them, whether this download finishes or is cancelled.
+  /// That is what makes cancelling a banked download free — see
+  /// [VideoCacheService._cancel].
+  int readyAt = 0;
+
+  /// How many bytes this particular file needs before a player can start
+  /// on it — its index plus a couple of seconds of video. 0 until the
+  /// index has been read.
+  ///
+  /// It is a per-file number, not a constant: the index sits in front of
+  /// the video and grows with the running time, from about 12 KB on a
+  /// ten-second clip to 192 KB on a three-minute one.
+  int needBytes = 0;
+
+  /// The point past which abandoning this download wastes more than it
+  /// saves: half of what the file actually needs.
+  ///
+  /// This used to be a flat 384 KB for every file, which is a fixed byte
+  /// count standing in for a question about a specific file — the same
+  /// mistake, in the same service, that [prefixReadySeconds] was written
+  /// to undo. Measured against this app's own catalog, 384 KB is 101% of
+  /// what a ten-second 480p clip needs and 50% of what a 720p_hq one
+  /// needs. So the rule spared one kind of file the moment it was usable
+  /// and binned the other at 49% done, for no reason anybody chose.
+  int get spareAtBytes => needBytes > 0
+      ? needBytes ~/ 2
+      : VideoCacheService.cancelGraceBytes;
 
   StreamSubscription<List<int>>? subscription;
 
