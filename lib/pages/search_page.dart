@@ -1241,27 +1241,31 @@ class _PreviewableTileState extends State<_PreviewableTile> {
   /// A preview plays the ORIGIN, not the cache's loopback address.
   ///
   /// ════════════════════════════════════════════════════════════════════════
-  /// WHY THIS DOES NOT GO THROUGH THE PROXY
+  /// THE GRID USED TO PAY FOR ITS HEAD START AND THEN THROW IT AWAY
   /// ════════════════════════════════════════════════════════════════════════
   ///
-  /// It did, for one build, and that build is the one where previews stopped
-  /// playing altogether rather than merely starting slowly.
+  /// _warmVisible downloads the opening of every visible preview onto the
+  /// phone. Then this played the ORIGIN url, so the player went to the
+  /// network and downloaded those same bytes a second time. The grid paid
+  /// for the head start twice and used it never. That is exactly what "the
+  /// preview sticks for a few seconds and then plays" is: the bytes are
+  /// already on the disk, and the tile is waiting for the network to send
+  /// them again.
   ///
-  /// I cannot prove the proxy address was the cause — see the log line added
-  /// to the failure path below, which is what should have existed before any
-  /// of this. What is true is that it was the only new thing on this path,
-  /// and that the grid never needed it.
+  /// It DID go through the proxy for one build, and previews stopped playing
+  /// altogether. That was blamed on the proxy at the time, with the honest
+  /// note that it could not be proved. It has since been proved to be
+  /// something else: the grid was holding fifteen of the phone's video
+  /// decoders, and there were none left to open anything with. With that
+  /// fixed the same device log shows 93 decoders asked for and 93 granted,
+  /// and not one playback failure. The proxy was not the cause.
   ///
-  /// The proxy exists so the FEED can start a full-screen reel from bytes
-  /// already on disk, with no round trip. A search preview is a muted tile
-  /// one third of the screen wide that runs for twenty-five seconds and then
-  /// hands over to the next one. What it actually needed was to stop
-  /// streaming the raw upload — up to 57 MB where the feed streams 4.5 MB —
-  /// and that is the variant pick below, which stays.
-  ///
-  /// Warming stays too, and still pays: tapping a result opens the real
-  /// reels feed, and THAT goes through the proxy.
-  String _previewUrl() => _originUrl();
+  /// Belt and braces anyway: if a proxied open fails, _ensurePlayerAndPlay
+  /// retries the same tile on the origin url. A preview can now be slow, but
+  /// it cannot go back to not playing at all.
+  String _previewUrl() =>
+      VideoCacheService.instance.playbackUrlFor(_originUrl());
+
 
   /// The same choice, before the cache is asked about it.
   ///
@@ -1316,7 +1320,18 @@ class _PreviewableTileState extends State<_PreviewableTile> {
   }
 
   Future<void> _ensurePlayerAndPlay() async {
-    final url = _previewUrl();
+    await _openAndPlay(_previewUrl());
+  }
+
+  /// Open [url] and start it, falling back to the origin once if the
+  /// cache's loopback address will not open.
+  ///
+  /// The fallback is the whole reason previews can be routed through the
+  /// proxy at all. A proxied open that fails used to mean the tile showed
+  /// nothing, for ever — the page looked broken rather than slow, and it
+  /// took two rounds of diagnosis to tell those apart. Now the worst a bad
+  /// proxy can do is cost one open and put a line in the log.
+  Future<void> _openAndPlay(String url) async {
     if (url.isEmpty) return;
     if (_controller == null) {
       // Dedicated controller per preview tile, NOT routed through
@@ -1363,6 +1378,16 @@ class _PreviewableTileState extends State<_PreviewableTile> {
         // apart. A whole round of diagnosis went into guessing at it.
         ReelDiagnostics.instance
             .log('search preview failed to open ${_shortUrl(url)}: $e');
+        // Hand the decoder back before trying again, or the retry competes
+        // with the player that just failed for one of the few decoders the
+        // phone has.
+        _releasePlayer();
+        final origin = _originUrl();
+        if (url != origin && mounted && _isActive) {
+          ReelDiagnostics.instance
+              .log('search preview retrying from origin ${_shortUrl(origin)}');
+          await _openAndPlay(origin);
+        }
         return;
       }
       // Guard: the widget may have been disposed (and c.dispose()

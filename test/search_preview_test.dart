@@ -42,21 +42,33 @@ void main() {
           reason: 'the raw file must be the fallback, not the first choice');
     });
 
-    test('the player is handed the origin, not the proxy', () {
-      // This was the other way round for one build, and that is the build
-      // where previews stopped playing altogether rather than merely
-      // starting slowly. The proxy was the only new thing on this path and
-      // the grid never needed it: it exists so the FEED can start a
-      // full-screen reel from bytes already on disk. A muted tile a third
-      // of the screen wide, running for twenty-five seconds, does not.
+    test('the player is handed the bytes already on the phone', () {
+      // ═══════════════════════════════════════════════════════════════════
+      // THIS TEST USED TO ASSERT THE OPPOSITE. HERE IS WHY IT CHANGED.
+      // ═══════════════════════════════════════════════════════════════════
       //
-      // What this page actually needed was to stop streaming the raw
-      // upload, and that is the variant pick — which stays.
+      // The proxy was taken off this path once, because the build that put
+      // it here was the build where previews stopped playing altogether.
+      // The note left at the time was honest that this could not be proved
+      // and that the proxy was only the newest thing on the path.
+      //
+      // It has since been proved, and it was not the proxy. The grid was
+      // holding fifteen of the phone's video decoders — it paused tiles
+      // instead of releasing them — so there were none left to open
+      // anything with. In the device log after that fix: 93 decoders asked
+      // for, 93 granted, no playback failures at all.
+      //
+      // Meanwhile this page was downloading the opening of every visible
+      // preview and then streaming the origin anyway, so the same bytes
+      // were fetched twice and the tile sat waiting for the second copy.
+      // That is the "sticks for a few seconds then plays" everybody saw.
       final body = bodyOf(src, 'String _previewUrl()');
-      expect(body, isNot(contains('playbackUrlFor(')),
-          reason: 'the preview is back on the loopback proxy, which is the '
-              'change that coincided with nothing playing at all');
-      expect(body, contains('_originUrl()'));
+      expect(body, contains('playbackUrlFor('),
+          reason: 'warming the opening and then streaming the origin means '
+              'paying for the head start and never using it');
+      expect(body, contains('_originUrl()'),
+          reason: 'the cache is asked about the ORIGIN, which is the name '
+              'the warmed bytes are filed under');
     });
 
     test('a preview that cannot open says so', () {
@@ -64,7 +76,7 @@ void main() {
       // failed looked exactly like a page where every preview was slow:
       // no error, no log line, nothing to tell them apart. A whole round
       // of diagnosis went into guessing at it.
-      final body = bodyOf(src, 'Future<void> _ensurePlayerAndPlay()');
+      final body = bodyOf(src, 'Future<void> _openAndPlay(String url)');
       expect(body, contains('search preview failed to open'),
           reason: 'the failure is swallowed again, so the next time this '
               'breaks there will be no evidence of it');
@@ -73,8 +85,9 @@ void main() {
     });
 
     test('and it is actually used', () {
-      final body = bodyOf(src, 'Future<void> _ensurePlayerAndPlay()');
-      expect(body, contains('final url = _previewUrl();'),
+      final body = bodyOf(src, 'Future<void> _openAndPlay(String url)');
+      final entry = bodyOf(src, 'Future<void> _ensurePlayerAndPlay()');
+      expect(entry, contains('_openAndPlay(_previewUrl())'),
           reason: 'the choice is made and then ignored, which is the bug '
               'with extra code');
       expect(body, isNot(contains('widget.challenge.videoUrl')),
