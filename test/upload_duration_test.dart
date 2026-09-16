@@ -16,7 +16,10 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/dart_source.dart';
+
 import 'package:myapp/config/constants.dart';
+import 'package:myapp/services/clip_length.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/video_processor_service.dart';
 
@@ -144,10 +147,46 @@ void _oneLimit() {
   test('the trim screen reads it rather than keeping its own', () {
     final src = File('lib/pages/video_trim_page.dart').readAsStringSync();
     expect(src,
-        contains('_maxClipMs = VideoProcessorService.maxReelDuration.inMilliseconds'),
+        contains('_hardCapMs = VideoProcessorService.maxReelDuration.inMilliseconds'),
         reason: 'this is where the copy was, with a comment admitting it');
     expect(src, isNot(contains('60 * 1000')),
         reason: 'the old copy is back');
+  });
+
+  test('the picker offers lengths, the cap refuses them', () {
+    // Two different jobs. The picker is what this person asked for; the
+    // cap is what the server will take. Confusing them either offers a
+    // length the upload will be refused for, or silently shortens a clip
+    // somebody explicitly chose.
+    final src = File('lib/pages/video_trim_page.dart').readAsStringSync();
+
+    // The slider clamps to the CHOICE.
+    final slider = bodyOf(src, 'void _onSliderChanged(RangeValues v)');
+    expect(slider, contains('_limitMs'),
+        reason: 'the handles let you select past the length you picked');
+    expect(slider, isNot(contains('_hardCapMs')),
+        reason: 'clamping to the cap ignores the picker entirely — pick '
+            '30s and the slider still gives you three minutes');
+
+    // The window opens at the CHOICE.
+    expect(src, contains('dur.inMilliseconds.clamp(0, _limitMs)'),
+        reason: 'the screen opens showing the cap rather than the length '
+            'that is actually selected, so it posts three minutes unless '
+            'you notice');
+
+    // The final guard is against the CAP.
+    final use = bodyOf(src, 'Future<void> _onUseClip()');
+    expect(use, contains('spanMs > _hardCapMs'),
+        reason: 'the last check before upload has to be the server\'s '
+            'limit; checking the picker would let a bug past it');
+  });
+
+  test('the picker can never offer more than the server takes', () {
+    for (final d in ClipLength.optionsWithin(AppConstants.maxVideoDuration)) {
+      expect(d <= AppConstants.maxVideoDuration, isTrue,
+          reason: '$d would be offered and then refused after the upload '
+              'has already been paid for');
+    }
   });
 
   test('recording stops at the same place', () {
