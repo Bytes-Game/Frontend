@@ -2351,11 +2351,20 @@ class _ReelItem implements _FeedEntry {
       // challenger played fine.
       final opponentHls = (c['topResponseHlsManifestUrl'] as String?) ?? '';
       final opponentFallback = (c['topResponseVideoUrl'] as String?) ?? '';
-      final opponentVariantPick =
-          NetworkQualityService.instance.stickyVariantUrl(
-        'response:${c['topResponseId']}',
-        _coerceVariantsMap(c['topResponseVideoVariants']),
-      );
+      // Only ask when there IS an opponent. Most items in the feed are
+      // plain shorts with no response attached, and asking about their
+      // opponent video counted a "no quality versions available" against a
+      // video that does not exist. That made the quality line in the log
+      // read `none:146` on a catalog where every single video has its
+      // quality versions — a diagnostic that sent a whole round of
+      // investigation after a fault that was never there.
+      final hasOpponent = opponentFallback.isNotEmpty || opponentHls.isNotEmpty;
+      final opponentVariantPick = hasOpponent
+          ? NetworkQualityService.instance.stickyVariantUrl(
+              'response:${c['topResponseId']}',
+              _coerceVariantsMap(c['topResponseVideoVariants']),
+            )
+          : null;
       return _ReelItem(
         id: c['id']?.toString() ?? '',
         type: 'challenge',
@@ -2414,10 +2423,15 @@ class _ReelItem implements _FeedEntry {
       'challenge:${c.id}',
       c.videoVariants,
     );
-    final opponentVariantPick = NetworkQualityService.instance.stickyVariantUrl(
-      'response:${c.topResponseId}',
-      c.topResponseVideoVariants,
-    );
+    // Same as the parse path above: no opponent, no question to ask.
+    final hasOpponent = c.topResponseVideoUrl.isNotEmpty ||
+        c.topResponseHlsManifestUrl.isNotEmpty;
+    final opponentVariantPick = hasOpponent
+        ? NetworkQualityService.instance.stickyVariantUrl(
+            'response:${c.topResponseId}',
+            c.topResponseVideoVariants,
+          )
+        : null;
     final mp4Url = variantPick?.isNotEmpty == true ? variantPick! : c.videoUrl;
     final chosenVideoUrl = mp4Url.isNotEmpty ? mp4Url : c.hlsManifestUrl;
     return _ReelItem(

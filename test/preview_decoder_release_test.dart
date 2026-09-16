@@ -73,7 +73,7 @@ void main() {
 
     test('the tile can take another turn afterwards', () {
       // Release is only safe because the play path rebuilds from nothing.
-      final body = bodyOf(src, 'Future<void> _ensurePlayerAndPlay()');
+      final body = bodyOf(src, 'Future<void> _openAndPlay(String url)');
       expect(body, contains('if (_controller == null) {'),
           reason: 'after a release the controller is null, so the play path '
               'has to be able to build a fresh one');
