@@ -555,12 +555,30 @@ void _capTests() {
     tearDown(() {
       DeviceCapabilities.instance.ramGb = 4.0;
       NetworkQualityService.instance.debugSetQuality(NetworkQuality.unknown);
+      NetworkQualityService.instance.debugClearThroughput();
     });
 
     test('never picks 1080p for the feed, even on a 7GB phone on wifi', () {
+      // Measured, deliberately. The cap being tested here is the one on
+      // PIXELS — 1920-wide video does not belong on a phone screen however
+      // fast the link is. Leaving this unmeasured would test the cold-start
+      // ceiling instead, which caps at 480p and would pass whether the
+      // pixel cap existed or not.
+      for (var i = 0; i < 3; i++) {
+        NetworkQualityService.instance
+            .recordThroughput(2 * 1024 * 1024, const Duration(milliseconds: 100));
+      }
       final url = NetworkQualityService.instance.pickVariantUrl(variants);
       expect(url, isNot('https://cdn/1080.mp4'));
       expect(url, 'https://cdn/720.mp4');
+    });
+
+    test('and while nothing has been measured it is cautious, not greedy', () {
+      // The other half: blind, the feed opens low. A 7GB phone on wifi is
+      // exactly the case that used to be handed the biggest file on no
+      // evidence at all.
+      final url = NetworkQualityService.instance.pickVariantUrl(variants);
+      expect(url, 'https://cdn/480.mp4');
     });
 
     test('a surface that wants full detail can opt out of the cap', () {
