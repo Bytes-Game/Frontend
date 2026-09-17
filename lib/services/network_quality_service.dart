@@ -173,6 +173,38 @@ class NetworkQualityService {
   /// phone screens, not to cap how many bits a 1280-wide one may spend.
   static const String reelsMaxLabel = '720p_hq';
 
+  /// The highest rung to hand out while the link has NEVER been measured.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// THE APP USED TO ASSUME THE BEST CASE AND FIND OUT LATER
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// A feed page arrives with twenty items and every one is assigned a
+  /// rendition the moment it is parsed — before a single byte has been
+  /// downloaded, so before anything has been measured. With nothing
+  /// measured the ceiling stayed at [reelsMaxLabel] and the preference
+  /// order for an unknown connection starts at 720p_hq, so the whole first
+  /// page was committed to the LARGEST files on no evidence at all.
+  ///
+  /// From a device log, a single session:
+  ///
+  ///     quality{720p_hq:19 ... link=measuring}      <- first page
+  ///     quality{720p_hq:19 ... link=5.5Mbps affords=720p}
+  ///     quality{720p_hq:19 ... link=4.0Mbps affords=480p}
+  ///     quality{720p_hq:19 ... link=2.9Mbps affords=480p}
+  ///
+  /// Nineteen reels were served at the top rung while blind, and then the
+  /// count NEVER MOVED AGAIN across seventy more picks: once it could
+  /// measure, the app decided this link could not carry 720p_hq even once.
+  /// It took nineteen reels to find that out, and those nineteen are the
+  /// ones that stalled — every cold open in that session landed in the
+  /// first fifty reels, and the last forty swipes had none at all.
+  ///
+  /// So: start low and let evidence raise it, which is what every adaptive
+  /// player does. The cost is a softer picture for the first few reels of a
+  /// first-ever run; the benefit is that they play.
+  static const String unmeasuredMaxLabel = '480p';
+
   // ══════════════════════════════════════════════════════════════════════
   // HOW FAST THE CONNECTION ACTUALLY IS
   // ══════════════════════════════════════════════════════════════════════
@@ -291,14 +323,66 @@ class NetworkQualityService {
     if (_throughputSamples.length > _maxSamples) {
       _throughputSamples.removeAt(0);
     }
+    _offerToRemember();
   }
 
-  /// Measured bits per second, or null when there is not enough to say.
+  /// Hand the current reading to whoever is keeping it for the next run.
+  ///
+  /// Only when it has actually MOVED — first time it is known, and after
+  /// that only on a change of more than a fifth. A reading that wobbles by
+  /// a few percent between downloads is the same reading, and rewriting the
+  /// file for each one would be a disk write per video for a number nobody
+  /// reads until the next launch.
+  void _offerToRemember() {
+    final worth = bpsWorthRemembering;
+    if (worth == null) return;
+    final prev = _lastOffered;
+    if (prev != null && (worth - prev).abs() <= prev ~/ 5) return;
+    _lastOffered = worth;
+    onSpeedSettled?.call(worth);
+  }
+
+  int? _lastOffered;
+
+  /// Where a settled reading goes so the next run can open on it. Wired in
+  /// main(); left null in tests, which is why this service still has no
+  /// opinion about files.
+  static void Function(int bps)? onSpeedSettled;
+
+  /// What the link measured LAST time the app ran, if anything.
+  ///
+  /// Samples live in memory, so before this every launch started blind and
+  /// paid the cold start above all over again — the same nineteen reels at
+  /// the wrong rendition, every single time the app was opened. A phone's
+  /// connection is not usually a different connection between launches, so
+  /// last time's answer is a far better opening guess than no answer.
+  ///
+  /// It is only a fallback: the moment this run has [_minSamples] real
+  /// readings of its own they win outright, so moving from wifi to cellular
+  /// corrects itself within a few downloads rather than being believed for
+  /// the session.
+  int? _rememberedBps;
+
+  /// Seed the opening guess from a previous run. Idempotent; ignored once
+  /// this run has measured anything itself.
+  void restoreRememberedBps(int? bps) {
+    if (bps == null || bps <= 0) return;
+    _rememberedBps = bps;
+  }
+
+  /// What to hand the store, or null when this run has nothing worth
+  /// keeping. Deliberately the LIVE reading only — writing the remembered
+  /// value back would let one unusual session pin the guess for ever.
+  int? get bpsWorthRemembering =>
+      _throughputSamples.length >= _minSamples ? measuredBps : null;
+
+  /// Measured bits per second, or null when nothing — this run or any
+  /// previous one — has anything to say.
   ///
   /// The median rather than the average, because one download finishing
   /// against a warm CDN edge should not convince us the whole link is fast.
   int? get measuredBps {
-    if (_throughputSamples.length < _minSamples) return null;
+    if (_throughputSamples.length < _minSamples) return _rememberedBps;
     final sorted = List<int>.from(_throughputSamples)..sort();
     return sorted[sorted.length ~/ 2];
   }
@@ -435,7 +519,15 @@ class NetworkQualityService {
   }
 
   @visibleForTesting
-  void debugClearThroughput() => _throughputSamples.clear();
+  void debugClearThroughput() {
+    _throughputSamples.clear();
+    // The remembered reading and the last one offered are part of "what
+    // this service believes about the link". Leaving them behind means a
+    // test that asks for a blind service does not get one, and the blind
+    // case is the whole reason any of this exists.
+    _rememberedBps = null;
+    _lastOffered = null;
+  }
 
   /// Renditions already chosen, keyed by whatever the caller calls a video.
   ///
@@ -521,6 +613,22 @@ class NetworkQualityService {
     if (affordable != null) {
       final asked = _labelRank[ceiling ?? reelsMaxLabel] ?? 2;
       if ((_labelRank[affordable] ?? 0) < asked) ceiling = affordable;
+    } else if (maxLabel == reelsMaxLabel) {
+      // Nothing measured, this run or any previous one. Open low rather
+      // than assuming the best case — see [unmeasuredMaxLabel] for what
+      // assuming the best case cost.
+      //
+      // Only on the REEL path. A caller that passed its own ceiling has
+      // asked for something specific — a full-screen detail view on a
+      // tablet is the case this exists for — and overriding that with a
+      // cautious default would make the opt-out do nothing. The cold start
+      // being fixed here is the feed's: twenty items committed at once, on
+      // a fast scroll, before a byte has been measured. A detail view is
+      // one video that somebody chose to open.
+      if ((_labelRank[unmeasuredMaxLabel] ?? 0) <
+          (_labelRank[ceiling ?? reelsMaxLabel] ?? 2)) {
+        ceiling = unmeasuredMaxLabel;
+      }
     }
     final order = _preferenceOrder(_current, ramGb, ceiling);
     for (final label in order) {

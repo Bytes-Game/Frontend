@@ -14,6 +14,7 @@ import 'package:myapp/providers/theme_provider.dart';
 import 'package:myapp/services/connection_prewarm_service.dart';
 import 'package:myapp/services/device_capabilities.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/link_speed_store.dart';
 import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/video_player_service.dart';
@@ -88,6 +89,26 @@ Future<void> main() async {
   // OS hasn't reported connectivity yet, we fall back to medium.
   // ignore: discarded_futures
   NetworkQualityService.instance.start();
+  // Seed the quality picker with how fast this connection was LAST time.
+  //
+  // A feed page assigns every one of its twenty items a rendition the
+  // moment it is parsed, which is before any byte has been downloaded and
+  // so before anything can have been measured. Without a previous run to
+  // go on, that whole first page is committed on no evidence — and a device
+  // log shows exactly what that costs: nineteen reels served at the top
+  // rendition while blind, on a link the app then decided could never carry
+  // it, and every cold open of the session landing in that opening stretch.
+  //
+  // Fire-and-forget: until it resolves the picker is simply cautious, which
+  // is the behaviour with no stored value at all.
+  // ignore: discarded_futures
+  LinkSpeedStore.instance.read().then(
+      NetworkQualityService.instance.restoreRememberedBps);
+  // ...and keep this run's answer for the next one.
+  NetworkQualityService.onSpeedSettled = (bps) {
+    // ignore: discarded_futures
+    LinkSpeedStore.instance.write(bps);
+  };
   // Prewarm the DNS + TLS connection to the backend (and R2/CDN if
   // configured via env / build flag). This makes the FIRST reel the
   // user taps avoid the 200-600ms cold-handshake tax — the OS socket
