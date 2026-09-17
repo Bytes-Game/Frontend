@@ -583,20 +583,78 @@ class NetworkQualityService {
     if (key.isEmpty) return pickVariantUrl(variants, maxLabel: maxLabel);
 
     final already = _chosenFor[key];
-    if (already != null) return already;
+    if (already != null && !_shouldReconsider(key, already)) return already;
 
+    final blind = measuredBps == null;
     final picked = pickVariantUrl(variants, maxLabel: maxLabel);
     if (picked != null && picked.isNotEmpty) {
       if (_chosenFor.length >= _chosenMemory) {
-        _chosenFor.remove(_chosenFor.keys.first);
+        final oldest = _chosenFor.keys.first;
+        _chosenFor.remove(oldest);
+        _blindPicks.remove(oldest);
       }
       _chosenFor[key] = picked;
+      if (blind) {
+        _blindPicks.add(key);
+      } else {
+        _blindPicks.remove(key);
+      }
     }
     return picked;
   }
 
+  /// Whether a rendition already chosen for [key] is worth choosing again.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// A GUESS MADE IN THE DARK SHOULD NOT OUTLIVE THE DARK
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// The first feed page is parsed before a single byte has been measured,
+  /// so every item on it is chosen blind — and the choice is remembered, so
+  /// it used to last the whole session. From a device log:
+  ///
+  ///     quality{480p:28 link=measuring}                    <- first page
+  ///     quality{480p:32 720p_hq:11 720p:4 link=8.7Mbps affords=720p_hq}
+  ///
+  /// The link turned out to be 8.7 Mbps, comfortably able to carry the best
+  /// rendition there is. The twenty-eight items at the top of the feed —
+  /// the ones actually watched — stayed on the cautious one until the app
+  /// was closed.
+  ///
+  /// So a blind choice is PROVISIONAL. Once there is evidence, it is made
+  /// again.
+  ///
+  /// Only while nothing has acted on it. Once a file has been warmed, is
+  /// being warmed, or has a player open on it, changing our mind throws
+  /// that work away — and if the viewer is watching it, restarts the video
+  /// underneath them. Not worth a sharper picture.
+  bool _shouldReconsider(String key, String already) {
+    if (!_blindPicks.contains(key)) return false;
+    if (measuredBps == null) return false;
+    if (isUrlCommitted?.call(already) ?? false) {
+      // Settled: it keeps what it has, and stops being asked about.
+      _blindPicks.remove(key);
+      return false;
+    }
+    return true;
+  }
+
+  /// Keys whose rendition was chosen before anything had been measured.
+  final Set<String> _blindPicks = <String>{};
+
+  /// Whether anything has acted on a url yet — warmed, warming, or open in
+  /// a player. Wired in main(); left null in tests, which is why this
+  /// service still knows nothing about caches or players.
+  static bool Function(String url)? isUrlCommitted;
+
   @visibleForTesting
-  void debugClearChosenVariants() => _chosenFor.clear();
+  void debugClearChosenVariants() {
+    _chosenFor.clear();
+    _blindPicks.clear();
+  }
+
+  @visibleForTesting
+  int get debugBlindPickCount => _blindPicks.length;
 
   String? pickVariantUrl(Map<String, String> variants,
       {String? maxLabel = reelsMaxLabel}) {
