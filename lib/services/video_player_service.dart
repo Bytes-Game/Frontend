@@ -1118,8 +1118,16 @@ class VideoPlayerService {
     controller.setVolume(0);
     ReelDiagnostics.instance.recordPlayerRetired();
     deferRelease(() {
+      // Counted from here to the moment dispose actually finishes. The
+      // slot in the pool was handed on already; this is the stretch where
+      // the phone is still holding the decoder behind it. See
+      // ReelDiagnostics.recordReleaseStarted for why that gap is the
+      // thing being measured.
+      ReelDiagnostics.instance.recordReleaseStarted();
       // ignore: discarded_futures
-      controller.dispose();
+      controller
+          .dispose()
+          .whenComplete(ReelDiagnostics.instance.recordReleaseFinished);
     });
   }
 
@@ -1133,6 +1141,11 @@ class VideoPlayerService {
   /// clock. Tests swap this for a queue they drain by hand.
   @visibleForTesting
   static void Function(VoidCallback release) deferRelease = _afterNextFrame;
+
+  /// Retire a controller the way the pool does, so a test can watch the
+  /// shutdown queue without having to drive a whole feed to get there.
+  @visibleForTesting
+  void debugRetire(VideoPlayerController controller) => _retire(controller);
 
   /// Turns audio decoding off, and back on, for a single native player.
   ///
