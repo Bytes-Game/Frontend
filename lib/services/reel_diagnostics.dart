@@ -111,6 +111,48 @@ class ReelDiagnostics {
     _downloads++;
   }
 
+  /// A player was told to shut down, and finished shutting down.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// THE SLOT IS FREE BEFORE THE DECODER IS
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// The feed keeps four players. When a reel scrolls away its slot is
+  /// handed to the next reel straight away — but telling the phone to shut
+  /// the old one down is not instant, and the decoder stays occupied until
+  /// it finishes. So the app's own books can say four while the phone is
+  /// holding more.
+  ///
+  /// A device log showed thirteen decoders alive at once against a pool of
+  /// four, with eighty-six players retired over the session. The search
+  /// grid was ruled out — it peaked at one — and the sizes say seven of the
+  /// twelve created just before the peak were the FEED's.
+  ///
+  /// This is the number that says whether shutting down is the reason. If
+  /// it sits at eight or nine, that is the answer. If it sits at zero, the
+  /// suspicion is wrong and the extra decoders are coming from somewhere
+  /// else entirely — which is exactly what the preview count did to the
+  /// last theory.
+  void recordReleaseStarted() {
+    if (!_visible) return;
+    _releasing++;
+    if (_releasing > _releasingPeak) _releasingPeak = _releasing;
+  }
+
+  void recordReleaseFinished() {
+    if (!_visible) return;
+    if (_releasing > 0) _releasing--;
+  }
+
+  int _releasing = 0;
+  int _releasingPeak = 0;
+
+  @visibleForTesting
+  int get debugReleasing => _releasing;
+
+  @visibleForTesting
+  int get debugReleasingPeak => _releasingPeak;
+
   /// A search-grid preview built a player, and gave one back.
   ///
   /// ══════════════════════════════════════════════════════════════════════
@@ -235,6 +277,14 @@ class ReelDiagnostics {
   }
 
   /// Current tallies. Also useful from a debugger or a test.
+  /// How many players have been told to shut down and have not finished.
+  ///
+  /// Always shown once anything has been retired, because zero here is an
+  /// ANSWER, not an absence: it rules the shutdown queue out as the reason
+  /// decoders are piling up.
+  String _releasingNow() =>
+      _retired == 0 ? '' : ' (shutting down now=$_releasing peak=$_releasingPeak)';
+
   /// How many players the SEARCH GRID is holding — live now, and the most
   /// it ever held. Silent until the grid has opened one, so a session that
   /// never visits search does not carry a row of zeroes.
@@ -255,7 +305,7 @@ class ReelDiagnostics {
         '| downloads=$_downloads prefixes warmed=$_prefixWarmed '
         '(+tail $_tailWarmed) failed=$_prefixFailed$bailed  '
         '| ${_spares()}  '
-        '| players retired=$_retired'
+        '| players retired=$_retired${_releasingNow()}'
         '${_previews()}${_pipeline()}';
   }
 
@@ -319,6 +369,7 @@ class ReelDiagnostics {
     // worse than no reset: every test after the first reads numbers it did
     // not produce, and the failures point at the wrong code.
     _previewOpened = _previewReleased = _previewLive = _previewPeak = 0;
+    _releasing = _releasingPeak = 0;
   }
 
   @visibleForTesting
