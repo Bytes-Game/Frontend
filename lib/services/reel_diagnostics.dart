@@ -111,6 +111,49 @@ class ReelDiagnostics {
     _downloads++;
   }
 
+  /// A search-grid preview built a player, and gave one back.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// WHY THIS IS COUNTED SEPARATELY FROM THE FEED'S PLAYERS
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// The feed's players come from a pool that cannot exceed four. The
+  /// grid's do not — each tile owns its own — so the two have to be told
+  /// apart to know which one is holding decoders.
+  ///
+  /// A device log showed the phone's live decoder count climbing from five
+  /// to TWELVE, every one of them in the stretch just after the search page
+  /// opened, with seven created and not one released. Android reclaimed a
+  /// decoder by force during it.
+  ///
+  /// It could not be settled from that log. Reels are now served at the
+  /// same 480p the grid uses, so a decoder's size no longer says which part
+  /// of the app asked for it — the one signal that separated them is gone.
+  /// Rather than guess, the app now says it out loud.
+  void recordPreviewOpened() {
+    if (!_visible) return;
+    _previewOpened++;
+    _previewLive++;
+    if (_previewLive > _previewPeak) _previewPeak = _previewLive;
+  }
+
+  void recordPreviewReleased() {
+    if (!_visible) return;
+    _previewReleased++;
+    if (_previewLive > 0) _previewLive--;
+  }
+
+  int _previewOpened = 0;
+  int _previewReleased = 0;
+  int _previewLive = 0;
+  int _previewPeak = 0;
+
+  @visibleForTesting
+  int get debugPreviewLive => _previewLive;
+
+  @visibleForTesting
+  int get debugPreviewPeak => _previewPeak;
+
   /// A reel's opening slice was fetched and handed to the proxy.
   void recordPrefixWarmed() {
     if (!_visible) return;
@@ -192,6 +235,14 @@ class ReelDiagnostics {
   }
 
   /// Current tallies. Also useful from a debugger or a test.
+  /// How many players the SEARCH GRID is holding — live now, and the most
+  /// it ever held. Silent until the grid has opened one, so a session that
+  /// never visits search does not carry a row of zeroes.
+  String _previews() => _previewOpened == 0
+      ? ''
+      : '  | previews live=$_previewLive peak=$_previewPeak '
+          'opened=$_previewOpened released=$_previewReleased';
+
   String summary() {
     final starts = _proxied + _wholeFile + _origin;
     if (starts == 0) return 'no reels played yet';
@@ -204,7 +255,8 @@ class ReelDiagnostics {
         '| downloads=$_downloads prefixes warmed=$_prefixWarmed '
         '(+tail $_tailWarmed) failed=$_prefixFailed$bailed  '
         '| ${_spares()}  '
-        '| players retired=$_retired${_pipeline()}';
+        '| players retired=$_retired'
+        '${_previews()}${_pipeline()}';
   }
 
   /// Spare tallies, one group per gesture, warm before cold.
@@ -263,6 +315,10 @@ class ReelDiagnostics {
     _retired = 0;
     _sinceSummary = 0;
     _pipelineProbe = null;
+    // The preview census too. A reset that leaves some counters behind is
+    // worse than no reset: every test after the first reads numbers it did
+    // not produce, and the failures point at the wrong code.
+    _previewOpened = _previewReleased = _previewLive = _previewPeak = 0;
   }
 
   @visibleForTesting
