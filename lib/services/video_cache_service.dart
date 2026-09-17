@@ -591,6 +591,16 @@ class VideoCacheService {
   bool isReady(String url) =>
       pathFor(url) != null || LocalMediaServer.instance.localUrlFor(url) != null;
 
+  /// Whether anything has acted on [url] yet: already warmed, being
+  /// downloaded now, or waiting in the queue for a slot.
+  ///
+  /// Asked by the quality picker before it changes its mind about which
+  /// rendition a reel should use. Changing to a different file after work
+  /// has started on this one throws that work away and, if a player is
+  /// already open on it, restarts the video under the viewer.
+  bool isSpokenFor(String url) =>
+      isReady(url) || _active.containsKey(url) || _queue.contains(url);
+
   /// Resolves once [url] can start without a network round-trip, or when
   /// [timeout] elapses — whichever lands first. The value is simply
   /// [isReady] at that moment, so the caller can choose between opening

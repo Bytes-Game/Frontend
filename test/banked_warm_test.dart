@@ -262,6 +262,51 @@ void main() {
     });
   });
 
+  group('whether a reel has been acted on yet', () {
+    // The quality picker asks this before changing its mind about which
+    // rendition a reel should use. "Acted on" has to include work that has
+    // STARTED and not only work that has finished: abandoning a download
+    // half way through wastes exactly as much as abandoning a finished one,
+    // and the half-finished case is the common one during a fast scroll.
+
+    test('a reel nothing has touched is free', () {
+      expect(VideoCacheService.instance.isSpokenFor('https://cdn/nobody.mp4'),
+          isFalse);
+    });
+
+    test('a reel being downloaded right now is spoken for', () async {
+      final release = Completer<void>();
+      serveThenHold(4096, release.future);
+      const url = 'https://cdn/inflight/480p.mp4';
+      VideoCacheService.instance.warm([url]);
+
+      expect(await eventually(() => VideoCacheService.instance.isSpokenFor(url)),
+          isTrue,
+          reason: 'a download in flight reads as untouched, so the picker '
+              'switches file and throws the work away');
+      release.complete();
+    });
+
+    test('a reel waiting for a slot is spoken for', () async {
+      // More urls than lanes, so at least one has to queue.
+      final release = Completer<void>();
+      serveThenHold(4096, release.future);
+      final urls = [
+        for (var i = 0; i < 9; i++) 'https://cdn/q$i/480p.mp4',
+      ];
+      VideoCacheService.instance.warm(urls);
+
+      expect(
+        await eventually(() => urls.any((u) =>
+            VideoCacheService.instance.isSpokenFor(u))),
+        isTrue,
+        reason: 'a reel the app has already committed to fetching reads as '
+            'untouched while it waits its turn',
+      );
+      release.complete();
+    });
+  });
+
   group('work that never became usable is still cleaned up', () {
     test('a few bytes of index is not a warm reel', () async {
       final release = Completer<void>();

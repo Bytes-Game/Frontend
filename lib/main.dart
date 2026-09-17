@@ -101,14 +101,25 @@ Future<void> main() async {
   //
   // Fire-and-forget: until it resolves the picker is simply cautious, which
   // is the behaviour with no stored value at all.
-  // ignore: discarded_futures
-  LinkSpeedStore.instance.read().then(
-      NetworkQualityService.instance.restoreRememberedBps);
+  // AWAITED, not fired and forgotten. The first feed page is parsed within
+  // moments of the app starting, and every item on it is given a quality
+  // right then — so if this has not landed yet, that whole page is chosen
+  // blind and stays on the cautious rendition. One small file read is worth
+  // a few milliseconds of startup to make that impossible rather than
+  // merely unlikely.
+  NetworkQualityService.instance
+      .restoreRememberedBps(await LinkSpeedStore.instance.read());
   // ...and keep this run's answer for the next one.
   NetworkQualityService.onSpeedSettled = (bps) {
     // ignore: discarded_futures
     LinkSpeedStore.instance.write(bps);
   };
+  // Let the picker ask whether a reel has already been acted on, so it can
+  // tell a choice it is free to revisit from one that is already being
+  // downloaded or watched.
+  NetworkQualityService.isUrlCommitted = (url) =>
+      VideoCacheService.instance.isSpokenFor(url) ||
+      VideoPlayerService.instance.peekController(url) != null;
   // Prewarm the DNS + TLS connection to the backend (and R2/CDN if
   // configured via env / build flag). This makes the FIRST reel the
   // user taps avoid the 200-600ms cold-handshake tax — the OS socket

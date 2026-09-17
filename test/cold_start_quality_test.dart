@@ -24,6 +24,8 @@
 // Two fixes, both tested here: open low while blind, and do not BE blind
 // on every launch.
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:myapp/services/network_quality_service.dart';
@@ -145,6 +147,38 @@ void main() {
     });
   });
 
+  _provisionalTests();
+
+  group('the stored reading is there before the feed needs it', () {
+    // main() cannot be unit-tested, and the property matters: the first
+    // feed page is parsed within moments of the app starting, and gives
+    // every item on it a quality right then. If the read has not landed
+    // yet, that whole page is chosen blind and the session opens soft on a
+    // connection that was measured and stored yesterday.
+    //
+    // Fired and forgotten it USUALLY wins the race, which is the worst kind
+    // of correct: it fails occasionally and looks like something else.
+    final main = File('lib/main.dart').readAsStringSync();
+
+    test('the read is awaited, not fired and forgotten', () {
+      expect(main, contains('await LinkSpeedStore.instance.read()'),
+          reason: 'a race whose prize is the quality of the whole first '
+              'page, decided by whichever finishes first');
+      expect(main, isNot(contains('LinkSpeedStore.instance.read().then')),
+          reason: 'back to fire-and-forget');
+    });
+
+    test('and it happens before the app runs', () {
+      final readAt = main.indexOf('LinkSpeedStore.instance.read()');
+      final runAt = main.indexOf('runApp(');
+      expect(readAt, greaterThan(-1));
+      expect(runAt, greaterThan(-1));
+      expect(readAt, lessThan(runAt),
+          reason: 'awaited, but after the app has already started, which '
+              'awaits nothing that matters');
+    });
+  });
+
   group('keeping the reading for next time', () {
     test('it is offered once there is something to say', () {
       final offered = <int>[];
@@ -191,6 +225,178 @@ void main() {
       nq.restoreRememberedBps(9000000);
       expect(offered, isEmpty);
       expect(nq.bpsWorthRemembering, isNull);
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// A GUESS MADE IN THE DARK SHOULD NOT OUTLIVE THE DARK
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Opening low while blind fixed the stalling — a later session logged 91
+// swipes and NOT ONE cold open, where the session before it had ten. But
+// the cautious choice was remembered, so it lasted the whole session:
+//
+//     quality{480p:28 link=measuring}                    <- first page
+//     quality{480p:32 720p_hq:11 720p:4 link=8.7Mbps affords=720p_hq}
+//
+// The link turned out to be 8.7 Mbps, comfortably able to carry the best
+// rendition there is, and the twenty-eight items at the top of the feed —
+// the ones actually watched — stayed soft until the app was closed.
+//
+// So a blind choice is provisional, and made again once there is evidence.
+// But only while nothing has acted on it: re-choosing after a file has been
+// downloaded throws that work away, and re-choosing under a player that is
+// open on it restarts the video in the viewer's face.
+
+void _provisionalTests() {
+  const variants = {
+    '480p': 'https://cdn/p/480p.mp4',
+    '720p': 'https://cdn/p/720p.mp4',
+    '720p_hq': 'https://cdn/p/720p_hq.mp4',
+  };
+
+  late NetworkQualityService nq;
+
+  setUp(() {
+    nq = NetworkQualityService.instance;
+    nq.debugClearThroughput();
+    nq.debugClearChosenVariants();
+    NetworkQualityService.isUrlCommitted = null;
+    NetworkQualityService.onSpeedSettled = null;
+  });
+
+  tearDown(() {
+    nq.debugClearThroughput();
+    nq.debugClearChosenVariants();
+    NetworkQualityService.isUrlCommitted = null;
+  });
+
+  void measureFast() {
+    for (var i = 0; i < 3; i++) {
+      nq.recordThroughput(2 * 1024 * 1024, const Duration(milliseconds: 100));
+    }
+  }
+
+  group('a choice made in the dark is provisional', () {
+    test('and is made again once the link has been measured', () {
+      final blind = nq.stickyVariantUrl('c:1', Map.of(variants));
+      expect(blind, contains('480p'), reason: 'not blind to begin with');
+
+      measureFast();
+      final after = nq.stickyVariantUrl('c:1', Map.of(variants));
+      expect(after, isNot(contains('480p')),
+          reason: 'the whole first page stays soft for the session, on a '
+              'link that turned out to carry the best rendition there is');
+    });
+
+    test('but only once — after that it is settled', () {
+      nq.stickyVariantUrl('c:2', Map.of(variants));
+      measureFast();
+      final first = nq.stickyVariantUrl('c:2', Map.of(variants));
+      final second = nq.stickyVariantUrl('c:2', Map.of(variants));
+      expect(second, first,
+          reason: 'a reel whose choice keeps moving is a reel that keeps '
+              'throwing away the download it just started');
+    });
+
+    test('a choice made WITH evidence is never revisited', () {
+      measureFast();
+      final chosen = nq.stickyVariantUrl('c:3', Map.of(variants));
+      // The link gets worse. The reel keeps what it has, because warming
+      // and playing have to agree on one file.
+      nq.debugClearThroughput();
+      for (var i = 0; i < 3; i++) {
+        nq.recordThroughput(100 * 1024, const Duration(milliseconds: 900));
+      }
+      expect(nq.stickyVariantUrl('c:3', Map.of(variants)), chosen);
+    });
+
+    test('still blind means still the same answer', () {
+      final a = nq.stickyVariantUrl('c:4', Map.of(variants));
+      final b = nq.stickyVariantUrl('c:4', Map.of(variants));
+      expect(b, a, reason: 'warming and playing disagreed while blind');
+    });
+
+    test('and is not re-chosen over and over while it stays blind', () {
+      // Same answer every time, so a re-choice is invisible in the URL —
+      // but not in the log. Every pass through the picker is counted, and
+      // the feed re-parses constantly, so the quality line that these
+      // fixes are read by would report hundreds of picks for twenty reels.
+      NetworkQualityService.variantPicks.clear();
+      for (var i = 0; i < 5; i++) {
+        nq.stickyVariantUrl('c:10', Map.of(variants));
+      }
+      final total =
+          NetworkQualityService.variantPicks.values.fold(0, (a, b) => a + b);
+      expect(total, 1,
+          reason: 'the quality line reported $total picks for one reel, '
+              'which is the diagnostic lying about the size of the feed');
+    });
+  });
+
+  group('work already started is never thrown away', () {
+    test('a reel that has been downloaded keeps its choice', () {
+      final blind = nq.stickyVariantUrl('c:5', Map.of(variants));
+      NetworkQualityService.isUrlCommitted = (url) => url == blind;
+      measureFast();
+      expect(nq.stickyVariantUrl('c:5', Map.of(variants)), blind,
+          reason: 'the downloaded file was abandoned for a sharper one, so '
+              'the reel opens cold and the work is wasted');
+    });
+
+    test('a reel with a player open on it keeps its choice', () {
+      // Same predicate, and the reason it also covers players: changing
+      // the url under a player restarts the video in the viewer's face.
+      final blind = nq.stickyVariantUrl('c:6', Map.of(variants));
+      NetworkQualityService.isUrlCommitted = (_) => true;
+      measureFast();
+      expect(nq.stickyVariantUrl('c:6', Map.of(variants)), blind);
+    });
+
+    test('and it stops being asked about', () {
+      final blind = nq.stickyVariantUrl('c:7', Map.of(variants));
+      var asked = 0;
+      NetworkQualityService.isUrlCommitted = (_) {
+        asked++;
+        return true;
+      };
+      measureFast();
+      nq.stickyVariantUrl('c:7', Map.of(variants));
+      nq.stickyVariantUrl('c:7', Map.of(variants));
+      nq.stickyVariantUrl('c:7', Map.of(variants));
+      expect(asked, 1,
+          reason: 'a settled reel is re-examined on every single parse, and '
+              'the feed re-parses constantly');
+      expect(nq.stickyVariantUrl('c:7', Map.of(variants)), blind);
+    });
+
+    test('an untouched reel is free to change', () {
+      final blind = nq.stickyVariantUrl('c:8', Map.of(variants));
+      NetworkQualityService.isUrlCommitted = (_) => false;
+      measureFast();
+      expect(nq.stickyVariantUrl('c:8', Map.of(variants)), isNot(blind));
+    });
+
+    test('no predicate wired means nothing is assumed committed', () {
+      // Tests and any surface that does not wire it still behave, rather
+      // than silently freezing every blind choice.
+      NetworkQualityService.isUrlCommitted = null;
+      final blind = nq.stickyVariantUrl('c:9', Map.of(variants));
+      measureFast();
+      expect(nq.stickyVariantUrl('c:9', Map.of(variants)), isNot(blind));
+    });
+  });
+
+  group('the provisional list does not grow without bound', () {
+    test('it is forgotten alongside the choice it belongs to', () {
+      // _chosenFor is capped and evicts oldest-first. A parallel set that
+      // did not evict with it would be a slow leak for the session.
+      for (var i = 0; i < 600; i++) {
+        nq.stickyVariantUrl('bulk:$i', Map.of(variants));
+      }
+      expect(nq.debugBlindPickCount, lessThanOrEqualTo(500),
+          reason: 'the provisional list outlived the choices it tracks');
     });
   });
 }
