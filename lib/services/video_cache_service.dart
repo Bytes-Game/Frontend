@@ -497,11 +497,45 @@ class VideoCacheService {
 
   /// Fewest reels ahead we will warm, even on a link that cannot afford it.
   ///
-  /// The next reel is one gesture away at all times, so it is the last
-  /// thing to give up on. If the link cannot finish even that within a
-  /// dwell, warming it part-way is still worth more than not starting —
-  /// see [prefixReadyBytes], where a part-finished warm is playable.
-  static const int minPrefetchDepth = 1;
+  /// ══════════════════════════════════════════════════════════════════════
+  /// FOUR, BECAUSE THE APP KEEPS FOUR PLAYERS READY
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// This was 1, and for as long as nothing had been measured that did not
+  /// matter: with no measurement the depth fell through to a table that
+  /// answered 6. Then the app learned to remember how fast the link was
+  /// last time, so a measurement exists from the first moment — and the
+  /// measured branch started answering on the very first page.
+  ///
+  /// What it answered was 2, and the session got worse in exactly the way
+  /// a shallow window does:
+  ///
+  ///     depth=6   proxy 93%   swipe 91/0 warm/cold
+  ///     depth=2   proxy 72%   swipe 63/3 warm/cold
+  ///
+  /// The measured number is not wrong about what it measures — at 2 Mbps of
+  /// spare, one dwell buys about two slices. It is answering the wrong
+  /// question. That is a REFILL RATE, and a window is a BUFFER: if the link
+  /// can fetch two reels in the time the viewer watches one, it has surplus
+  /// and should be building a deeper buffer, not stopping at two. Sizing a
+  /// buffer by its refill rate is backwards, and the faster the viewer
+  /// scrolls the more backwards it gets.
+  ///
+  /// Rewriting that calculation is a bigger change than this needs. What it
+  /// needs is a floor with a reason: never fewer reels of BYTES than the
+  /// app holds PLAYERS. Below that the app is knowingly holding a player
+  /// for a reel it has not downloaded, which is a cold open it chose to
+  /// have.
+  ///
+  /// Four is [VideoPoolConfig.onScreenWorkingSet] — the reel on screen, one
+  /// either side, and the opponent of a battle. It cannot be read from here
+  /// because that file imports this one, so a test pins the two together
+  /// instead; see prefetch_depth_test.
+  ///
+  /// Safe on a link that cannot afford it, because the depth is not what
+  /// protects the reel being watched — [holdWarming] is. Every warm stands
+  /// down the moment the playing reel starts waiting for bytes.
+  static const int minPrefetchDepth = 4;
 
   /// How many reels ahead to warm.
   ///

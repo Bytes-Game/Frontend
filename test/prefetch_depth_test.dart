@@ -20,6 +20,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:myapp/services/local_media_server.dart';
 import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/services/video_cache_service.dart';
+import 'package:myapp/services/video_player_service.dart';
 
 void main() {
   final net = NetworkQualityService.instance;
@@ -71,7 +72,39 @@ void main() {
               'setting out to is what produced 88 cancellations in 175');
       // 3 Mbps affords 480p (1.5 Mbps), leaving 1.5 Mbps spare, which is
       // about 1.4 reels per six-second dwell.
-      expect(depth, reelsAffordableAt(3000000, pictureBps: 1500000).round());
+      //
+      // Floored, though. This used to assert that number exactly, and the
+      // exact number is below the count of players the app keeps ready —
+      // so the app would hold four players against one reel of downloaded
+      // bytes, which is three cold opens it chose to have.
+      //
+      // The 88-cancellations-in-175 this test was written for does not come
+      // back with a floor of four: a warm that gets cancelled now KEEPS its
+      // bytes and still counts, so an abandoned warm is no longer wasted
+      // work. That was not true when this number was first chosen.
+      final affordable =
+          reelsAffordableAt(3000000, pictureBps: 1500000).round();
+      expect(depth, affordable < VideoCacheService.minPrefetchDepth
+          ? VideoCacheService.minPrefetchDepth
+          : affordable);
+    });
+
+    test('never fewer reels of bytes than the app holds players', () {
+      // The floor, and the reason for it. Two numbers that must agree,
+      // in two files that cannot import each other — so they are pinned
+      // here instead of one of them quietly drifting.
+      expect(VideoCacheService.minPrefetchDepth,
+          VideoPoolConfig.onScreenWorkingSet,
+          reason: 'below this the app holds a player for a reel whose bytes '
+              'it has not fetched, which is a cold open it chose to have');
+    });
+
+    test('even a link that can barely afford anything keeps the floor', () {
+      linkAt(1200000); // slower than one 480p reel
+      expect(cache.prefetchDepth, VideoCacheService.minPrefetchDepth,
+          reason: 'the depth is not what protects the reel being watched — '
+              'holdWarming is, and it stands every warm down the moment '
+              'that reel starts waiting');
     });
 
     test('a fast link gets a deeper window than a slow one', () {
