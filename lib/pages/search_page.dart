@@ -1315,6 +1315,7 @@ class _PreviewableTileState extends State<_PreviewableTile> {
     _listenerRef = null;
     _completionReported = false;
     if (ref != null) c.removeListener(ref);
+    ReelDiagnostics.instance.recordPreviewReleased();
     // ignore: discarded_futures
     c.dispose();
   }
@@ -1343,6 +1344,9 @@ class _PreviewableTileState extends State<_PreviewableTile> {
       final c = VideoPlayerController.networkUrl(Uri.parse(url));
       _controller = c;
       _completionReported = false;
+      // Counted so a log can say whether the grid or the feed is holding
+      // the phone's decoders. See ReelDiagnostics.recordPreviewOpened.
+      ReelDiagnostics.instance.recordPreviewOpened();
 
       void onUpdate() {
         if (!mounted) return;
