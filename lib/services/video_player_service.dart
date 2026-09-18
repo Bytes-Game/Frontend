@@ -104,10 +104,65 @@ class VideoPoolConfig {
   ///
   /// RAM still sets the floor — a 2 GB phone should not hold three players
   /// even though its decoder would allow it — but it no longer sets the
-  /// ceiling, because [maxConcurrentDecoders] is the constraint that
-  /// actually binds. See that constant for the device evidence.
-  factory VideoPoolConfig.forRam(double ramGb) {
-    return _byRam(ramGb)._clampedToDecoderBudget();
+  /// ceiling, because the decoder is the constraint that actually binds.
+  /// See [maxConcurrentDecoders] for the device evidence.
+  ///
+  /// [decoderBudget] is what the chip itself said, via [DecoderBudget]. Null
+  /// means it was never asked or would not answer, and then this behaves
+  /// exactly as it did before that reading existed. It can only ever make
+  /// the app ask for less — see [workingSetFor].
+  factory VideoPoolConfig.forRam(double ramGb, {int? decoderBudget}) {
+    return _byRam(ramGb)._clampedToDecoderBudget(decoderBudget);
+  }
+
+  /// Decoders this app needs for things that are NOT the feed's players.
+  ///
+  /// Not guessed — each one is a measured peak from a device log:
+  ///
+  ///   1  the search grid's preview   (`previews peak=1`)
+  ///   2  players still shutting down (`shutting down peak=2`)
+  ///   1  margin, because the phone is not the app's alone
+  ///
+  /// Subtracted from what the chip says it will run, so the feed only ever
+  /// asks for what is left over.
+  static const int decoderReserve = 4;
+
+  /// How many players the screen may ask for on a phone that will run
+  /// [budget] decoders at once.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// THIS REDUCES DEMAND, NOT THE CAP. THAT DISTINCTION IS THE WHOLE POINT
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// [maxConcurrentDecoders] carries the account of a release that lowered
+  /// the POOL and changed nothing: the screen still asked for the same
+  /// players, so the same number were alive and one was thrown away on
+  /// every swipe. "Fewer live decoders has to come from asking for fewer
+  /// players, not from a cap underneath the demand."
+  ///
+  /// So this lowers [prefetchAhead] and [prefetchBack] — which is what
+  /// decides whether a NEIGHBOUR gets a player at all — and the pool
+  /// follows. A phone that cannot afford a warm neighbour above and below
+  /// stops being offered one, rather than being given one and having it
+  /// taken away again.
+  ///
+  /// Never more than [onScreenWorkingSet]: four is what the screen needs —
+  /// the reel being watched, one either side, and a battle's opponent — and
+  /// a fifth buys nothing anybody can see. So this can only ever make the
+  /// app ask for LESS.
+  ///
+  /// Null budget means the phone was never asked or would not say, and then
+  /// nothing changes from what shipped before this existed.
+  ///
+  /// Worth saying plainly: both phones this has been measured on answer 15
+  /// and 16, so on both of them this does nothing at all. It is for the
+  /// phones nobody has held yet.
+  static int workingSetFor(int? budget) {
+    if (budget == null || budget <= 0) return onScreenWorkingSet;
+    final affordable = budget - decoderReserve;
+    if (affordable < 1) return 1;
+    if (affordable > onScreenWorkingSet) return onScreenWorkingSet;
+    return affordable;
   }
 
   /// Re-derive this config with [maxConcurrentDecoders] enforced.
@@ -116,11 +171,12 @@ class VideoPoolConfig {
   /// for the reel on screen, so a burst window that names more spares than
   /// the pool can hold just makes [_openSpare] decline them one at a time,
   /// which costs a decision per swipe and buys nothing.
-  VideoPoolConfig _clampedToDecoderBudget() {
-    if (maxPoolSize <= maxConcurrentDecoders) return this;
-    final spares = maxConcurrentDecoders - 1;
+  VideoPoolConfig _clampedToDecoderBudget(int? budget) {
+    final cap = workingSetFor(budget);
+    if (maxPoolSize <= cap) return this;
+    final spares = cap - 1;
     return VideoPoolConfig(
-      maxPoolSize: maxConcurrentDecoders,
+      maxPoolSize: cap,
       prefetchAhead: prefetchAhead.clamp(0, spares),
       prefetchAheadBurst: prefetchAheadBurst.clamp(0, spares),
       prefetchBack: prefetchBack.clamp(0, spares),
