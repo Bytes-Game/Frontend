@@ -5,34 +5,33 @@ import 'package:flutter/services.dart';
 
 /// What the chip says about how many H.264 videos it will decode at once.
 ///
-/// ══════════════════════════════════════════════════════════════════════════
-/// WHY THIS IS ONLY A READING, AND NOT YET A DECISION
-/// ══════════════════════════════════════════════════════════════════════════
-///
 /// The app keeps several videos open so a swipe lands on one already playing.
 /// How many it MAY keep is a property of the chip, not of memory, and nothing
-/// tells the app up front: it assumes four for every phone and finds out it
-/// was wrong only when a request is refused, or a decoder is taken back
+/// tells the app up front: it used to assume four for every phone and find out
+/// it was wrong only when a request was refused, or a decoder was taken back
 /// mid-playback, which the viewer sees as a frozen video.
 ///
-/// So this asks. It does not yet act on the answer, and that is deliberate:
+/// So this asks, and [VideoPoolConfig.workingSetFor] sizes the feed by the
+/// answer. Two things about how it is used are worth keeping in view, because
+/// both are mistakes this repo has already made once:
 ///
-///   * [VideoPlayerService.maxConcurrentDecoders] carries a written-down
-///     account of a release where the pool was dropped below what the screen
-///     needs. It did not reduce live decoders. The screen asks for the same
-///     players either way; a smaller pool only recycles them faster — "40
-///     player opens and 37 retirements for 14 distinct videos". Fewer live
-///     decoders has to come from asking for FEWER PLAYERS, not from a cap
-///     underneath the demand. So the obvious policy is already known to be
-///     wrong, and shipping it again on a phone nobody has measured would be
-///     repeating a documented mistake.
+///   * It lowers DEMAND, not the cap. [VideoPlayerService.maxConcurrentDecoders]
+///     carries the account of a release that lowered the pool and changed
+///     nothing — the screen asked for the same players either way, so the same
+///     number were alive AND one was thrown away on every swipe: "40 player
+///     opens and 37 retirements for 14 distinct videos". Fewer live decoders
+///     has to come from asking for fewer players. So what the budget moves is
+///     prefetchAhead and prefetchBack, which decide whether a neighbour gets a
+///     player at all.
 ///
-///   * Nobody has seen what any phone answers here. Not this one. Designing
-///     a policy against a number that has never been read is the guessing
-///     that two counters in this app have already had to correct.
+///   * A phone that will not answer keeps exactly the behaviour it had before
+///     any of this existed. [hardwareBudget] is null then, and null changes
+///     nothing.
 ///
-/// The reading goes into the log. Once there are real numbers — especially
-/// from a cheap phone — the policy can be designed against them.
+/// And plainly: both phones measured so far answer 15 and 16, so on both of
+/// them this changes nothing at all. It is for the phones nobody has held yet.
+/// The full reading still goes to the log either way, which is how the next
+/// phone gets measured.
 class DecoderBudget {
   DecoderBudget._();
   static final DecoderBudget instance = DecoderBudget._();

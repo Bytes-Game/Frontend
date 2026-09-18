@@ -2,17 +2,14 @@
 //
 // The app keeps several open so a swipe lands on one already playing. How
 // many it MAY keep is a property of the chip, not of memory, and nothing
-// tells the app up front — it assumes four for every phone and finds out it
-// was wrong only when a request is refused or a decoder is taken back
-// mid-playback, which the viewer sees as a frozen video.
+// tells the app up front — it used to assume four for every phone and find
+// out it was wrong only when a request was refused or a decoder was taken
+// back mid-playback, which the viewer sees as a frozen video.
 //
-// This reads the number. It deliberately does not act on it yet: the pool
-// already carries a written-down account of a release where it was dropped
-// below what the screen needs, which did not reduce live decoders at all and
-// added a rebuild on every swipe. Designing the policy against a number
-// nobody has ever read would be the same guessing two counters in this app
-// have already had to correct.
-
+// This file covers the reading itself: which codec's number binds, what a
+// nonsense answer does, and that startup actually asks. What the app then
+// DOES with the number is adaptive_working_set_test.dart.
+//
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 

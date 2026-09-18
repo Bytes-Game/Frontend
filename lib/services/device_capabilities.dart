@@ -75,7 +75,13 @@ class DeviceCapabilities {
     // once and written down.
     await DecoderBudget.instance.probe();
     _probed = true;
-    VideoPlayerService.instance.configure(VideoPoolConfig.forRam(ramGb));
+    // Sized by RAM, then by what the chip says it will actually decode at
+    // once. The second one only ever makes it smaller, and on every phone
+    // measured so far it changes nothing — see VideoPoolConfig.workingSetFor.
+    VideoPlayerService.instance.configure(VideoPoolConfig.forRam(
+      ramGb,
+      decoderBudget: DecoderBudget.instance.hardwareBudget,
+    ));
     if (kDebugMode) {
       debugPrint(
         'DeviceCapabilities: detected ${ramGb.toStringAsFixed(1)}GB RAM '
