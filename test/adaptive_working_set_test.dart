@@ -27,11 +27,20 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:myapp/services/decoder_budget.dart';
+import 'package:myapp/services/reel_player_mode.dart';
 import 'package:myapp/services/device_capabilities.dart';
 import 'package:myapp/services/video_player_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  // EXPERIMENT BRANCH. Everything in this file describes the POOLED
+  // sizing, which one-player mode bypasses entirely — forRam returns the
+  // same one-player shape for every phone while the flag is on. These
+  // rules are the rollback target, so they are tested with it off, and
+  // one_player_mode_test.dart covers the flag being on.
+  setUp(() => ReelPlayerMode.onePlayer = false);
+  tearDown(ReelPlayerMode.reset);
 
   const full = VideoPoolConfig.onScreenWorkingSet;
 

@@ -12,6 +12,7 @@ import 'package:video_player/video_player.dart';
 import 'package:video_player_android/video_player_android.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
+import 'package:myapp/services/reel_player_mode.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 
@@ -112,8 +113,26 @@ class VideoPoolConfig {
   /// exactly as it did before that reading existed. It can only ever make
   /// the app ask for less — see [workingSetFor].
   factory VideoPoolConfig.forRam(double ramGb, {int? decoderBudget}) {
+    if (ReelPlayerMode.onePlayer) return onlyTheOneOnScreen;
     return _byRam(ramGb)._clampedToDecoderBudget(decoderBudget);
   }
+
+  /// EXPERIMENT BRANCH. One open video, and nothing kept warm beside it.
+  ///
+  /// Every phone gets this shape when [ReelPlayerMode.onePlayer] is on,
+  /// regardless of memory or decoder count, because the whole point of the
+  /// experiment is to find out what one player feels like on a phone that
+  /// could afford more. Sizing it per-device would make every device a
+  /// different experiment.
+  ///
+  /// The bytes are still fetched ahead — that is VideoCacheService and it
+  /// is untouched. What is given up is the DECODER standing ready.
+  static const VideoPoolConfig onlyTheOneOnScreen = VideoPoolConfig(
+    maxPoolSize: 1,
+    prefetchAhead: 0,
+    prefetchAheadBurst: 0,
+    prefetchBack: 0,
+  );
 
   /// Decoders this app needs for things that are NOT the feed's players.
   ///
@@ -265,7 +284,15 @@ class VideoPlayerService {
   final List<_PoolEntry> _pool = [];
 
   /// Active config — replaced once at startup by [configure].
-  VideoPoolConfig _config = VideoPoolConfig.fallback;
+  ///
+  /// The starting value matters on the experiment branch: the window
+  /// before the device probe lands is app start, which is when the first
+  /// reel is opening. Starting at the pooled fallback there would open
+  /// spares for a few hundred milliseconds and then close them again,
+  /// which is the one thing this branch is trying to find out the cost of.
+  VideoPoolConfig _config = ReelPlayerMode.onePlayer
+      ? VideoPoolConfig.onlyTheOneOnScreen
+      : VideoPoolConfig.fallback;
 
   /// Read-only view of the current pool config. Reels surfaces use
   /// this to compute their own velocity-aware prefetch windows.
@@ -559,7 +586,23 @@ class VideoPlayerService {
 
     VideoCacheService.instance.warm(window);
 
-    final wanted = spareTargets(window, live);
+    // A pool that holds ONE holds the reel on screen, and nothing else.
+    //
+    // This is not only the experiment branch's lever — it is also the only
+    // honest answer for a phone whose decoder budget clamped it to one.
+    // Asking for a spare there is a decision taken on every swipe that
+    // cannot succeed: _openSpare would have to evict to make room, the
+    // only entry is the reel being watched, and _evictOldest refuses to
+    // touch that. Declining here says so once instead of rediscovering it
+    // every time.
+    //
+    // It has to be checked HERE rather than by passing an empty `live`
+    // list, because spareTargets reads an empty list as "the caller has
+    // not thought about it" and falls back to the nearest url in the
+    // window. An empty list is not a way to ask for nothing.
+    final wanted = _config.maxPoolSize <= 1
+        ? const <String, SpareLane>{}
+        : spareTargets(window, live);
 
     // Anything we were holding a deferred spare for that is no longer one
     // gesture away has left the window — drop it, so the wait below
@@ -1456,6 +1499,16 @@ class VideoPlayerService {
   /// wanting spares — so the release path is worth asserting on directly.
   @visibleForTesting
   bool get debugSpareGateHeld => _spareOpening != null;
+
+  /// The urls [prefetch] last decided were one gesture away, and so
+  /// worth a live player.
+  ///
+  /// Asserting on this rather than on the pool separates "did the feed ASK
+  /// for a spare" from "did the pool have room for one". They fail
+  /// identically from the outside — no spare in the pool — and only the
+  /// first is what a pool of one is supposed to change.
+  @visibleForTesting
+  Set<String> get debugWantedSpares => Set.unmodifiable(_wantedSpares);
 
   @visibleForTesting
   int get debugPoolSize => _pool.length;
