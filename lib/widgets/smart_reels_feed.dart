@@ -371,7 +371,10 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       _flushCurrentItemEvent(isSkip: false);
     } else if (state == AppLifecycleState.resumed) {
       _currentItemStart = DateTime.now();
-      _playCurrent(); // re-attaches the playback listener
+      // Not from the start. The viewer never left this reel — the app was
+      // backgrounded and came back — so picking it up where it was is
+      // exactly right, and rewinding would lose their place.
+      _playCurrent(fromStart: false); // re-attaches the playback listener
     }
   }
 
@@ -943,7 +946,10 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   /// Past this it opens cold, which is exactly what it did before.
   static const Duration _coldOpenGrace = Duration(milliseconds: 400);
 
-  Future<void> _playCurrent({bool waitForWarm = false}) async {
+  Future<void> _playCurrent({
+    bool waitForWarm = false,
+    bool fromStart = true,
+  }) async {
     if (_currentIndex < 0 || _currentIndex >= _items.length) return;
     final index = _currentIndex;
     final item = _items[_currentIndex];
@@ -996,7 +1002,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // AudioFocus, and taking focus while the old player is still decoding is
     // the audible chop on every swipe) and it declines to start anything if
     // the user swiped on during that handover.
-    await VideoPlayerService.instance.showAndPlay(url);
+    await VideoPlayerService.instance.showAndPlay(url, fromStart: fromStart);
     // The service guards its own half of that race; this guards ours, so a
     // watch event is not recorded against a reel that is no longer on screen.
     if (!mounted || _currentIndex != index) return;
