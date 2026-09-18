@@ -1,9 +1,11 @@
 package com.example.devf
 
 import android.media.MediaCodec
+import android.media.MediaCodecList
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -43,6 +45,63 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "devf/device_media",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "videoDecoderInstances" -> result.success(videoDecoderInstances())
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    /**
+     * How many H.264 decoders each of this chip's decoders says it will run
+     * at once, as name -> count.
+     *
+     * The app keeps several videos open so a swipe lands on one already
+     * playing, and how many it may keep is a property of the CHIP, not of
+     * memory. Nothing in Android tells you the number up front: today the app
+     * assumes four for every phone, and only finds out it was wrong when a
+     * request is refused or a decoder is taken back mid-playback, by which
+     * point somebody is looking at a frozen video.
+     *
+     * The whole map is returned rather than one number because the answer is
+     * per decoder, and a phone carries several: the chip's own (fast, few
+     * instances) alongside Android's software fallback (slow, effectively
+     * unlimited). Averaging or maxing those would report the software one's
+     * generosity as though the chip had it. Which of them actually binds is a
+     * question to answer with real readings from real phones, not with a
+     * guess made here.
+     *
+     * Empty map means the question could not be asked — an old Android, or a
+     * codec list that would not enumerate. The caller keeps its existing
+     * behaviour in that case.
+     */
+    private fun videoDecoderInstances(): Map<String, Int> {
+        // maxSupportedInstances arrived in API 23.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return emptyMap()
+        val out = mutableMapOf<String, Int>()
+        try {
+            for (info in MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos) {
+                if (info.isEncoder) continue
+                val type = info.supportedTypes.firstOrNull {
+                    it.equals("video/avc", ignoreCase = true)
+                } ?: continue
+                // One bad codec entry should not lose the readings from the
+                // others — some devices ship an entry that throws here.
+                try {
+                    out[info.name] = info.getCapabilitiesForType(type).maxSupportedInstances
+                } catch (_: Exception) {
+                    // skip this one
+                }
+            }
+        } catch (_: Exception) {
+            return emptyMap()
+        }
+        return out
     }
 
     /**

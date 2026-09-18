@@ -3,6 +3,7 @@ import 'dart:io' show Platform;
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 
+import 'package:myapp/services/decoder_budget.dart';
 import 'package:myapp/services/video_player_service.dart';
 
 /// Reads the device's physical RAM at startup and configures the video
@@ -55,6 +56,12 @@ class DeviceCapabilities {
   bool _probed = false;
   bool get probed => _probed;
 
+  /// Let a test probe again. Without it the first test to reach [probe]
+  /// pins the result for the whole file and every test after it is asserting
+  /// on work it did not cause.
+  @visibleForTesting
+  void debugResetProbe() => _probed = false;
+
   /// Detect device RAM and configure [VideoPlayerService] accordingly.
   /// Idempotent — safe to call from main() and re-call from anywhere
   /// without re-probing.
@@ -62,6 +69,11 @@ class DeviceCapabilities {
     if (_probed) return;
     final detected = await _detectRamGb();
     if (detected != null) ramGb = detected;
+    // Ask the chip how many videos it will decode at once, and write the
+    // answer into the log. It does NOT change the pool — see DecoderBudget
+    // for why that would be repeating a mistake this repo has already made
+    // once and written down.
+    await DecoderBudget.instance.probe();
     _probed = true;
     VideoPlayerService.instance.configure(VideoPoolConfig.forRam(ramGb));
     if (kDebugMode) {
