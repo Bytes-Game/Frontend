@@ -214,6 +214,14 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 2));
   }
 
+  _handBackTests(
+    service: service,
+    url: url,
+    pendingReleases: () => pendingReleases,
+    platform: () => platform,
+    watch: watch,
+  );
+
   Future<void> open(String u) async {
     service.getController(u);
     await Future<void>.delayed(const Duration(milliseconds: 2));
@@ -1166,6 +1174,137 @@ void main() {
       await service.disposeAll();
 
       expect(service.debugSpareGateHeld, isFalse);
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// A PAGE THAT IS GONE SHOULD NOT STILL BE HOLDING DECODERS
+// ═══════════════════════════════════════════════════════════════════════
+//
+// release() pauses and keeps the player, which is right when a reel
+// scrolls aside — it is one swipe away and may well come back.
+//
+// It is wrong when the WHOLE FEED goes away, and that is what the feed's
+// dispose called, once per reel. So leaving the feed left four players in
+// the pool holding four of the phone's few decoders for a page nobody
+// could see.
+//
+// It showed as a number that doubled the moment search opened, because
+// for a while both feeds exist at once:
+//
+//     peak decoders, feed alone   :  5
+//     peak decoders, search open  : 10
+//
+// Two counters had already cleared the obvious suspects: the search grid
+// holds one player, and the shutdown queue never had more than two
+// waiting. What was left was the feed that had already been closed.
+void _handBackTests({
+  required VideoPlayerService service,
+  required String Function(int) url,
+  required List<VoidCallback> Function() pendingReleases,
+  required _FakeVideoPlatform Function() platform,
+  required Future<void> Function(String) watch,
+}) {
+  group('handing a player back for good', () {
+    int idFor(String u) => platform()
+        .createdFor
+        .entries
+        .firstWhere((e) => e.value == u)
+        .key;
+
+    test('it leaves the pool, unlike release', () async {
+      await watch(url(0));
+      await watch(url(1));
+      expect(service.hasController(url(0)), isTrue);
+
+      await service.handBack(url(0));
+      expect(service.hasController(url(0)), isFalse,
+          reason: 'still in the pool, so it is still holding a decoder for '
+              'a page that has gone');
+    });
+
+    test('and is actually shut down, not just paused', () async {
+      await watch(url(0));
+      await watch(url(1));
+      final id = idFor(url(0));
+
+      await service.handBack(url(0));
+      for (final r in pendingReleases()) {
+        r();
+      }
+      await Future<void>.delayed(Duration.zero);
+
+      expect(platform().disposed, contains(id),
+          reason: 'pausing is what the bug was — the decoder is only given '
+              'back when the player is shut down');
+    });
+
+    test('release still keeps it warm — the other half of the pair',
+        () async {
+      // If this stops being true the back-swipe stops being instant, which
+      // is the whole reason the pool exists.
+      await watch(url(0));
+      await watch(url(1));
+      final id = idFor(url(0));
+
+      await service.release(url(0));
+      for (final r in pendingReleases()) {
+        r();
+      }
+      await Future<void>.delayed(Duration.zero);
+
+      expect(service.hasController(url(0)), isTrue);
+      expect(platform().disposed, isNot(contains(id)),
+          reason: 'a reel one swipe away was shut down, so swiping back '
+              'now pays for a whole new player');
+    });
+
+    test('the reel on screen is never taken', () async {
+      // Two feeds share this pool and both are alive during a tab change.
+      // The reel this feed has finished with may be the one the other has
+      // just started, and taking it would stop the video somebody is
+      // watching.
+      await watch(url(0));
+      await service.handBack(url(0));
+      expect(service.hasController(url(0)), isTrue,
+          reason: 'the pool took the player out from under the reel that '
+              'is on screen');
+    });
+
+    test('a url that was never in the pool is harmless', () async {
+      await service.handBack('https://cdn.example/never-opened.mp4');
+      expect(service.hasController(url(0)), isFalse);
+    });
+
+    test('handing the same one back twice is harmless', () async {
+      await watch(url(0));
+      await watch(url(1));
+      await service.handBack(url(0));
+      await service.handBack(url(0));
+      expect(service.hasController(url(0)), isFalse);
+    });
+
+    test('a whole feed handing back frees the pool for the next page',
+        () async {
+      // What a tab change actually looks like: four reels open, then the
+      // page goes. Afterwards the pool should be holding only the reel
+      // that is still on screen.
+      for (var i = 0; i < 4; i++) {
+        await watch(url(i));
+      }
+      expect(service.debugPoolSize, 4);
+
+      // The feed's dispose, in order.
+      for (var i = 0; i < 4; i++) {
+        await service.handBack(url(i));
+      }
+
+      expect(service.debugPoolSize, 1,
+          reason: 'the closed page is still holding '
+              '${service.debugPoolSize - 1} players');
+      expect(service.hasController(url(3)), isTrue,
+          reason: 'and it took the one still on screen');
     });
   });
 }

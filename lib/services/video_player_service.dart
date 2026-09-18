@@ -971,10 +971,55 @@ class VideoPlayerService {
   }
 
   /// Release a specific controller back to pool (pause it).
+  ///
+  /// The right thing when a reel scrolls ASIDE: it is one swipe away, it
+  /// may well come back, and keeping it warm is what makes the swipe back
+  /// instant. See [handBack] for when it is the wrong thing.
   Future<void> release(String url) async {
     final entry = _pool.where((e) => e.url == url).firstOrNull;
     if (entry == null) return;
     await entry.controller.pause();
+  }
+
+  /// Hand a player back for good: out of the pool, and shut down.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// A PAGE THAT IS GONE SHOULD NOT STILL BE HOLDING DECODERS
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// [release] pauses and keeps the player. That is right for a reel one
+  /// swipe away. It is wrong when the WHOLE FEED goes away — and that is
+  /// what the feed's dispose used to call, once per reel, so leaving the
+  /// feed left four players sitting in the pool holding four of the
+  /// phone's few decoders for a page nobody could see.
+  ///
+  /// It showed up as a number that doubled the moment the search page
+  /// opened, because for a while both feeds existed at once:
+  ///
+  ///     peak decoders, feed alone   :  5
+  ///     peak decoders, search open  : 10
+  ///
+  /// Two counters had already cleared the obvious suspects — the search
+  /// grid holds one player, and the shutdown queue never had more than two
+  /// waiting. What was left was the feed that had already been closed.
+  ///
+  /// This matters most on the phones with the least to spare. This handset
+  /// grants about fourteen decoders and was refusing nothing; a cheaper one
+  /// may grant four, and on that phone a closed page holding four is the
+  /// difference between working and not.
+  ///
+  /// The cost is a cold open if the same reel is opened again, which is a
+  /// fraction of a second, and only for a page that was closed.
+  Future<void> handBack(String url) async {
+    final entry = _pool.where((e) => e.url == url).firstOrNull;
+    if (entry == null) return;
+    // Only if it is still ours to give. Two feeds can be alive at once
+    // during a tab change and they share this pool, so the reel this one
+    // is finished with may be the one the other has just started.
+    if (url == _activeUrl) return;
+    _pool.remove(entry);
+    _prefetchedUrls.remove(url);
+    _retire(entry.controller);
   }
 
   /// Set the session-wide feed mute and apply it to the reel on screen.
