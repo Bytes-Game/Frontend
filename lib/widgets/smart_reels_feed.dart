@@ -342,8 +342,19 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     _flushCurrentItemEvent(isSkip: false); // best-effort save on leave
     WidgetsBinding.instance.removeObserver(this);
     _pageController.dispose();
+    // handBack, not dispose. This is the whole feed going away — a tab
+    // change, or the search page opening on top — and a page that is gone
+    // should not still be holding the phone's decoders. dispose() here
+    // called release(), which only pauses, so four of them stayed held
+    // for a feed nobody could see.
+    //
+    // Note this is the ONLY one of the three places that tears player
+    // states down where handing back is right. A refresh deliberately
+    // keeps them warm because the new page usually shows some of the same
+    // reels, and trimming reels far behind the viewport leaves them to be
+    // evicted in the normal way.
     for (final st in _playerStates.values) {
-      st.dispose();
+      st.handBack();
     }
     _playerStates.clear();
     super.dispose();
@@ -2582,6 +2593,14 @@ class _ReelPlayerState {
     // We don't own the controller — VideoPlayerService does. release()
     // pauses it and leaves it warm in the pool for back-swipe.
     VideoPlayerService.instance.release(url);
+  }
+
+  /// The page itself is going. Give the decoder back rather than leaving
+  /// it paused in the pool for a feed that no longer exists — see
+  /// VideoPlayerService.handBack.
+  void handBack() {
+    // ignore: discarded_futures
+    VideoPlayerService.instance.handBack(url);
   }
 }
 
