@@ -907,6 +907,9 @@ class VideoPlayerService {
     }
     // ignore: discarded_futures
     entry.controller.setVolume(activeVolume);
+    // Start the clock on the only thing the viewer actually experiences: I
+    // swiped, and then I waited. See ReelDiagnostics.recordFirstFrameWait.
+    _timeToFirstFrame(url, entry.controller);
     // Deliberately not awaited, and deliberately allowed before the player
     // has initialised: video_player replays a play() issued during startup
     // once the player is ready, and the feed relies on that to show the
@@ -914,6 +917,69 @@ class VideoPlayerService {
     // ignore: discarded_futures
     entry.controller.play();
   }
+
+  /// Listener currently timing a reel's wait, so it can be taken off again.
+  VoidCallback? _firstFrameWatcher;
+  VideoPlayerController? _firstFrameWatched;
+
+  /// Measure how long [url] takes to go from "on screen" to a picture that
+  /// is moving.
+  ///
+  /// The picture moving is the test, not the player reporting itself ready.
+  /// A player can be initialised and still be sitting on a black frame
+  /// waiting for bytes, which is exactly the wait being measured.
+  ///
+  /// Only one reel is timed at a time — the one on screen — so this holds a
+  /// single listener and takes it off before attaching the next. A swipe
+  /// before the picture moves abandons the reading rather than recording a
+  /// wait for a reel nobody is looking at any more.
+  void _timeToFirstFrame(String url, VideoPlayerController controller) {
+    _stopTimingFirstFrame();
+    final started = DateTime.now();
+    final startedAt = controller.value.position;
+    void onTick() {
+      if (!identical(_firstFrameWatched, controller)) return;
+      final v = controller.value;
+      if (!v.isInitialized) return;
+      if (v.position <= startedAt) return;
+      if (_activeUrl != url) {
+        _stopTimingFirstFrame();
+        return;
+      }
+      ReelDiagnostics.instance
+          .recordFirstFrameWait(DateTime.now().difference(started));
+      _stopTimingFirstFrame();
+    }
+
+    _firstFrameWatched = controller;
+    _firstFrameWatcher = onTick;
+    _watchersAttached++;
+    controller.addListener(onTick);
+  }
+
+  void _stopTimingFirstFrame() {
+    final c = _firstFrameWatched;
+    final w = _firstFrameWatcher;
+    _firstFrameWatched = null;
+    _firstFrameWatcher = null;
+    if (c != null && w != null) {
+      _watchersAttached--;
+      c.removeListener(w);
+    }
+  }
+
+  /// Listeners this service currently has attached for timing. Exactly one
+  /// reel is on screen, so this is 0 or 1 and nothing else.
+  ///
+  /// Counted because a leaked listener is INVISIBLE in behaviour: the stale
+  /// one checks whether it is still the watched controller and returns, so
+  /// it records nothing and a test sees a correct count while the listeners
+  /// pile up on every swipe. This app has already spent rounds on exactly
+  /// that shape of leak with players and decoders.
+  int _watchersAttached = 0;
+
+  @visibleForTesting
+  int get debugFirstFrameWatchers => _watchersAttached;
 
   /// Stop the reel on screen without giving up its place.
   ///
