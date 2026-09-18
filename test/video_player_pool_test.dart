@@ -104,12 +104,21 @@ class _FakeVideoPlatform extends VideoPlayerPlatform {
   @override
   Future<void> pause(int playerId) {
     if (hangingPause.contains(playerId)) return Completer<void>().future;
+    playing.remove(playerId);
     paused.add(playerId);
     return Future<void>.value();
   }
 
+  /// Players currently told to play. `paused` alone cannot answer "did it
+  /// start", because a player that was never told either is absent from
+  /// both.
+  final Set<int> playing = {};
+
   @override
-  Future<void> play(int playerId) async => paused.remove(playerId);
+  Future<void> play(int playerId) async {
+    paused.remove(playerId);
+    playing.add(playerId);
+  }
 
   @override
   Future<void> setLooping(int playerId, bool looping) async {}
@@ -117,11 +126,34 @@ class _FakeVideoPlatform extends VideoPlayerPlatform {
   @override
   Future<void> setPlaybackSpeed(int playerId, double speed) async {}
 
-  @override
-  Future<void> seekTo(int playerId, Duration position) async {}
+  /// Every seek asked for, per player, in order. The rewind that puts a
+  /// reel back to its start is invisible without this — `getPosition`
+  /// returning zero looks exactly like a reel that was never rewound.
+  final Map<int, List<Duration>> seeks = {};
+
+  /// Where each player currently is. A fake whose getPosition always
+  /// answers zero is a fake in which no video ever progresses: the
+  /// controller polls it while playing and would wipe any position a test
+  /// set, so a test about resuming or rewinding could not be written at
+  /// all.
+  final Map<int, Duration> positions = {};
+
+  /// When set, every seek waits on this before completing. Lets a test put
+  /// a swipe in the middle of a rewind, which is the only way to see the
+  /// re-check that follows it.
+  Future<void>? holdSeek;
 
   @override
-  Future<Duration> getPosition(int playerId) async => Duration.zero;
+  Future<void> seekTo(int playerId, Duration position) async {
+    (seeks[playerId] ??= []).add(position);
+    positions[playerId] = position;
+    final hold = holdSeek;
+    if (hold != null) await hold;
+  }
+
+  @override
+  Future<Duration> getPosition(int playerId) async =>
+      positions[playerId] ?? Duration.zero;
 
   @override
   Widget buildViewWithOptions(VideoViewOptions options) =>
@@ -213,6 +245,13 @@ void main() {
     service.pauseAllExcept(u);
     await Future<void>.delayed(const Duration(milliseconds: 2));
   }
+
+  _rewindTests(
+    service: service,
+    url: url,
+    platform: () => platform,
+    watch: watch,
+  );
 
   _handBackTests(
     service: service,
@@ -1305,6 +1344,186 @@ void _handBackTests({
               '${service.debugPoolSize - 1} players');
       expect(service.hasController(url(3)), isTrue,
           reason: 'and it took the one still on screen');
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// A REEL ARRIVING ON SCREEN STARTS AT THE START
+// ═══════════════════════════════════════════════════════════════════════
+//
+// The pool keeps a player warm when its reel scrolls aside, and a warm
+// player keeps its POSITION along with everything else. So swiping back up
+// to a reel, or meeting the same one again further down the feed, picked it
+// up wherever it had been left — half way through, or sitting on its last
+// frame having already finished.
+//
+// A short-video feed does not do that. Every reel begins at the beginning,
+// every time it comes round.
+void _rewindTests({
+  required VideoPlayerService service,
+  required String Function(int) url,
+  required _FakeVideoPlatform Function() platform,
+  required Future<void> Function(String) watch,
+}) {
+  group('a reel coming back on screen starts again', () {
+    int idFor(String u) =>
+        platform().createdFor.entries.firstWhere((e) => e.value == u).key;
+
+    List<Duration> seeksFor(String u) => platform().seeks[idFor(u)] ?? const [];
+
+    /// Wait for the player to actually be open. The pool kicks initialise
+    /// and does not wait, so a seek issued straight after `watch` is
+    /// refused for a player that has not opened its file yet — and a test
+    /// that does not notice is a test asserting on nothing.
+    Future<void> opened(String u) async {
+      final c = service.peekController(u);
+      if (c == null) return;
+      // Polled rather than awaiting initialize() a second time: that call
+      // is not a no-op on every version, and a test that quietly opens a
+      // second player is worse than a slow one.
+      for (var i = 0; i < 200 && !c.value.isInitialized; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      expect(c.value.isInitialized, isTrue,
+          reason: 'the player never opened, so every seek below is refused '
+              'and the test asserts on nothing');
+    }
+
+    /// PART way through, deliberately. video_player already rewinds a video
+    /// that ran to its END — play() does it when position has reached
+    /// duration. Seeking past the end here would test that built-in and not
+    /// this change at all, and would pass with this change reverted.
+    const partWay = Duration(seconds: 1); // of a 3 second fake
+
+    /// A reel ARRIVING on screen, the way the feed does it.
+    ///
+    /// The `watch` helper above declares a reel active with
+    /// `pauseAllExcept`, which is only half of it. The feed calls
+    /// `showAndPlay` — one call, because declaring which reel is on screen
+    /// and starting it are the same act — and that is where arriving means
+    /// anything. A test built on the half that does not start playback
+    /// cannot see this behaviour at all.
+    Future<void> swipeTo(String u) async {
+      service.getController(u);
+      await service.showAndPlay(u);
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+    }
+
+    test('swiping back to a part-watched reel rewinds it', () async {
+      await watch(url(0));
+      await opened(url(0));
+      // Watched part way, then swiped on.
+      await service.seekTo(url(0), partWay);
+      expect(seeksFor(url(0)), contains(partWay),
+          reason: 'the setup did not take, so the rest proves nothing');
+      await swipeTo(url(1));
+      platform().seeks.clear();
+
+      // ...and swiped back.
+      await swipeTo(url(0));
+
+      expect(seeksFor(url(0)), contains(Duration.zero),
+          reason: 'it picked up where it was left, part way through');
+    });
+
+    test('a freshly opened reel is not asked to rewind', () async {
+      // Nothing to rewind, and the ordinary swipe — which is most swipes —
+      // should not pay for a platform hop that changes nothing.
+      await swipeTo(url(0));
+      expect(seeksFor(url(0)), isEmpty);
+    });
+
+    test('nor is an OPEN reel that is already at the start', () async {
+      // The test above passes for the wrong reason on its own:
+      // video_player refuses a seek on a player that has not opened its
+      // file yet, so dropping the position check hides behind that. Here
+      // the player IS open and simply has nothing to rewind, which is the
+      // only way to see the check itself.
+      await swipeTo(url(0));
+      await opened(url(0));
+      platform().seeks.clear();
+
+      await service.showAndPlay(url(0));
+
+      expect(seeksFor(url(0)), isEmpty,
+          reason: 'every swipe onto a reel at its start pays for a platform '
+              'hop that changes nothing');
+    });
+
+    test('a swipe away during the rewind does not start the old reel',
+        () async {
+      // The rewind is a platform hop and somebody can swipe during it. The
+      // reel being rewound is then no longer the one on screen, and
+      // starting it would play a video behind the one the viewer is
+      // looking at.
+      await swipeTo(url(0));
+      await opened(url(0));
+      await service.seekTo(url(0), partWay);
+      await swipeTo(url(1));
+
+      // Hold the next seek open so the swipe lands in the middle of it.
+      final held = Completer<void>();
+      platform().holdSeek = held.future;
+      platform().paused.clear();
+
+      final coming = service.showAndPlay(url(0));
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      // The viewer swipes on while reel 0 is still rewinding.
+      await service.pauseAllExcept(url(1));
+      held.complete();
+      await coming;
+
+      expect(service.debugActiveUrl, url(1));
+      expect(platform().playing, isNot(contains(idFor(url(0)))),
+          reason: 'a reel the viewer had already left was started anyway, '
+              'behind the one they were looking at');
+    });
+
+    test('meeting the same reel again further down the feed rewinds it',
+        () async {
+      // The feed repeats: the log shows `repeat=20` on most pages. A reel
+      // met again is the same pool entry, still holding its position.
+      await watch(url(0));
+      await opened(url(0));
+      await service.seekTo(url(0), partWay);
+      await swipeTo(url(1));
+      await swipeTo(url(2));
+      platform().seeks.clear();
+
+      await swipeTo(url(0));
+
+      expect(seeksFor(url(0)), contains(Duration.zero));
+    });
+
+    test('coming back to the app does NOT rewind', () async {
+      // The viewer never left this reel; the app was backgrounded. Starting
+      // it again would lose their place.
+      await watch(url(0));
+      await opened(url(0));
+      await service.seekTo(url(0), partWay);
+      platform().seeks.clear();
+
+      await service.showAndPlay(url(0), fromStart: false);
+
+      expect(seeksFor(url(0)), isEmpty,
+          reason: 'backgrounding the app threw away where they had got to');
+    });
+
+    test('the rewind happens before it starts playing', () async {
+      // The other order shows a frame from the old position first.
+      await watch(url(0));
+      await opened(url(0));
+      await service.seekTo(url(0), partWay);
+      await watch(url(1));
+      platform().paused.clear();
+      platform().seeks.clear();
+
+      await service.showAndPlay(url(0));
+
+      expect(seeksFor(url(0)), contains(Duration.zero));
+      expect(platform().paused, isNot(contains(idFor(url(0)))),
+          reason: 'it should be playing by now');
     });
   });
 }

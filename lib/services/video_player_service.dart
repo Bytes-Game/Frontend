@@ -867,7 +867,12 @@ class VideoPlayerService {
   /// Returns without starting anything if [url] has no live player, or if
   /// something else claimed the screen while the outgoing players were
   /// stopping — the user swiping on during the handover.
-  Future<void> showAndPlay(String url) async {
+  ///
+  /// [fromStart] rewinds the reel before playing it, which is what arriving
+  /// on screen means. Pass false only where the viewer never LEFT — coming
+  /// back to the app after it was backgrounded is the same reel at the same
+  /// moment, and restarting it there would lose their place.
+  Future<void> showAndPlay(String url, {bool fromStart = true}) async {
     await pauseAllExcept(url);
     // Re-checked AFTER the await rather than before: a second swipe during
     // the handover runs its own showAndPlay, which sets _activeUrl to the
@@ -877,6 +882,29 @@ class VideoPlayerService {
     final entry = _pool.where((e) => e.url == url).firstOrNull;
     if (entry == null) return;
     entry.lastUsed = DateTime.now();
+    // ══════════════════════════════════════════════════════════════════════
+    // A REEL ARRIVING ON SCREEN STARTS AT THE START
+    // ══════════════════════════════════════════════════════════════════════
+    //
+    // The pool keeps a player warm when its reel scrolls aside, and a warm
+    // player keeps its POSITION along with everything else. So swiping back
+    // up to a reel, or meeting the same one again further down the feed,
+    // picked it up wherever it had been left — half way through, or sitting
+    // on its last frame having already finished.
+    //
+    // A short-video feed does not do that. Every reel begins at the
+    // beginning, every time it comes round.
+    //
+    // Skipped when there is nothing to rewind, which is every freshly opened
+    // reel, so the ordinary swipe costs no extra platform call. An
+    // uninitialised player also reports zero here, so this never asks one to
+    // seek before it can.
+    if (fromStart && entry.controller.value.position > Duration.zero) {
+      await entry.controller.seekTo(Duration.zero);
+      // Same race as above: the rewind is a platform hop, and somebody can
+      // swipe during it.
+      if (_activeUrl != url) return;
+    }
     // ignore: discarded_futures
     entry.controller.setVolume(activeVolume);
     // Deliberately not awaited, and deliberately allowed before the player

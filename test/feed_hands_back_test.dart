@@ -62,6 +62,29 @@ void main() {
     });
   });
 
+  group('a reel arriving on screen starts at the start', () {
+    // The pool keeps a warm player's POSITION along with everything else,
+    // so a reel met again picked up where it was left — half way through,
+    // or on its last frame. The service does the rewind; these pin the feed
+    // asking for it, which no pool test can see.
+
+    test('the feed passes the choice through to the service', () {
+      final body = bodyOf(src, 'Future<void> _playCurrent(');
+      expect(body, contains('showAndPlay(url, fromStart: fromStart)'),
+          reason: 'the feed decides which arrivals restart and which resume, '
+              'and then does not tell the service which this one is');
+    });
+
+    test('coming back to the app resumes, it does not restart', () {
+      // The viewer never left this reel. Restarting here loses their place
+      // for no reason — they backgrounded the app, they did not swipe.
+      final body = bodyOf(src, 'void didChangeAppLifecycleState(');
+      expect(body, contains('_playCurrent(fromStart: false)'),
+          reason: 'backgrounding the app and coming back now throws away '
+              'where they had got to');
+    });
+  });
+
   group('the two halves stay different', () {
     test('release pauses, handBack shuts down', () {
       final rel = bodyOf(service, 'Future<void> release(String url)');
