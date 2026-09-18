@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import 'package:myapp/services/decoder_budget.dart';
+
 /// Which gesture a read-ahead spare was opened for.
 ///
 /// The pool keeps a live player for every reel a single gesture can
@@ -300,7 +302,12 @@ class ReelDiagnostics {
     final bailed = _prefixBailed.isEmpty
         ? ''
         : ' bailed{${_prefixBailed.entries.map((e) => '${e.key}:${e.value}').join(',')}}';
-    return 'starts=$starts  proxy=$_proxied (${pct(_proxied)})  '
+    // What the chip says it will run at once, once per summary. It is the
+    // ceiling everything else in this line is operating under, and until it
+    // is in a log nobody knows what any phone answers.
+    final budget = DecoderBudget.instance.summary();
+    return '${budget.isEmpty ? '' : '$budget  '}'
+        'starts=$starts  proxy=$_proxied (${pct(_proxied)})  '
         'file=$_wholeFile (${pct(_wholeFile)})  network=$_origin (${pct(_origin)})  '
         '| downloads=$_downloads prefixes warmed=$_prefixWarmed '
         '(+tail $_tailWarmed) failed=$_prefixFailed$bailed  '
