@@ -246,6 +246,12 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 2));
   }
 
+  _firstFrameTests(
+    service: service,
+    url: url,
+    platform: () => platform,
+  );
+
   _rewindTests(
     service: service,
     url: url,
@@ -1524,6 +1530,150 @@ void _rewindTests({
       expect(seeksFor(url(0)), contains(Duration.zero));
       expect(platform().paused, isNot(contains(idFor(url(0)))),
           reason: 'it should be playing by now');
+    });
+  });
+}
+
+// Timing the only thing a viewer actually experiences: I swiped, and then
+// I waited. Every other number in the summary describes the app's own
+// plumbing, and on a Qualcomm phone there was no stall measurement at all —
+// the line the tuning had been read off for rounds is MediaTek's, not
+// Android's.
+void _firstFrameTests({
+  required VideoPlayerService service,
+  required String Function(int) url,
+  required _FakeVideoPlatform Function() platform,
+}) {
+  group('how long the viewer waits', () {
+    final d = ReelDiagnostics.instance;
+
+    int idFor(String u) =>
+        platform().createdFor.entries.firstWhere((e) => e.value == u).key;
+
+    /// Move a player's picture on, the way real playback does.
+    void pictureMoves(String u, {int ms = 40}) {
+      platform().positions[idFor(u)] = Duration(milliseconds: ms);
+    }
+
+    /// VideoPlayerController polls the platform for position on a timer
+    /// while playing — it does not get told. So a test that moves the
+    /// picture has to wait for that poll, and 60ms is not it.
+    Future<void> settle() =>
+        Future<void>.delayed(const Duration(milliseconds: 900));
+
+    /// Open a reel the way the feed does and wait until it really is open.
+    Future<void> arrive(String u) async {
+      service.getController(u);
+      final c = service.peekController(u);
+      for (var i = 0; i < 200 && !(c?.value.isInitialized ?? true); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      await service.showAndPlay(u);
+    }
+
+    test('a reel is timed from arriving to its picture moving', () async {
+      d.debugReset();
+      await arrive(url(0));
+      expect(d.debugFirstFrameCount, 0,
+          reason: 'recorded before the picture had moved — that measures '
+              'nothing and would report every reel as instant');
+
+      pictureMoves(url(0));
+      await settle();
+
+      expect(d.debugFirstFrameCount, 1);
+    });
+
+    test('a reel swiped past before it starts is not recorded', () async {
+      // Its wait is not a wait anybody experienced, and counting it would
+      // describe the feed by the reels nobody watched.
+      d.debugReset();
+      await arrive(url(0));
+      await arrive(url(1));
+
+      pictureMoves(url(0));
+      await settle();
+
+      expect(d.debugFirstFrameCount, 0);
+    });
+
+    test('only one reel is timed at a time', () async {
+      // A listener per reel, left attached, is the leak this whole app has
+      // spent rounds removing.
+      //
+      // Every picture is moved, not just the last one. Moving only the
+      // active reel's proves nothing: the others' listeners could still be
+      // attached and simply have nothing to fire on.
+      d.debugReset();
+      for (var i = 0; i < 4; i++) {
+        await arrive(url(i));
+      }
+      for (var i = 0; i < 4; i++) {
+        pictureMoves(url(i));
+      }
+      await settle();
+      expect(d.debugFirstFrameCount, 1,
+          reason: 'reels the viewer had already left were timed too, so the '
+              'line describes reels nobody watched');
+      expect(service.debugFirstFrameWatchers, lessThanOrEqualTo(1),
+          reason: 'a listener was left attached on every swipe — invisible '
+              'in the count, because the stale one checks whether it is '
+              'still the watched reel and quietly returns');
+    });
+
+    test('a reel is timed once, not on every tick afterwards', () async {
+      // The position is polled repeatedly. A timer that fires and does not
+      // take itself off records the same reel again on every poll, and the
+      // count then measures how long somebody lingered.
+      d.debugReset();
+      await arrive(url(0));
+      pictureMoves(url(0));
+      await settle();
+      // The picture keeps moving, because that is what playing is. A value
+      // only notifies when it CHANGES, so leaving the position still after
+      // the first move means no further ticks and a timer that never took
+      // itself off looks identical to one that did.
+      pictureMoves(url(0), ms: 400);
+      await settle();
+      pictureMoves(url(0), ms: 900);
+      await settle();
+      expect(d.debugFirstFrameCount, 1,
+          reason: 'the same reel was recorded on every poll, so the count '
+              'measures how long somebody lingered');
+      expect(service.debugFirstFrameWatchers, 0,
+          reason: 'the timer fired and stayed attached');
+    });
+
+    test('changing reel without re-arming still abandons the old one',
+        () async {
+      // pauseAllExcept moves which reel is on screen without starting a new
+      // timer. The old reel's picture can still move after that, and it is
+      // no longer a wait anybody is experiencing.
+      d.debugReset();
+      await arrive(url(0));
+      service.getController(url(1));
+      await service.pauseAllExcept(url(1));
+
+      pictureMoves(url(0));
+      await settle();
+
+      expect(d.debugFirstFrameCount, 0,
+          reason: 'a reel the viewer had already left was recorded as their '
+              'wait');
+    });
+
+    test('and the next reel is timed too', () async {
+      d.debugReset();
+      await arrive(url(0));
+      pictureMoves(url(0));
+      await settle();
+
+      await arrive(url(1));
+      pictureMoves(url(1), ms: 80);
+      await settle();
+
+      expect(d.debugFirstFrameCount, 2,
+          reason: 'the timer fired once and never armed again');
     });
   });
 }

@@ -113,6 +113,61 @@ class ReelDiagnostics {
     _downloads++;
   }
 
+  /// How long a reel took to go from "on screen" to a moving picture.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// EVERY STALL MEASUREMENT BEFORE THIS ONE WAS MEDIATEK-ONLY
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// Round after round of this app's tuning was read off a line the
+  /// MediaTek decoder prints:
+  ///
+  ///     onReleaseOutputBuffer: Render time interval reaches 434ms
+  ///
+  /// It is not an Android line. It is that vendor's. A log from a Qualcomm
+  /// phone contains ZERO of them — so on that phone there was no stall
+  /// measurement at all, and the counters that did exist said the session
+  /// was going WELL while the person holding it said the feed stuck a lot.
+  ///
+  /// Every number in this summary says something about the app's own
+  /// plumbing: was a player ready, did the bytes come off the disk, how
+  /// many decoders are open. None of them is the thing a person actually
+  /// experiences, which is: I swiped, and then I waited.
+  ///
+  /// This is that. Started when a reel becomes the one on screen, stopped
+  /// when its picture first moves, measured by the app itself so it reads
+  /// the same on every chip.
+  void recordFirstFrameWait(Duration d) {
+    if (!_visible) return;
+    final ms = d.inMilliseconds;
+    if (ms < 0) return;
+    _firstFrameWaits.add(ms);
+    // Bounded: a long session should not grow this without limit, and the
+    // shape of the recent past is what anybody reading a log wants.
+    if (_firstFrameWaits.length > _firstFrameMemory) {
+      _firstFrameWaits.removeAt(0);
+    }
+  }
+
+  static const int _firstFrameMemory = 200;
+  final List<int> _firstFrameWaits = [];
+
+  @visibleForTesting
+  int get debugFirstFrameCount => _firstFrameWaits.length;
+
+  /// Typical and worst wait, in milliseconds.
+  ///
+  /// The median rather than the average: one reel that took eight seconds
+  /// should not be able to describe the other fifty. The worst is carried
+  /// separately because that one is what somebody remembers.
+  String _firstFrames() {
+    if (_firstFrameWaits.isEmpty) return '';
+    final v = List<int>.from(_firstFrameWaits)..sort();
+    final mid = v[v.length ~/ 2];
+    final p90 = v[(v.length * 9) ~/ 10];
+    return '  | wait n=${v.length} median=${mid}ms p90=${p90}ms worst=${v.last}ms';
+  }
+
   /// A player was told to shut down, and finished shutting down.
   ///
   /// ══════════════════════════════════════════════════════════════════════
@@ -313,7 +368,7 @@ class ReelDiagnostics {
         '(+tail $_tailWarmed) failed=$_prefixFailed$bailed  '
         '| ${_spares()}  '
         '| players retired=$_retired${_releasingNow()}'
-        '${_previews()}${_pipeline()}';
+        '${_firstFrames()}${_previews()}${_pipeline()}';
   }
 
   /// Spare tallies, one group per gesture, warm before cold.
@@ -377,6 +432,7 @@ class ReelDiagnostics {
     // not produce, and the failures point at the wrong code.
     _previewOpened = _previewReleased = _previewLive = _previewPeak = 0;
     _releasing = _releasingPeak = 0;
+    _firstFrameWaits.clear();
   }
 
   @visibleForTesting
