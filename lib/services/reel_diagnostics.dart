@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import 'package:myapp/services/decoder_budget.dart';
@@ -59,6 +61,38 @@ class ReelDiagnostics {
   /// a short session, large enough not to spam a fast scroll.
   static const int _summaryEvery = 10;
 
+  /// ══════════════════════════════════════════════════════════════════════
+  /// WHY A COUNT OF TEN IS NOT ENOUGH ON ITS OWN
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// A run arrived with ONE video started and then nothing. Not one summary
+  /// in the whole file, because the count never reached ten — so every
+  /// counter in this class died unread, and the session could not be
+  /// compared with anything.
+  ///
+  /// A measurement you only get if the session ends tidily is a measurement
+  /// you do not have. The sessions worth measuring are exactly the ones
+  /// that end badly: the app killed for memory, the phone's power manager
+  /// closing it, a run stopped early because something looked wrong.
+  ///
+  /// So the summary is also printed:
+  ///
+  ///   * on a timer, which survives the app being killed outright — a kill
+  ///     gives no callback at all, so the only numbers that survive one are
+  ///     the ones already written down;
+  ///   * when the app goes to the background, which is a real exit as far
+  ///     as the person holding it is concerned.
+  ///
+  /// Gated on something having actually changed, so an app sitting idle on
+  /// a profile screen stays silent instead of repeating itself forever.
+  /// Not const: a test sets it to a few milliseconds. Waiting twenty real
+  /// seconds per case would make the suite unusable, and pulling in a fake
+  /// clock package for it dragged four unrelated dependency upgrades along
+  /// with it — including the maths library the battle flip animates with,
+  /// which has no business moving inside a logging fix.
+  @visibleForTesting
+  static Duration heartbeatInterval = const Duration(seconds: 20);
+
   int _proxied = 0;
   int _wholeFile = 0;
   int _origin = 0;
@@ -71,6 +105,26 @@ class ReelDiagnostics {
   final Map<SpareLane, int> _spareCold = <SpareLane, int>{};
   int _retired = 0;
   int _sinceSummary = 0;
+
+  /// True when a counter has moved since the last summary was printed.
+  ///
+  /// The gate on the timer. Without it an app left open on a profile page
+  /// prints the same line every twenty seconds for as long as it sits
+  /// there, and the one line worth reading is buried in copies of itself.
+  bool _changedSinceSummary = false;
+
+  Timer? _heartbeat;
+
+  /// How many times a timer has actually been CREATED.
+  ///
+  /// Counted because the leak it guards against is invisible from the
+  /// outside. Starting a fresh timer per video without stopping the last
+  /// one leaves fifty of them ticking after fifty videos — and they all
+  /// fire together, so the first one clears the "something changed" flag
+  /// and the other forty-nine find nothing to say. The log looks perfect.
+  /// The same shape of leak, hidden behind the same kind of guard, has
+  /// already been found once in this app's first-frame watchers.
+  int _heartbeatStarts = 0;
 
   /// Live view of the warming pipeline, installed by `VideoCacheService`.
   ///
@@ -327,10 +381,40 @@ class ReelDiagnostics {
   void _record(void Function() bump) {
     if (!_visible) return;
     bump();
-    if (++_sinceSummary >= _summaryEvery) {
-      _sinceSummary = 0;
-      log(summary());
-    }
+    _changedSinceSummary = true;
+    _startHeartbeat();
+    if (++_sinceSummary >= _summaryEvery) _emitSummary();
+  }
+
+  /// Print the summary and reset what decides when the next one is due.
+  void _emitSummary() {
+    _sinceSummary = 0;
+    _changedSinceSummary = false;
+    log(summary());
+  }
+
+  /// Start the timer, once, the first time there is anything to report.
+  ///
+  /// Lazily rather than from the constructor: this class is reached by
+  /// tests and by code paths that never play a video, and a timer left
+  /// running holds the test isolate open — which shows up as a run that
+  /// hangs, not as the leak it actually is.
+  void _startHeartbeat() {
+    if (_heartbeat != null) return;
+    _heartbeatStarts++;
+    _heartbeat = Timer.periodic(heartbeatInterval, (_) {
+      if (_changedSinceSummary) _emitSummary();
+    });
+  }
+
+  /// The app is going away — write down whatever has been counted.
+  ///
+  /// Called from the lifecycle observer in main.dart. This is the last
+  /// chance to save the numbers on an ORDERLY exit. The timer above is
+  /// what covers the disorderly ones, which give no warning at all.
+  void noteGoingToBackground() {
+    if (!_visible) return;
+    if (_changedSinceSummary) _emitSummary();
   }
 
   /// Current tallies. Also useful from a debugger or a test.
@@ -426,6 +510,13 @@ class ReelDiagnostics {
     _spareCold.clear();
     _retired = 0;
     _sinceSummary = 0;
+    _changedSinceSummary = false;
+    // A timer left behind holds the test isolate open and the run never
+    // finishes. That reads as a broken test runner rather than as the leak
+    // it is, so it gets cancelled here with everything else.
+    _heartbeat?.cancel();
+    _heartbeat = null;
+    _heartbeatStarts = 0;
     _pipelineProbe = null;
     // The preview census too. A reset that leaves some counters behind is
     // worse than no reset: every test after the first reads numbers it did
@@ -434,6 +525,10 @@ class ReelDiagnostics {
     _releasing = _releasingPeak = 0;
     _firstFrameWaits.clear();
   }
+
+  /// How many timers this class has started. One, for a whole session.
+  @visibleForTesting
+  int get debugHeartbeatStarts => _heartbeatStarts;
 
   @visibleForTesting
   int get debugRetired => _retired;
