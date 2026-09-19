@@ -30,6 +30,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
 import 'package:myapp/services/reel_diagnostics.dart';
+import 'package:myapp/services/reel_player_mode.dart';
 import 'package:myapp/services/video_player_service.dart';
 
 /// A platform that hands out ids and records what was done to each one.
@@ -829,6 +830,13 @@ void main() {
   });
 
   group('the decoder budget', () {
+    // EXPERIMENT BRANCH. These are the POOLED sizing rules, which are what
+    // this branch rolls back to. One-player mode bypasses them, so they
+    // are asserted with the flag off; one_player_mode_test.dart covers it
+    // being on.
+    setUp(() => ReelPlayerMode.onePlayer = false);
+    tearDown(ReelPlayerMode.reset);
+
     // The tiers were sized for the Java heap, which is not what runs out.
     // A profile run on an 8 GB phone — top tier, pool of 5 — was overruled
     // by the platform's resource manager reclaiming its decoders.
