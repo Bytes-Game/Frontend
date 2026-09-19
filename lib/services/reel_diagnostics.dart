@@ -115,6 +115,64 @@ class ReelDiagnostics {
 
   Timer? _heartbeat;
 
+  // ══════════════════════════════════════════════════════════════════════
+  // DID THE APP EVER NOTICE THE VIDEO ON SCREEN RUNNING DRY?
+  // ══════════════════════════════════════════════════════════════════════
+  //
+  // A device log showed the decoder being fed LATE 261 times, median a
+  // full second, worst seventeen. That is the viewer's video sitting there
+  // with nothing to show.
+  //
+  // The app has a defence: when the player says it is buffering, every
+  // background download pauses so the bandwidth goes to the reel being
+  // watched. Whether it fired during that session is not knowable from the
+  // log, because nothing counted it — and "it is wired up, with tests" is
+  // not the same as "it happened".
+  //
+  // So it is counted. Always printed once anything has played, including
+  // when the answer is zero, because ZERO IS THE ANSWER THAT MATTERS: it
+  // would mean the decoder starved for a second at a time and the app
+  // never saw it, which points at the detection rather than the defence.
+  int _heldCount = 0;
+  Duration _heldTotal = Duration.zero;
+  DateTime? _heldSince;
+
+  /// Background downloads have stood down for the reel on screen.
+  void recordWarmingHeld() {
+    if (!_visible) return;
+    if (_heldSince != null) return;
+    _heldSince = DateTime.now();
+    _heldCount++;
+    _changedSinceSummary = true;
+    _startHeartbeat();
+  }
+
+  /// They have resumed.
+  void recordWarmingReleased() {
+    if (!_visible) return;
+    final since = _heldSince;
+    if (since == null) return;
+    _heldTotal += DateTime.now().difference(since);
+    _heldSince = null;
+    _changedSinceSummary = true;
+  }
+
+  /// How long the app has spent protecting the reel on screen.
+  ///
+  /// Counts the hold still in progress, if there is one — otherwise a hold
+  /// that never ends reads as zero, which is the opposite of the truth.
+  Duration get _heldSoFar {
+    final since = _heldSince;
+    if (since == null) return _heldTotal;
+    return _heldTotal + DateTime.now().difference(since);
+  }
+
+  String _warmingHeld() {
+    final ms = _heldSoFar.inMilliseconds;
+    return '  | warming stood down n=$_heldCount'
+        '${ms == 0 ? '' : ' for ${(ms / 1000).toStringAsFixed(1)}s'}';
+  }
+
   /// How many times a timer has actually been CREATED.
   ///
   /// Counted because the leak it guards against is invisible from the
@@ -452,7 +510,7 @@ class ReelDiagnostics {
         '(+tail $_tailWarmed) failed=$_prefixFailed$bailed  '
         '| ${_spares()}  '
         '| players retired=$_retired${_releasingNow()}'
-        '${_firstFrames()}${_previews()}${_pipeline()}';
+        '${_firstFrames()}${_warmingHeld()}${_previews()}${_pipeline()}';
   }
 
   /// Spare tallies, one group per gesture, warm before cold.
@@ -509,6 +567,9 @@ class ReelDiagnostics {
     _spareWarm.clear();
     _spareCold.clear();
     _retired = 0;
+    _heldCount = 0;
+    _heldTotal = Duration.zero;
+    _heldSince = null;
     _sinceSummary = 0;
     _changedSinceSummary = false;
     // A timer left behind holds the test isolate open and the run never
@@ -529,6 +590,10 @@ class ReelDiagnostics {
   /// How many timers this class has started. One, for a whole session.
   @visibleForTesting
   int get debugHeartbeatStarts => _heartbeatStarts;
+
+  /// How many times background downloads stood down, for a test.
+  @visibleForTesting
+  int get debugWarmingHolds => _heldCount;
 
   @visibleForTesting
   int get debugRetired => _retired;
