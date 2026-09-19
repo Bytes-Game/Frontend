@@ -60,7 +60,7 @@ void main() {
     testWidgets('nothing at all before the answer arrives', (tester) async {
       await tester.pumpWidget(const MaterialApp(
         home: Scaffold(
-          body: TagSuggestionStrip(challengeId: 'never-answers'),
+          body: TagSuggestionStrip(videoId: 'never-answers'),
         ),
       ));
       await tester.pump();
@@ -77,7 +77,7 @@ void main() {
 
     testWidgets('an empty id asks for nothing', (tester) async {
       await tester.pumpWidget(const MaterialApp(
-        home: Scaffold(body: TagSuggestionStrip(challengeId: '')),
+        home: Scaffold(body: TagSuggestionStrip(videoId: '')),
       ));
       await tester.pump();
       expect(tester.getSize(find.byType(TagSuggestionStrip)).height, 0);
@@ -92,28 +92,44 @@ void main() {
       // from the previous video show briefly on the next one, and a tap files
       // them against the wrong video.
       final body = bodyOf(src, 'void didUpdateWidget(TagSuggestionStrip old)');
-      expect(body, contains('old.challengeId != widget.challengeId'),
+      expect(body, contains('old.videoId != widget.videoId'),
           reason: 'the tile never notices it is showing a different reel');
+      expect(body, contains('old.subject != widget.subject'),
+          reason: 'a challenge and an answer can both be id 7, so the kind '
+              'has to be part of what the tile notices changing');
       expect(body, contains('_s = null'),
           reason: 'the old suggestions stay on screen for the new reel');
     });
 
     test('an answer that arrives late is discarded', () {
       final body = bodyOf(src, 'Future<void> _load()');
-      expect(body, contains('widget.challengeId != id'),
+      expect(body, contains('widget.videoId != id'),
           reason: 'a slow reply lands on whatever reel is showing by then');
     });
 
     test('a decision is checked against the reel it was made on', () {
       final body = bodyOf(src, 'Future<void> _decide(');
-      expect(body, contains('widget.challengeId != id'),
+      expect(body, contains('widget.videoId != id'),
           reason: 'tapping add, then scrolling, would write the result onto '
               'the next video');
     });
 
     test('the build refuses to show tags loaded for another reel', () {
       final body = bodyOf(src, 'Widget build(BuildContext context)');
-      expect(body, contains('_loadedFor != widget.challengeId'));
+      expect(body, contains('_loadedFor != _currentKey'));
+    });
+
+    test('what is stored is what is compared', () {
+      // The one failure mode the tests above cannot see. Every other check
+      // here asserts the strip shows NOTHING, so a mismatch between the value
+      // written when the answer lands and the value the build compares it
+      // against passes all of them — and the strip silently never appears
+      // again for anybody.
+      expect(bodyOf(src, 'Future<void> _load()'),
+          contains('_loadedFor = _currentKey'),
+          reason: 'the build compares _loadedFor against _currentKey, so '
+              'storing anything else means it never matches and the strip '
+              'is invisible forever');
     });
 
     test('the tile is keyed by video', () {

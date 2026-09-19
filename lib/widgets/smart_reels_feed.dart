@@ -3712,7 +3712,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
               if (widget.isOwner && item.id.isNotEmpty)
                 TagSuggestionStrip(
                   key: ValueKey('tags-${item.id}'),
-                  challengeId: item.id,
+                  videoId: item.id,
                 ),
               if (isChallenge) ...[
                 const SizedBox(height: 10),

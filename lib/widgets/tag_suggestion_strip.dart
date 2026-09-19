@@ -34,10 +34,21 @@ import 'package:myapp/services/api_service.dart';
 /// on a reel that has no suggestions — which is most of them, most of the
 /// time. Every failure is silence.
 class TagSuggestionStrip extends StatefulWidget {
-  /// The challenge this is about. The server checks that the caller made it.
-  final String challengeId;
+  /// The video this is about. The server checks that the caller made it.
+  final String videoId;
 
-  const TagSuggestionStrip({super.key, required this.challengeId});
+  /// Whether [videoId] names a challenge or somebody's answer to one.
+  ///
+  /// Both kinds are read, listened to and looked at by the same worker, and
+  /// both have an uploader who has never been shown any of it. The only
+  /// difference is which route to ask.
+  final TagSubject subject;
+
+  const TagSuggestionStrip({
+    super.key,
+    required this.videoId,
+    this.subject = TagSubject.challenge,
+  });
 
   @override
   State<TagSuggestionStrip> createState() => _TagSuggestionStripState();
@@ -46,11 +57,18 @@ class TagSuggestionStrip extends StatefulWidget {
 class _TagSuggestionStripState extends State<TagSuggestionStrip> {
   TagSuggestions? _s;
   bool _busy = false;
-  /// Which challenge the current [_s] belongs to. A reel tile is reused as
+  /// Which video the current [_s] belongs to. A reel tile is reused as
   /// the feed scrolls, so without this the tags from the last video would
   /// briefly show on the next one — and worse, a tap would file them against
   /// the wrong video.
+  ///
+  /// The kind is part of the key, not just the id: a challenge and an answer
+  /// can both be id 7, and showing one's tags on the other is the same bug
+  /// with a rarer trigger.
   String _loadedFor = '';
+
+  /// The key [_loadedFor] is compared against.
+  String get _currentKey => '${widget.subject.name}:${widget.videoId}';
 
   @override
   void initState() {
@@ -61,35 +79,36 @@ class _TagSuggestionStripState extends State<TagSuggestionStrip> {
   @override
   void didUpdateWidget(TagSuggestionStrip old) {
     super.didUpdateWidget(old);
-    if (old.challengeId != widget.challengeId) {
+    if (old.videoId != widget.videoId || old.subject != widget.subject) {
       setState(() => _s = null);
       _load();
     }
   }
 
   Future<void> _load() async {
-    final id = widget.challengeId;
+    final id = widget.videoId;
     if (id.isEmpty) return;
-    final got = await ApiService.getTagSuggestions(id);
+    final got = await ApiService.getTagSuggestions(id, subject: widget.subject);
     // The feed may have moved on while this was in flight.
-    if (!mounted || widget.challengeId != id) return;
+    if (!mounted || widget.videoId != id) return;
     setState(() {
       _s = got;
-      _loadedFor = id;
+      _loadedFor = _currentKey;
     });
   }
 
   Future<void> _decide({String? add, bool dismissAll = false}) async {
-    final id = widget.challengeId;
+    final id = widget.videoId;
     final s = _s;
     if (s == null || _busy || id.isEmpty) return;
     setState(() => _busy = true);
     final got = await ApiService.decideTagSuggestions(
       id,
+      subject: widget.subject,
       add: add == null ? const [] : [add],
       dismiss: dismissAll ? s.suggested : const [],
     );
-    if (!mounted || widget.challengeId != id) return;
+    if (!mounted || widget.videoId != id) return;
     setState(() {
       _busy = false;
       // A failed call leaves what was there. Guessing the new state and
@@ -102,7 +121,7 @@ class _TagSuggestionStripState extends State<TagSuggestionStrip> {
   Widget build(BuildContext context) {
     final s = _s;
     // Nothing to say, or not about this reel yet: take up no space.
-    if (s == null || s.isEmpty || _loadedFor != widget.challengeId) {
+    if (s == null || s.isEmpty || _loadedFor != _currentKey) {
       return const SizedBox.shrink();
     }
     return Padding(
