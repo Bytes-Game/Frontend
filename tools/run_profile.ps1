@@ -7,9 +7,10 @@
 #   tools\run_profile.bat -Mode debug           debug build instead
 #   tools\run_profile.bat -LogFile F:\run2.txt  write somewhere else
 #   tools\run_profile.bat -Append               add to the log instead of replacing it
-#   tools\run_profile.bat -Logcat               ALSO capture straight from the
-#                                               phone, which keeps recording
-#                                               even if the app restarts
+#   tools\run_profile.bat -NoLogcat             skip the phone-side recording
+#
+# The phone's own log is captured as well, ALWAYS, and folded into the same
+# file at the end — so there is one file to read and one file to send.
 #
 # Anything else you pass is handed straight to "flutter run", so
 # "tools\run_profile.bat -d R58M12345" still works.
@@ -32,20 +33,24 @@ param(
     # Keep previous runs in the same file instead of starting fresh.
     [switch]$Append,
 
-    # Also record straight off the phone with "adb logcat", into
-    # <LogFile>.device.txt.
+    # Turn OFF the phone-side recording. It is ON by default.
     #
-    # WHY THIS EXISTS. "flutter run" only prints for as long as it is
-    # attached to the app it launched. A run arrived with 297 lines in it,
-    # ending in the middle of the first video's decoder starting, followed
-    # by "Application finished." — the app stopped being followed about two
-    # seconds in. Everything the person then did was on a phone nothing was
-    # listening to.
+    # WHY IT IS ON BY DEFAULT. "flutter run" only prints for as long as it
+    # stays attached to the app it launched. A run arrived with 297 lines in
+    # it, ending in the middle of the first video's decoder starting,
+    # followed by "Application finished." — the app stopped being followed
+    # about two seconds in, and everything done after that was on a phone
+    # nothing was listening to. The whole session was lost, and nobody knew
+    # until the file was opened.
     #
-    # adb logcat does not care. It records the phone, not one app process,
-    # so it keeps going through an app being killed, restarted, or opened
+    # adb logcat does not care. It records the PHONE, not one app process,
+    # so it keeps going through the app being killed, restarted, or opened
     # again from the home screen.
-    [switch]$Logcat,
+    #
+    # Being a flag nobody remembers to pass is the same as not existing, so
+    # it is not a flag any more. The cost is a bigger file; the cost of the
+    # other way is finding out afterwards that the run captured nothing.
+    [switch]$NoLogcat,
 
     # Everything not matched above goes to "flutter run" untouched.
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -92,9 +97,10 @@ $flutterArgs = @('run', "--$Mode") + $Extra
 # file, and is stopped in the finally block below whatever happens.
 $deviceLog = "$LogFile.device.txt"
 $logcatProc = $null
-if ($Logcat) {
+$wantLogcat = -not $NoLogcat
+if ($wantLogcat) {
     if (-not (Get-Command adb -ErrorAction SilentlyContinue)) {
-        Write-Host "adb was not found on your PATH, so -Logcat is skipped." -ForegroundColor Yellow
+        Write-Host "adb was not found on your PATH, so the phone-side recording is off." -ForegroundColor Yellow
         Write-Host "It ships with Android Studio, in platform-tools."
     } else {
         # -c clears whatever the phone was already holding, so the file
@@ -151,7 +157,57 @@ try {
 
     if ($logcatProc -and -not $logcatProc.HasExited) {
         Stop-Process -Id $logcatProc.Id -Force -ErrorAction SilentlyContinue
-        Write-Host "Phone recording saved to $deviceLog" -ForegroundColor Cyan
+        # adb writes through a buffer. Stopping it does not mean the last
+        # lines have reached the disk, and appending a file that is still
+        # being written truncates it mid-line.
+        Start-Sleep -Milliseconds 700
+    }
+
+    # Fold the phone's log into the main one, so there is a single file to
+    # read and a single file to send.
+    #
+    # Appended AFTER the run rather than written alongside it: two writers
+    # on one file interleave mid-line and produce a log that cannot be
+    # trusted, which is worse than two files. By here the flutter stream
+    # has finished, so this is the one safe moment to join them.
+    #
+    # The device copy is left in place as well. If this append fails — disk
+    # full, file locked by an editor — the phone's log still exists on its
+    # own rather than being lost inside a half-written merge.
+    if ($wantLogcat -and (Test-Path -LiteralPath $deviceLog)) {
+        try {
+            $deviceLines = (Get-Content -LiteralPath $deviceLog | Measure-Object -Line).Lines
+            @(
+                '',
+                '=============================================================',
+                "PHONE LOG (adb logcat) - $deviceLines lines",
+                'Everything below is from the phone itself, so it covers any',
+                'stretch where flutter run stopped following the app.',
+                '============================================================='
+            ) | Add-Content -LiteralPath $LogFile -Encoding Unicode
+
+            # -Encoding Unicode, NOT the default.
+            #
+            # Tee-Object above wrote this file as UTF-16, and Add-Content on
+            # Windows PowerShell 5.1 defaults to ASCII. Mixing the two in
+            # one file produces a garbled log — which the header comment at
+            # the top of this script already warns about, and which this
+            # append walked straight into on the first attempt.
+            #
+            # -ReadCount batches the lines instead of sending them through
+            # the pipeline one at a time. A phone log is hundreds of
+            # thousands of lines, and one-at-a-time takes minutes.
+            Get-Content -LiteralPath $deviceLog -ReadCount 2000 |
+                ForEach-Object { Add-Content -LiteralPath $LogFile -Value $_ -Encoding Unicode }
+            Write-Host "Phone log ($deviceLines lines) folded into $LogFile" -ForegroundColor Cyan
+            Write-Host "  (also kept on its own at $deviceLog)"
+        } catch {
+            # Say so loudly. A silent failure here means sending a log that
+            # is missing exactly the part that was added to stop logs being
+            # missing.
+            Write-Host "COULD NOT FOLD THE PHONE LOG IN: $_" -ForegroundColor Yellow
+            Write-Host "  Send BOTH files: $LogFile and $deviceLog"
+        }
     }
 
     Write-Host ""
@@ -160,7 +216,7 @@ try {
     # The playback measurement lives on one line near the end of the run.
     # Pull it back out so it does not have to be hunted for in the file.
     $searchIn = @($LogFile)
-    if ($Logcat -and (Test-Path -LiteralPath $deviceLog)) { $searchIn += $deviceLog }
+    if ($wantLogcat -and (Test-Path -LiteralPath $deviceLog)) { $searchIn += $deviceLog }
     # Match on 'starts=' alone, NOT on '[reel] starts='.
     #
     # Those two words stopped being next to each other the day the decoder
