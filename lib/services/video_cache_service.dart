@@ -888,6 +888,7 @@ class VideoCacheService {
   void holdWarming() {
     if (_held) return;
     _held = true;
+    ReelDiagnostics.instance.recordWarmingHeld();
     for (final d in _active.values) {
       d.subscription?.pause();
     }
@@ -897,6 +898,7 @@ class VideoCacheService {
   void releaseWarming() {
     if (!_held) return;
     _held = false;
+    ReelDiagnostics.instance.recordWarmingReleased();
     for (final d in _active.values) {
       d.subscription?.resume();
     }
