@@ -18,7 +18,6 @@ import 'package:myapp/services/feed_paging.dart';
 import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/services/playback_reporter.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
-import 'package:myapp/services/reel_player_mode.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/widgets/feed_action_bar.dart'
@@ -1162,25 +1161,27 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
 
   /// Open this reel's player again, for a tile that found its own gone.
   ///
-  /// EXPERIMENT BRANCH. One-player mode holds a single open video, so a
-  /// battle flip closes the challenger to open the opponent. Flipping back
-  /// then lands on a [_ReelPlayerState] whose controller has been disposed
-  /// — the tile shows its poster and never recovers, because nothing in
-  /// the normal flow re-opens a reel that is already the current one.
+  /// For the phone the decoder reading clamps to a working set of one. A
+  /// battle flip there has to close the challenger to open the opponent,
+  /// so flipping BACK lands on a [_ReelPlayerState] whose controller has
+  /// been disposed — the tile shows its poster and never recovers, because
+  /// nothing in the normal flow re-opens a reel that is already current.
   ///
-  /// Only ever for the reel on screen. That is the same rule as everywhere
-  /// else in this file: an off-screen tile asking for a player is the
-  /// fast-scroll decoder storm this feed spent several releases removing.
+  /// On a phone with room for a few players this is never reached: the
+  /// challenger is still open when the user flips back.
   ///
-  /// Safe to call from a gesture, not from a build — it reaches
-  /// getController, which calls setVolume, which notifies listeners. See
-  /// the long note on [_getPlayerState].
+  /// Only ever for the reel on screen. Same rule as everywhere else in
+  /// this file: an off-screen tile asking for a player is the fast-scroll
+  /// decoder storm this feed spent several releases removing.
+  ///
+  /// Safe from a gesture, not from a build — it reaches getController,
+  /// which calls setVolume, which notifies listeners. See [_getPlayerState].
   void _reopenPlayer(int index) {
     if (!mounted || index != _currentIndex) return;
-    // Drop the stale entry first, or _getPlayerState hands the disposed
-    // one straight back: its own liveness check would catch that, but
-    // only because the pool no longer knows the controller — clearing it
-    // here makes the intent explicit rather than relying on that.
+    // Drop the stale entry first. _getPlayerState's own liveness check
+    // would catch it anyway, but only because the pool no longer knows the
+    // controller; clearing it here makes the intent explicit rather than
+    // leaning on that.
     _playerStates.remove(index);
     if (_getPlayerState(index, create: true) == null) return;
     setState(() {});
@@ -1629,14 +1630,6 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // cold spare until its opening bytes land, and by then a fast scroller
     // has moved on and the url is no longer claimed — so the battles in a
     // fling open no players at all.
-    //
-    // EXPERIMENT BRANCH: passing an EMPTY list here would not mean "no
-    // spare". VideoPlayerService.spareTargets reads an empty list as "the
-    // caller has not thought about it" and falls back to the first url in
-    // the window, so the spare would open anyway and the flag would read
-    // as working while changing nothing. One-player mode is enforced where
-    // it can actually be enforced: a pool that holds one holds the reel on
-    // screen, and VideoPlayerService.prefetch asks for no spares at all.
     final live = <(SpareLane, String)>[
       if (challengers.isNotEmpty) (SpareLane.nextReel, challengers.first),
     ];
@@ -2691,12 +2684,10 @@ class _ReelTile extends StatefulWidget {
 
   /// Ask the feed to open this reel's own player again and rebuild.
   ///
-  /// EXPERIMENT BRANCH. Needed because one-player mode holds exactly one
-  /// open video: flipping to a battle's opponent closes the challenger,
-  /// so flipping BACK finds [state] pointing at a player that is gone.
-  /// The tile cannot fix that itself — [state] is the parent's — so it
-  /// asks. On main this is never called, because the challenger is still
-  /// open when the user flips back.
+  /// Only reached on a phone held to a single player, where flipping to a
+  /// battle's opponent closes the challenger — so flipping back finds
+  /// [state] pointing at a player that is gone. The tile cannot fix that
+  /// itself, because [state] is the parent's, so it asks.
   final VoidCallback onNeedPlayer;
 
   const _ReelTile({
@@ -3123,13 +3114,13 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   /// from build(), initState or didUpdateWidget would reintroduce it and
   /// would need a post-frame callback.
   _ReelPlayerState _ensureOpponentState() {
-    // Identity, not non-null. EXPERIMENT BRANCH: one-player mode closes
-    // the opponent the moment the user flips back to the challenger, so a
-    // cached _opponentState can point at a player that is gone. Flipping
-    // to the opponent a second time would then hand a disposed controller
-    // to VideoPlayer — "Bad state: No active player with ID n" — which
-    // replaces the reel with an error box. Same check the parent's
-    // _getPlayerState makes, for the same reason.
+    // Identity, not non-null. The pool can evict and dispose this
+    // controller — on a phone clamped to a working set of one it will,
+    // every time the challenger is played — and a cached state then points
+    // at a player that is gone. Handing that to VideoPlayer throws "Bad
+    // state: No active player with ID n" from inside build, which replaces
+    // the reel with an error box. Same check the parent's _getPlayerState
+    // makes, for the same reason.
     final cached = _opponentState;
     if (cached != null &&
         VideoPlayerService.instance.isLive(cached.controller)) {
@@ -3178,10 +3169,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     if (show == _showingOpponent && !_cubeCtl.isAnimating) return;
     // Make sure the opponent's player exists BEFORE the first frame of the
     // turn — both cube faces render live video during the animation.
-    // EXPERIMENT BRANCH: in one-player mode the turn runs on the two
-    // posters and the incoming side opens when the side commits — see
-    // _onHorizontalDragStart.
-    if (show && !ReelPlayerMode.onePlayer) _ensureOpponentState();
+    if (show) _ensureOpponentState();
     _settleTo(show, track: track);
   }
 
@@ -3268,21 +3256,20 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     // No player and not the opponent means this reel has not been opened
     // yet — there is nothing to show or play, and the poster is already
     // what the tile is rendering.
-    //
-    // EXPERIMENT BRANCH: coming BACK to the challenger is the one case
-    // where that is wrong. One-player mode closed the challenger to open
-    // the opponent, so widget.state is either null or points at a player
-    // that is gone, and returning here would leave the user staring at the
-    // challenger's poster for good. Ask the feed to open it again — it is
-    // the reel on screen, so it is allowed one.
     final incoming = show ? _ensureOpponentState() : widget.state;
+    // Coming BACK to the challenger is the one case where giving up here
+    // is wrong. On a phone held to a single player the challenger was
+    // closed to open the opponent, so this is either null or points at a
+    // player that is gone — and returning would leave the viewer on a
+    // still picture with no way out but a swipe. Ask the feed to open it
+    // again: it is the reel on screen, so it is allowed one.
     if (!show &&
         (incoming == null ||
             !VideoPlayerService.instance.isLive(incoming.controller))) {
       widget.onNeedPlayer();
-      // onNeedPlayer rebuilds the parent, which hands this tile a new
-      // widget.state — but not until the next frame. The URL is what the
-      // call below actually needs, and it is the item's, not the state's.
+      // That rebuilds the parent, which hands this tile a new widget.state
+      // — but not until the next frame. The url is what the call below
+      // actually needs, and it belongs to the item, not the state.
       final url = widget.item.videoUrl;
       if (url.isEmpty) return;
       await VideoPlayerService.instance.showAndPlay(url);
@@ -3330,14 +3317,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     // Both faces render during the turn, so the opponent's player must
     // exist from the very first dragged frame (poster shows until its
     // controller has a frame).
-    //
-    // EXPERIMENT BRANCH: not in one-player mode. Opening it here would
-    // close the challenger — the pool holds one — and the user is still
-    // WATCHING the challenger; the face they are looking at would go to
-    // its poster the instant their finger moved, and go back again if
-    // they changed their mind. So the opponent waits for the side to
-    // actually commit, and its poster carries its face through the turn.
-    if (!ReelPlayerMode.onePlayer) _ensureOpponentState();
+    _ensureOpponentState();
   }
 
   void _onHorizontalDragUpdate(DragUpdateDetails d) {
