@@ -161,7 +161,18 @@ try {
     # Pull it back out so it does not have to be hunted for in the file.
     $searchIn = @($LogFile)
     if ($Logcat -and (Test-Path -LiteralPath $deviceLog)) { $searchIn += $deviceLog }
-    $stats = Select-String -LiteralPath $searchIn -SimpleMatch '[reel] starts=' |
+    # Match on 'starts=' alone, NOT on '[reel] starts='.
+    #
+    # Those two words stopped being next to each other the day the decoder
+    # reading was added to the front of the summary, which now reads
+    #
+    #     [reel] decoders{...} hardware=15  starts=122  proxy=95 (78%) ...
+    #
+    # so the old search matched nothing, and a perfectly good 63,000-line
+    # log with sixteen summaries in it was reported as having none. A false
+    # 'nothing here' is worse than no check at all: it tells somebody to
+    # throw away the run that had the answer in it.
+    $stats = Select-String -LiteralPath $searchIn -Pattern 'starts=\d+' |
         Select-Object -Last 1
     if ($stats) {
         Write-Host "Cache stats from this run:" -ForegroundColor Cyan
