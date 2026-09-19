@@ -559,7 +559,23 @@ class VideoPlayerService {
 
     VideoCacheService.instance.warm(window);
 
-    final wanted = spareTargets(window, live);
+    // A pool that holds ONE holds the reel on screen, and nothing else.
+    //
+    // Not left over from the one-player experiment — that is gone. This is
+    // for the phone the decoder reading clamps to a working set of one, via
+    // VideoPoolConfig.workingSetFor. Asking for a spare there is a decision
+    // taken on every swipe that cannot succeed: _openSpare would have to
+    // evict to make room, the only entry is the reel being watched, and
+    // _evictOldest refuses to touch that. Declining here says so once
+    // instead of rediscovering it every time.
+    //
+    // It has to be checked HERE rather than by passing an empty `live`
+    // list, because spareTargets reads an empty list as "the caller has not
+    // thought about it" and falls back to the nearest url in the window. An
+    // empty list is not a way to ask for nothing.
+    final wanted = _config.maxPoolSize <= 1
+        ? const <String, SpareLane>{}
+        : spareTargets(window, live);
 
     // Anything we were holding a deferred spare for that is no longer one
     // gesture away has left the window — drop it, so the wait below
@@ -1456,6 +1472,16 @@ class VideoPlayerService {
   /// wanting spares — so the release path is worth asserting on directly.
   @visibleForTesting
   bool get debugSpareGateHeld => _spareOpening != null;
+
+  /// The urls [prefetch] last decided were one gesture away, and so worth
+  /// a live player.
+  ///
+  /// Asserting on this rather than on the pool separates "did the feed ASK
+  /// for a spare" from "did the pool have room for one". They fail
+  /// identically from outside — no spare in the pool — and only the first
+  /// is what a pool of one is supposed to change.
+  @visibleForTesting
+  Set<String> get debugWantedSpares => Set.unmodifiable(_wantedSpares);
 
   @visibleForTesting
   int get debugPoolSize => _pool.length;

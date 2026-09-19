@@ -1159,6 +1159,34 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     return s;
   }
 
+  /// Open this reel's player again, for a tile that found its own gone.
+  ///
+  /// For the phone the decoder reading clamps to a working set of one. A
+  /// battle flip there has to close the challenger to open the opponent,
+  /// so flipping BACK lands on a [_ReelPlayerState] whose controller has
+  /// been disposed — the tile shows its poster and never recovers, because
+  /// nothing in the normal flow re-opens a reel that is already current.
+  ///
+  /// On a phone with room for a few players this is never reached: the
+  /// challenger is still open when the user flips back.
+  ///
+  /// Only ever for the reel on screen. Same rule as everywhere else in
+  /// this file: an off-screen tile asking for a player is the fast-scroll
+  /// decoder storm this feed spent several releases removing.
+  ///
+  /// Safe from a gesture, not from a build — it reaches getController,
+  /// which calls setVolume, which notifies listeners. See [_getPlayerState].
+  void _reopenPlayer(int index) {
+    if (!mounted || index != _currentIndex) return;
+    // Drop the stale entry first. _getPlayerState's own liveness check
+    // would catch it anyway, but only because the pool no longer knows the
+    // controller; clearing it here makes the intent explicit rather than
+    // leaning on that.
+    _playerStates.remove(index);
+    if (_getPlayerState(index, create: true) == null) return;
+    setState(() {});
+  }
+
   /// Self-healing for a dead HLS source. If the manifest the backend
   /// advertised can't actually be loaded (storage access revoked,
   /// rendition deleted, malformed transcode), the controller surfaces
@@ -2140,6 +2168,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                   onVote: () => _onVote(index),
                   onOpenDetail: () => _onOpenDetail(index),
                   onDelete: () => _onDelete(index),
+                  onNeedPlayer: () => _reopenPlayer(index),
                 );
               },
             ),
@@ -2653,6 +2682,14 @@ class _ReelTile extends StatefulWidget {
   /// true.
   final VoidCallback onDelete;
 
+  /// Ask the feed to open this reel's own player again and rebuild.
+  ///
+  /// Only reached on a phone held to a single player, where flipping to a
+  /// battle's opponent closes the challenger — so flipping back finds
+  /// [state] pointing at a player that is gone. The tile cannot fix that
+  /// itself, because [state] is the parent's, so it asks.
+  final VoidCallback onNeedPlayer;
+
   const _ReelTile({
     required this.item,
     required this.state,
@@ -2665,6 +2702,7 @@ class _ReelTile extends StatefulWidget {
     required this.onVote,
     required this.onOpenDetail,
     required this.onDelete,
+    required this.onNeedPlayer,
   });
 
   @override
@@ -3076,7 +3114,19 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   /// from build(), initState or didUpdateWidget would reintroduce it and
   /// would need a post-frame callback.
   _ReelPlayerState _ensureOpponentState() {
-    if (_opponentState != null) return _opponentState!;
+    // Identity, not non-null. The pool can evict and dispose this
+    // controller — on a phone clamped to a working set of one it will,
+    // every time the challenger is played — and a cached state then points
+    // at a player that is gone. Handing that to VideoPlayer throws "Bad
+    // state: No active player with ID n" from inside build, which replaces
+    // the reel with an error box. Same check the parent's _getPlayerState
+    // makes, for the same reason.
+    final cached = _opponentState;
+    if (cached != null &&
+        VideoPlayerService.instance.isLive(cached.controller)) {
+      return cached;
+    }
+    _opponentState = null;
     final url = widget.item.opponentVideoUrl;
     // This IS the flip's cost now, so this is where it gets counted.
     //
@@ -3207,6 +3257,24 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     // yet — there is nothing to show or play, and the poster is already
     // what the tile is rendering.
     final incoming = show ? _ensureOpponentState() : widget.state;
+    // Coming BACK to the challenger is the one case where giving up here
+    // is wrong. On a phone held to a single player the challenger was
+    // closed to open the opponent, so this is either null or points at a
+    // player that is gone — and returning would leave the viewer on a
+    // still picture with no way out but a swipe. Ask the feed to open it
+    // again: it is the reel on screen, so it is allowed one.
+    if (!show &&
+        (incoming == null ||
+            !VideoPlayerService.instance.isLive(incoming.controller))) {
+      widget.onNeedPlayer();
+      // That rebuilds the parent, which hands this tile a new widget.state
+      // — but not until the next frame. The url is what the call below
+      // actually needs, and it belongs to the item, not the state.
+      final url = widget.item.videoUrl;
+      if (url.isEmpty) return;
+      await VideoPlayerService.instance.showAndPlay(url);
+      return;
+    }
     if (incoming == null) return;
     // Same call the vertical swipe makes. That is the point: a flip is a
     // change of which reel is on screen, and it goes through the one place
