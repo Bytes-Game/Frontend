@@ -17,6 +17,7 @@ import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/link_speed_store.dart';
 import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/services/video_cache_service.dart';
+import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
@@ -240,6 +241,11 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         state == AppLifecycleState.detached) {
       VideoPlayerService.instance.trimPrefetched();
       PaintingBinding.instance.imageCache.clear();
+      // Write the playback numbers down before the app goes quiet. A run
+      // arrived with one video played and no summary at all, because the
+      // summary only printed after ten — so a session that ended early
+      // took every counter with it and could not be compared to anything.
+      ReelDiagnostics.instance.noteGoingToBackground();
     }
   }
 
