@@ -326,6 +326,93 @@ class NetworkQualityService {
     _offerToRemember();
   }
 
+  // ══════════════════════════════════════════════════════════════════════
+  // MEASURING THE LINK, NOT ONE LANE OF IT
+  // ══════════════════════════════════════════════════════════════════════
+  //
+  // Throughput used to be timed one download at a time: start a slice,
+  // finish it, divide. That answers "how fast was that download", which is
+  // NOT the question. The app runs up to three at once.
+  //
+  // Three downloads sharing a 12 Mbps link each clock about 4 Mbps. Every
+  // sample says 4, the median says 4, and the app concludes the link is 4 —
+  // a third of what it is. It then refuses 720p, which needs 4.3, and
+  // serves a soft picture on a connection that could carry the sharp one
+  // three times over. A device log showed exactly that shape:
+  //
+  //     quality{480p:29  link=4.2Mbps affords=480p}
+  //
+  // So the meter below sums bytes across EVERYTHING in flight and divides
+  // by the time the link was actually busy. One download or four, it
+  // measures the same thing: what this phone is getting from this network.
+  //
+  // Busy time, not wall time. A gap with nothing downloading is not a slow
+  // link, and counting it would drag every reading down in exactly the
+  // quiet stretches where the user is watching rather than scrolling.
+
+  /// Bytes that have arrived since the last window was emitted.
+  int _windowBytes = 0;
+
+  /// Runs only while at least one download is in flight.
+  final Stopwatch _linkBusy = Stopwatch();
+
+  /// How many downloads are in flight right now.
+  int _transfersInFlight = 0;
+
+  /// The most that were in flight while the last window was being filled.
+  ///
+  /// Reported in the log. Without it there is no way to tell a genuinely
+  /// slow link from this measurement being divided by three, and that is
+  /// the exact confusion this meter exists to end.
+  int _lanesThisWindow = 0;
+  int _lanesAtLastSample = 0;
+
+  /// Lanes in use when the last reading was taken, or 0 if none yet.
+  int get lanesAtLastSample => _lanesAtLastSample;
+
+  /// Enough bytes for a window to mean something. Below this a single
+  /// chunk's timing dominates and the answer is noise.
+  static const int _windowMinBytes = 256 * 1024;
+
+  /// And enough busy time. A burst out of a local buffer can move a quarter
+  /// of a megabyte instantly and would read as a gigabit link.
+  static const int _windowMinMs = 250;
+
+  /// A download started. Called by the warming pipeline.
+  void noteTransferStarted() {
+    _transfersInFlight++;
+    if (_transfersInFlight > _lanesThisWindow) {
+      _lanesThisWindow = _transfersInFlight;
+    }
+    if (!_linkBusy.isRunning) _linkBusy.start();
+  }
+
+  /// A download ended — finished, failed or cancelled, it does not matter.
+  /// What matters is that it has stopped using the link.
+  void noteTransferFinished() {
+    if (_transfersInFlight > 0) _transfersInFlight--;
+    if (_transfersInFlight == 0) _linkBusy.stop();
+  }
+
+  /// Bytes just arrived from the network, from any download.
+  ///
+  /// Cancelled transfers count here, unlike the old per-download timing.
+  /// Their bytes crossed the link like any others; it was only the DIVISION
+  /// that a cancellation made meaningless, and there is no division per
+  /// download any more.
+  void noteBytesFromNetwork(int bytes) {
+    if (bytes <= 0) return;
+    _windowBytes += bytes;
+    if (_windowBytes < _windowMinBytes) return;
+    final ms = _linkBusy.elapsedMilliseconds;
+    if (ms < _windowMinMs) return;
+    _lanesAtLastSample = _lanesThisWindow;
+    recordThroughput(_windowBytes, Duration(milliseconds: ms));
+    _windowBytes = 0;
+    _linkBusy.reset();
+    _lanesThisWindow = _transfersInFlight;
+  }
+
   /// Hand the current reading to whoever is keeping it for the next run.
   ///
   /// Only when it has actually MOVED — first time it is known, and after
@@ -375,6 +462,44 @@ class NetworkQualityService {
   /// value back would let one unusual session pin the guess for ever.
   int? get bpsWorthRemembering =>
       _throughputSamples.length >= _minSamples ? measuredBps : null;
+
+  /// True while THIS RUN has measured nothing, so any choice made now is a
+  /// guess and has to be revisited.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// LAST RUN'S NUMBER IS STILL THE DARK
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// This used to ask `measuredBps == null`, and that quietly stopped being
+  /// the right question the day the speed started being saved between runs.
+  ///
+  /// [measuredBps] falls back to [_rememberedBps], so from the first
+  /// moment of a launch it answers with last time's figure — and a choice
+  /// made against it was recorded as INFORMED. It is not. It is a guess
+  /// about a network the app has not touched yet, and it may have been
+  /// taken on a different one entirely: yesterday's train, a neighbour's
+  /// wifi, one bad minute on mobile data.
+  ///
+  /// The damage is not the first guess, which is unavoidable and is meant
+  /// to be provisional. It is that being counted as informed means it is
+  /// never looked at again. A device log showed the shape of it:
+  ///
+  ///     quality{480p:29  link=4.2Mbps affords=480p}
+  ///
+  /// Twenty-nine items — the whole first page, the ones actually watched —
+  /// sized against a number from a previous run, before a single byte had
+  /// moved. 4.2 Mbps missed the bar for 720p by one tenth of a megabit. By
+  /// the time this run had measured the real link it was too late: those
+  /// items were not marked provisional, so they kept the soft picture until
+  /// the app was closed.
+  ///
+  /// The same mistake, from the same cause, has already been fixed once in
+  /// this app: saving the speed between runs made the read-ahead depth
+  /// answer as though it had measured something, and the warm rate fell
+  /// from 93% to 72%. Fixed there, missed here.
+  ///
+  /// So: the dark is about THIS RUN's evidence, and nothing else.
+  bool get pickedInTheDark => _throughputSamples.length < _minSamples;
 
   /// Measured bits per second, or null when nothing — this run or any
   /// previous one — has anything to say.
@@ -519,8 +644,20 @@ class NetworkQualityService {
   }
 
   @visibleForTesting
+  /// How many readings the meter has produced. Asserting on this separates
+  /// "the meter declined to guess" from "the meter guessed wrong", which
+  /// look identical from measuredBps alone.
+  @visibleForTesting
+  int get debugSampleCount => _throughputSamples.length;
+
   void debugClearThroughput() {
     _throughputSamples.clear();
+    _windowBytes = 0;
+    _linkBusy.stop();
+    _linkBusy.reset();
+    _transfersInFlight = 0;
+    _lanesThisWindow = 0;
+    _lanesAtLastSample = 0;
     // The remembered reading and the last one offered are part of "what
     // this service believes about the link". Leaving them behind means a
     // test that asks for a blind service does not get one, and the blind
@@ -585,7 +722,7 @@ class NetworkQualityService {
     final already = _chosenFor[key];
     if (already != null && !_shouldReconsider(key, already)) return already;
 
-    final blind = measuredBps == null;
+    final blind = pickedInTheDark;
     final picked = pickVariantUrl(variants, maxLabel: maxLabel);
     if (picked != null && picked.isNotEmpty) {
       if (_chosenFor.length >= _chosenMemory) {
@@ -630,7 +767,12 @@ class NetworkQualityService {
   /// underneath them. Not worth a sharper picture.
   bool _shouldReconsider(String key, String already) {
     if (!_blindPicks.contains(key)) return false;
-    if (measuredBps == null) return false;
+    // Real evidence from THIS run, not last run's figure. Asking
+    // `measuredBps == null` here would be satisfied the instant the app
+    // launched, because that falls back to the remembered number — so a
+    // guess would be re-made against the very same guess, learning
+    // nothing and costing a rebuild of the whole page.
+    if (pickedInTheDark) return false;
     if (isUrlCommitted?.call(already) ?? false) {
       // Settled: it keeps what it has, and stops being asked about.
       _blindPicks.remove(key);
@@ -639,7 +781,9 @@ class NetworkQualityService {
     return true;
   }
 
-  /// Keys whose rendition was chosen before anything had been measured.
+  /// Keys whose rendition was chosen before THIS RUN had measured
+  /// anything — including the ones chosen against a figure carried over
+  /// from a previous run, which is still a guess.
   final Set<String> _blindPicks = <String>{};
 
   /// Whether anything has acted on a url yet — warmed, warming, or open in
@@ -732,6 +876,12 @@ class NetworkQualityService {
       parts.add('link=measuring');
     } else {
       parts.add('link=${(bps / 1e6).toStringAsFixed(1)}Mbps');
+      // How many downloads were sharing the link when that was measured.
+      // A reading taken across three lanes means something different from
+      // the same reading taken across one, and for a long time the log
+      // could not tell them apart.
+      final lanes = instance.lanesAtLastSample;
+      if (lanes > 0) parts.add('lanes=$lanes');
       parts.add('affords=${instance.affordableLabel}');
     }
     return parts.join(' ');
