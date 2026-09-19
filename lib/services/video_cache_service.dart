@@ -947,6 +947,17 @@ class VideoCacheService {
     IOSink? sink;
     d.isPrefix = true;
     d.written = 0;
+    // Declared out here so the finally below can always close it. A lane
+    // left open is worse than not counting it at all: the meter's busy
+    // clock never stops, so every later reading is divided by time the link
+    // spent idle and the app talks itself into a slower network than it has
+    // — which is the very fault this meter was added to fix.
+    var laneOpen = false;
+    void closeLane() {
+      if (!laneOpen) return;
+      laneOpen = false;
+      NetworkQualityService.instance.noteTransferFinished();
+    }
     try {
       final request = http.Request('GET', Uri.parse(d.url))
         ..headers[HttpHeaders.rangeHeader] = 'bytes=0-${prefixBytes - 1}';
@@ -983,7 +994,11 @@ class VideoCacheService {
       // and measures the thing that matters — this phone, this network,
       // this CDN — rather than guessing from "is it wifi".
       // See NetworkQualityService.recordThroughput.
-      final transferClock = Stopwatch()..start();
+      // This download is now using the link. The meter counts busy time
+      // only while at least one is, so a quiet stretch does not read as a
+      // slow network.
+      NetworkQualityService.instance.noteTransferStarted();
+      laneOpen = true;
       final done = Completer<void>();
       d.done = done;
       // The opening bytes, kept as they stream past so the box order can
@@ -998,6 +1013,11 @@ class VideoCacheService {
       d.subscription = _bounded(response.stream).listen(
         (chunk) {
           d.written += chunk.length;
+          // Every byte off the network goes to the link meter, whichever
+          // download it belongs to. That is what makes the reading the
+          // LINK's speed rather than this one lane's — see
+          // NetworkQualityService.noteBytesFromNetwork.
+          NetworkQualityService.instance.noteBytesFromNetwork(chunk.length);
           if (probe.length < mp4LayoutProbeBytes) {
             probe.add(chunk.length > mp4LayoutProbeBytes
                 ? chunk.sublist(0, mp4LayoutProbeBytes)
@@ -1098,18 +1118,15 @@ class VideoCacheService {
         cancelOnError: true,
       );
       await done.future;
-      transferClock.stop();
+      closeLane();
       await sink.flush();
       await sink.close();
       sink = null;
 
-      // Only completed transfers are measured. A cancelled one stopped for
-      // our own reasons, not the network's, and counting it would read as a
-      // slow link every time somebody scrolls quickly.
-      if (!d.cancelled && d.written > 0) {
-        NetworkQualityService.instance
-            .recordThroughput(d.written, transferClock.elapsed);
-      }
+      // Nothing to record here any more. Throughput is measured across all
+      // downloads at once by the link meter, which the chunk handler above
+      // feeds — see the long note on NetworkQualityService's meter for why
+      // timing one download at a time read a 12 Mbps link as 4.
 
       // ══════════════════════════════════════════════════════════════════
       // A CANCELLED DOWNLOAD USED TO DELETE WORK THAT WAS ALREADY WORKING
@@ -1203,6 +1220,9 @@ class VideoCacheService {
       await _safeDelete(prefixPath);
       return false;
     } finally {
+      // Whatever happened — finished, threw, cancelled — this download has
+      // stopped using the link and must say so exactly once.
+      closeLane();
       if (sink != null) {
         try {
           await sink.close();
