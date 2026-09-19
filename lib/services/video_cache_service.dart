@@ -886,6 +886,9 @@ class VideoCacheService {
   /// a dead one. That last part is verified rather than assumed; see the
   /// test.
   void holdWarming() {
+    // Whatever was about to resume, do not. The reel is dry again.
+    _resumeSettle?.cancel();
+    _resumeSettle = null;
     if (_held) return;
     _held = true;
     ReelDiagnostics.instance.recordWarmingHeld();
@@ -894,8 +897,71 @@ class VideoCacheService {
     }
   }
 
+  /// How long the reel on screen has to keep playing before background
+  /// downloads are allowed to start again.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// A STAND-DOWN THAT LASTS NINETY MILLISECONDS IS NOT A STAND-DOWN
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// This defence was measured on a device, and it fired. It just did not
+  /// last:
+  ///
+  ///     warming stood down n=43 for 3.9s
+  ///
+  /// Forty-three stand-downs sharing under four seconds — ninety
+  /// milliseconds each, and forty-two of them nearer zero than that; almost
+  /// all of the 3.9s is one single hold. Over the same session the decoder
+  /// was still handed nothing to play 261 times, median a FULL SECOND,
+  /// unchanged from the run before this defence was measured at all.
+  ///
+  /// So it was noticing and letting go again immediately. `isBuffering`
+  /// does not stay true while a reel is dry — it flickers, true then false
+  /// then true, and every flicker was a hold and an instant release. The
+  /// downloads paused for a few milliseconds and went straight back to
+  /// competing for the link the reel was starving for.
+  ///
+  /// Releasing on a settle rather than on the first good tick is what makes
+  /// the hold mean something. A reel that is genuinely playing again keeps
+  /// playing for half a second; one that is still struggling buffers again
+  /// within that window and the pending resume is cancelled.
+  ///
+  /// Half a second, not longer: this is bandwidth taken from reading ahead,
+  /// and read-ahead is what stops the NEXT swipe being cold. The cost of
+  /// holding too long is a cold neighbour; the cost of not holding at all
+  /// is the video in front of you stopping. But both are real.
+  @visibleForTesting
+  static Duration warmingResumesAfter = const Duration(milliseconds: 500);
+
+  Timer? _resumeSettle;
+
   /// The reel on screen is playing again; read-ahead may resume.
   void releaseWarming() {
+    if (!_held) return;
+    // Already counting down. Re-arming on every good tick would push the
+    // resume further away on each one and it would never arrive.
+    if (_resumeSettle != null) return;
+    _resumeSettle = Timer(warmingResumesAfter, () {
+      _resumeSettle = null;
+      if (!_held) return;
+      _held = false;
+      ReelDiagnostics.instance.recordWarmingReleased();
+      for (final d in _active.values) {
+        d.subscription?.resume();
+      }
+      _pump();
+    });
+  }
+
+  /// Resume now, without waiting out the settle.
+  ///
+  /// For the paths that are not "the reel recovered" — the reel changed, or
+  /// its player was disposed. There is nothing to protect any more, and
+  /// making the next reel wait half a second for downloads it needs would
+  /// turn a defence into a delay.
+  void releaseWarmingNow() {
+    _resumeSettle?.cancel();
+    _resumeSettle = null;
     if (!_held) return;
     _held = false;
     ReelDiagnostics.instance.recordWarmingReleased();

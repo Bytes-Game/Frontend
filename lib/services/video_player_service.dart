@@ -324,8 +324,11 @@ class VideoPlayerService {
     }
     _starvationWatched = null;
     _starvationListener = null;
-    // Whatever the last reel was doing, it is not on screen now.
-    VideoCacheService.instance.releaseWarming();
+    // Whatever the last reel was doing, it is not on screen now. Resume
+    // straight away rather than on the settle: there is nothing left to
+    // protect, and making the INCOMING reel wait half a second for the
+    // downloads it needs would turn the defence into a delay.
+    VideoCacheService.instance.releaseWarmingNow();
 
     final entry = _pool.where((e) => e.url == activeUrl).firstOrNull;
     final controller = entry?.controller;
@@ -335,7 +338,9 @@ class VideoPlayerService {
       // Not live any more: the pool disposed it. Let go, or read-ahead
       // stays held for the rest of the session.
       if (!isLive(controller)) {
-        VideoCacheService.instance.releaseWarming();
+        // The player is gone, so it will never report recovering. Waiting
+        // out the settle here would hold read-ahead down for nothing.
+        VideoCacheService.instance.releaseWarmingNow();
         return;
       }
       final v = controller.value;
