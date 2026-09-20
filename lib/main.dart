@@ -18,6 +18,7 @@ import 'package:myapp/services/link_speed_store.dart';
 import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
+import 'package:myapp/services/session_store.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
@@ -50,6 +51,22 @@ Future<void> main() async {
   // and ExoPlayer/AVPlayer/HTMLVideoElement are lazily constructed on
   // the first VideoPlayerController.
   WidgetsFlutterBinding.ensureInitialized();
+  // Start reading the saved login FIRST, and don't wait for it here.
+  //
+  // The first touch of the phone's secure storage makes Android unlock the
+  // key it encrypted the session with. That is a trip to the security chip
+  // and on a real device it took 223ms. It happens once per launch.
+  //
+  // It used to happen AFTER the first frame, in the splash screen's
+  // callback, with nothing else running and the user watching a spinner.
+  // Kicked off here it runs alongside everything below — the HTTP client,
+  // the RAM probe, the remembered link speed, painting the first frame — so
+  // by the time the splash asks for the answer it is usually already there.
+  //
+  // Deliberately not awaited: waiting here would put the 223ms in front of
+  // the first frame instead of beside it, which is the same stall moved
+  // somewhere less visible. See SessionStore.prefetch.
+  SessionStore.prefetch();
   // HTTP/3 (QUIC) for API calls: swap the shared API client to a
   // Cronet-backed one on Android. Render's Cloudflare edge advertises
   // h3, so after the boot-time prewarm performs alt-svc discovery,
@@ -280,9 +297,15 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                     )
                 : null,
             home: auth.restoring
-                // Cold-start session restore in flight (fast: one
-                // keystore read + one refresh call). A branded splash
+                // Cold-start session restore in flight. A branded splash
                 // beats flashing the login screen at returning users.
+                //
+                // The slow part of this used to be reading the saved login
+                // out of secure storage — 223ms of it, right here, with
+                // nothing else running. main() starts that read before the
+                // first frame now, so by the time this appears the answer
+                // is usually already in hand and the only thing left to
+                // wait for is the server.
                 ? const _RestoreSplash()
                 : auth.isAuthenticated
                     ? (auth.needsOnboarding
