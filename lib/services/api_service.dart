@@ -103,6 +103,23 @@ class UpdateProfileResult {
   });
 }
 
+/// Which kind of video a tag-suggestion call is about.
+///
+/// The two are the same feature over two tables — a challenge, and somebody's
+/// answer to one — and they differ only in the path. An enum rather than a
+/// boolean because `getTagSuggestions(id, true)` at a call site says nothing
+/// about what the true means.
+enum TagSubject {
+  challenge('challenges'),
+  response('challenges/responses');
+
+  const TagSubject(this.pathSegment);
+
+  /// The part of the URL that names the kind. Matches the routes in the
+  /// backend's main.go.
+  final String pathSegment;
+}
+
 /// What the model noticed about a video, and what the creator already has.
 class TagSuggestions {
   /// Offered: seen by the model, not already on the video, not already
@@ -885,6 +902,16 @@ class ApiService {
     // with the reason thrown away by the catch below. Nobody could post a
     // battle answer at all.
     Duration duration = Duration.zero,
+    // What the responder says their own video is.
+    //
+    // All optional, and the server has an answer for each when they are
+    // absent: the category falls back to the challenge being answered, the
+    // mood is read off the tags and caption, and the energy is derived. So
+    // sending nothing is a supported answer, not a gap — an answer to a dance
+    // challenge is filed as dance either way.
+    String category = '',
+    List<String> tags = const [],
+    List<String> emotionTags = const [],
   }) async {
     try {
       final res = await _authHttp.post(
@@ -897,6 +924,9 @@ class ApiService {
           'durationMs': duration.inMilliseconds,
           if (videoVariants.isNotEmpty) 'videoVariants': videoVariants,
           'thumbnailUrl': thumbnailUrl,
+          if (category.isNotEmpty) 'category': category,
+          if (tags.isNotEmpty) 'tags': tags,
+          if (emotionTags.isNotEmpty) 'emotionTags': emotionTags,
         }),
       );
       if (res.statusCode == 200 || res.statusCode == 201) {
@@ -912,7 +942,8 @@ class ApiService {
 
   /// What the model noticed about a video, for the person who made it.
   ///
-  /// GET /api/v1/challenges/{id}/tag-suggestions
+  /// GET /api/v1/challenges/{id}/tag-suggestions            (a challenge)
+  /// GET /api/v1/challenges/responses/{id}/tag-suggestions  (an answer)
   ///
   /// Every video is read, listened to and looked at after it is posted — see
   /// the worker's understanding pass. All of that was for the machine; the
@@ -921,10 +952,13 @@ class ApiService {
   /// Creator only, enforced on the server. Null means "nothing to show" for
   /// every reason at once — not yours, not analysed yet, or the request did
   /// not get through — because none of them is worth interrupting a feed for.
-  static Future<TagSuggestions?> getTagSuggestions(String challengeId) async {
+  static Future<TagSuggestions?> getTagSuggestions(
+    String id, {
+    TagSubject subject = TagSubject.challenge,
+  }) async {
     try {
       final res = await _authHttp.get(
-        Uri.parse('$_base/api/v1/challenges/$challengeId/tag-suggestions'),
+        Uri.parse('$_base/api/v1/${subject.pathSegment}/$id/tag-suggestions'),
       );
       if (res.statusCode != 200) return null;
       return TagSuggestions.fromJson(
@@ -936,19 +970,21 @@ class ApiService {
 
   /// Record which suggestions the creator kept and which they turned down.
   ///
-  /// POST /api/v1/challenges/{id}/tag-suggestions
+  /// POST /api/v1/challenges/{id}/tag-suggestions            (a challenge)
+  /// POST /api/v1/challenges/responses/{id}/tag-suggestions  (an answer)
   ///
   /// Both in one call, because they are one gesture: the creator looked at
   /// what was offered and sorted it. Returns the new state, so the caller
   /// does not have to guess what the server decided.
   static Future<TagSuggestions?> decideTagSuggestions(
-    String challengeId, {
+    String id, {
+    TagSubject subject = TagSubject.challenge,
     List<String> add = const [],
     List<String> dismiss = const [],
   }) async {
     try {
       final res = await _authHttp.post(
-        Uri.parse('$_base/api/v1/challenges/$challengeId/tag-suggestions'),
+        Uri.parse('$_base/api/v1/${subject.pathSegment}/$id/tag-suggestions'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'add': add, 'dismiss': dismiss}),
       );

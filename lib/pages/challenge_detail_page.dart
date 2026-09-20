@@ -15,6 +15,7 @@ import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/upload_job_manager.dart';
 import 'package:myapp/widgets/league_badge.dart';
+import 'package:myapp/widgets/tag_suggestion_strip.dart';
 
 /// Full-screen challenge detail: video, description, responses, and action buttons.
 class ChallengeDetailPage extends StatefulWidget {
@@ -663,6 +664,14 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                         onVote: _challenge!.status == 'active'
                             ? () => _vote(r.id)
                             : null,
+                        // An answer is read, listened to and looked at by the
+                        // same worker a challenge is, and until now the person
+                        // who posted it was never shown any of that. The strip
+                        // renders nothing unless there is something to offer,
+                        // and the server checks ownership again regardless of
+                        // what this passes.
+                        isMine: dp.user?.id != null &&
+                            dp.user!.id == r.responderId,
                       )),
                     ] else ...[
                       Center(
@@ -767,7 +776,16 @@ class _StatButton extends StatelessWidget {
 class _ResponseCard extends StatelessWidget {
   final ChallengeResponseModel response;
   final VoidCallback? onVote;
-  const _ResponseCard({required this.response, this.onVote});
+
+  /// True when the signed-in viewer posted this answer. Only then is there
+  /// anything to offer them about it.
+  final bool isMine;
+
+  const _ResponseCard({
+    required this.response,
+    this.onVote,
+    this.isMine = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -779,7 +797,11 @@ class _ResponseCard extends StatelessWidget {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       child: Padding(
         padding: const EdgeInsets.all(14),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+        Row(
           children: [
             // Thumbnail / placeholder — tap to play
             GestureDetector(
@@ -855,6 +877,17 @@ class _ResponseCard extends StatelessWidget {
                 onPressed: onVote,
                 icon: Icon(Icons.how_to_vote, color: cs.primary),
                 tooltip: 'Vote for this response',
+              ),
+          ],
+        ),
+            // What the model found in this answer, offered back to whoever
+            // posted it. Takes up no space at all when there is nothing to
+            // offer, which is most answers most of the time.
+            if (isMine && response.id.isNotEmpty)
+              TagSuggestionStrip(
+                key: ValueKey('response-tags-${response.id}'),
+                videoId: response.id,
+                subject: TagSubject.response,
               ),
           ],
         ),
