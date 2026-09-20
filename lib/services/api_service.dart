@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:myapp/config/constants.dart';
@@ -33,28 +34,92 @@ class _AuthHttp {
   static const _requestTimeout = Duration(seconds: 30);
 
   Future<http.Response> get(Uri url, {Map<String, String>? headers}) =>
-      ApiService.httpClient
+      _say('GET', url, () => ApiService.httpClient
           .get(url, headers: _merge(headers))
-          .timeout(_requestTimeout);
+          .timeout(_requestTimeout));
 
   Future<http.Response> post(Uri url,
           {Map<String, String>? headers, Object? body, Encoding? encoding}) =>
-      ApiService.httpClient
+      _say('POST', url, () => ApiService.httpClient
           .post(url, headers: _merge(headers), body: body, encoding: encoding)
-          .timeout(_requestTimeout);
+          .timeout(_requestTimeout));
 
   Future<http.Response> patch(Uri url,
           {Map<String, String>? headers, Object? body, Encoding? encoding}) =>
-      ApiService.httpClient
+      _say('PATCH', url, () => ApiService.httpClient
           .patch(url, headers: _merge(headers), body: body, encoding: encoding)
-          .timeout(_requestTimeout);
+          .timeout(_requestTimeout));
 
   Future<http.Response> delete(Uri url,
           {Map<String, String>? headers, Object? body, Encoding? encoding}) =>
-      ApiService.httpClient
+      _say('DELETE', url, () => ApiService.httpClient
           .delete(url,
               headers: _merge(headers), body: body, encoding: encoding)
-          .timeout(_requestTimeout);
+          .timeout(_requestTimeout));
+
+  // ══════════════════════════════════════════════════════════════════════
+  // EVERY API FAILURE GETS SAID OUT LOUD, ONCE
+  // ══════════════════════════════════════════════════════════════════════
+  //
+  // Ninety-six catch blocks in this app do nothing at all, sixty-eight of
+  // them in this file. They almost all read:
+  //
+  //     } catch (_) {
+  //       return null;      // or [], or false
+  //     }
+  //
+  // That is a deliberate rule and it is a good one — a network hiccup must
+  // never throw into a widget tree. What it also does is make "the server
+  // said no" and "there is nothing here" produce exactly the same thing: an
+  // empty list and a quiet screen.
+  //
+  // This repo's own notes say it: "catch (_) { return; } hid a whole page
+  // failing for two rounds of diagnosis."
+  //
+  // It matters more than usual right now. Twelve queries in the backend were
+  // broken for months. The server has been taught to say so. If the app goes
+  // on swallowing the answer, half the fix is wasted.
+  //
+  // So this sits where every request already passes, and says what failed —
+  // without changing what any caller gets back. Nothing here rethrows.
+  Future<http.Response> _say(
+      String method, Uri url, Future<http.Response> Function() send) async {
+    // The path only. A query string can carry a user id, and a log line is
+    // not a place to put one.
+    final where = '$method ${url.path}';
+    try {
+      final res = await send();
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        _note('$where -> ${res.statusCode}',
+            res.statusCode >= 500
+                ? 'the server failed; the app is carrying on with nothing'
+                : 'the server refused; the app is carrying on with nothing');
+      }
+      return res;
+    } catch (e) {
+      // Timeout, DNS, connection refused, a socket dropped mid-body.
+      _note('$where -> ${e.runtimeType}',
+          'the request never completed; the app is carrying on with nothing');
+      rethrow;
+    }
+  }
+
+  /// One line the first time, then a count.
+  ///
+  /// A dead endpoint called on every scroll would otherwise fill the log and
+  /// bury whatever else is in it — and this app's diagnosis has always been a
+  /// matter of reading the whole log, so drowning it is its own bug. The
+  /// count is what separates "one blip" from "this has never worked".
+  static final Map<String, int> _saidBefore = {};
+  void _note(String what, String consequence) {
+    final n = (_saidBefore[what] ?? 0) + 1;
+    _saidBefore[what] = n;
+    if (n == 1) {
+      debugPrint('[api] $what — $consequence');
+    } else if (n == 10 || n % 50 == 0) {
+      debugPrint('[api] $what — $consequence (x$n)');
+    }
+  }
 
   Map<String, String> _merge(Map<String, String>? headers) {
     final h = <String, String>{...?headers};
