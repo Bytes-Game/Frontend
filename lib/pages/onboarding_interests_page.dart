@@ -1,5 +1,7 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:myapp/config/constants.dart';
 import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
@@ -41,10 +43,22 @@ class _OnboardingInterestsPageState extends State<OnboardingInterestsPage>
   Future<void> _load() async {
     final data = await ApiService.getCategories();
     if (!mounted) return;
+    final offered = (data['categories'] as List? ?? [])
+        .map((e) => e.toString())
+        .toList();
+    // Drop the ones that are not really an answer. The server's list is
+    // the full vocabulary and includes "other", but "I am interested in
+    // other" is not a thing anyone can mean — and the server reads "other"
+    // as "nobody said" anyway, so tapping it seeds nothing while looking
+    // like a pick and counting towards the three this screen asks for.
+    // Same trap as the Category dropdown on the upload form.
+    final real = offered.where(ContentCategories.isRealAnswer).toList();
+    if (real.length != offered.length) {
+      debugPrint('Interests: hid ${offered.length - real.length} category '
+          'name(s) the server treats as "nobody said".');
+    }
     setState(() {
-      _categories = (data['categories'] as List? ?? [])
-          .map((e) => e.toString())
-          .toList();
+      _categories = real;
       _loading = false;
     });
   }

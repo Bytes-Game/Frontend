@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:myapp/config/constants.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
@@ -340,7 +341,13 @@ class _ContentCard extends StatelessWidget {
     final completion = ((content['completion'] ?? 0.0) as num).toDouble();
     final views = content['views'] ?? 0;
     final likes = content['likes'] ?? 0;
-    final category = (content['category'] ?? 'other') as String;
+    // Say "uncategorised" rather than "other" when nothing was recorded.
+    // The two look the same to the server, but only one of them is honest
+    // with the creator about whether their video was ever described.
+    final recorded = (content['category'] ?? '') as String;
+    final category = ContentCategories.isRealAnswer(recorded)
+        ? recorded
+        : 'uncategorised';
     final contentId = (content['contentId'] ?? '') as String;
     final contentType = (content['contentType'] ?? '') as String;
 

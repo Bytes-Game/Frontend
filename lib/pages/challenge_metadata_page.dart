@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'package:myapp/config/constants.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
@@ -20,7 +21,10 @@ import 'package:myapp/widgets/tags_input.dart';
 ///      typo-tolerant prefix match, global popularity, and per-user
 ///      category affinity from the recommender.
 ///   3. **Visibility** — public/friends segment.
-///   4. **Category** — dropdown.
+///   4. **Category** — dropdown. Starts empty and is REQUIRED: the
+///      server reads "other" as "nobody said", so a picker with a
+///      default produced videos nobody had described. "Other" is not
+///      offered at all — see ContentCategories in config/constants.dart.
 ///   5. **Tags** — multi-select chip field with custom-add. Replaces
 ///      the previous closed "emotion" picker; same autocomplete
 ///      backend feeds it so users can pull from the global vocabulary
@@ -56,7 +60,19 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
   final _subjectCtl = TextEditingController();
 
   String _visibility = 'arena';
-  String _category = 'other';
+
+  /// What the creator says the video is about. Null until they pick.
+  ///
+  /// It used to start on 'other', and that made the whole field useless.
+  /// The server reads 'other' as "nobody said" — so every creator who did
+  /// not open the dropdown posted a video the server filed as unlabelled,
+  /// while the form looked perfectly filled in. 43 of 44 videos on the
+  /// platform had no creator category because of this one line.
+  ///
+  /// Null means the question has not been answered yet, which is the truth,
+  /// and the form now refuses to post until it has been. See
+  /// ContentCategories in config/constants.dart.
+  String? _category;
   final List<String> _tags = [];
   bool _busy = false;
 
@@ -86,13 +102,6 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
   String _prefixLastQuery = '';
   String _subjectLastQuery = '';
   String _tagLastQuery = '';
-
-  // Mirrors ContentCategories in devb/models.go.
-  static const _categories = [
-    'comedy', 'motivation', 'sports', 'dance', 'music', 'gaming',
-    'art', 'education', 'story', 'fashion', 'food', 'horror',
-    'emotional', 'lifestyle', 'tech', 'prank', 'news', 'other',
-  ];
 
   // Local fallback when the suggest endpoint is unreachable. Short
   // intentionally — we don't want this to crowd out real network
@@ -213,7 +222,7 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
       pageName: pageName,
       params: {
         'visibility': _visibility,
-        'category': _category,
+        'category': _category ?? '',
         'tagCount': _tags.length,
       },
     );
@@ -222,7 +231,10 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
       prefix: _prefixCtl.text.trim(),
       subject: _subjectCtl.text.trim(),
       visibility: _visibility,
-      category: _category,
+      // Non-null by here: the form will not validate without a pick. The
+      // fallback is what the server already means by "nobody said", so if
+      // that guard is ever loosened this degrades instead of crashing.
+      category: _category ?? '',
       // Tags now go in the field that means tags. They used to ride in on
       // emotionTags because the backend had nowhere else to put them, and
       // that quietly cost twice over: the ranker matches emotions against a
@@ -481,31 +493,84 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
     );
   }
 
+  /// The Category picker.
+  ///
+  /// Starts on nothing and will not let the form post until a real category
+  /// is chosen. Both of those matter, and for the same reason: the server
+  /// treats 'other' as no answer at all, so a picker that starts on 'Other'
+  /// — or that offers it — produces videos nobody has described while
+  /// looking like it did its job.
+  ///
+  /// Built as a FormField so it goes through the same
+  /// `_formKey.currentState!.validate()` the Post button already calls.
+  /// Checking it separately would be a second place for the rule to live,
+  /// and a second place for it to quietly stop being applied.
   Widget _categoryDropdown(ColorScheme cs) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: _category,
-          isExpanded: true,
-          dropdownColor: cs.surfaceContainerHigh,
-          style: TextStyle(color: cs.onSurface),
-          iconEnabledColor: cs.onSurface.withValues(alpha: 0.7),
-          items: _categories
-              .map((c) => DropdownMenuItem(
-                    value: c,
-                    child: Text(c[0].toUpperCase() + c.substring(1)),
-                  ))
-              .toList(),
-          onChanged: (v) {
-            if (v != null) setState(() => _category = v);
-          },
-        ),
-      ),
+    return FormField<String>(
+      initialValue: _category,
+      // Nothing is shown until they have actually touched the picker, so
+      // the form does not open already telling them off. After that the
+      // complaint clears the instant they answer it, rather than sitting
+      // there looking unfixed until the next time they tap Post.
+      autovalidateMode: AutovalidateMode.onUserInteraction,
+      validator: (v) => ContentCategories.isRealAnswer(v)
+          ? null
+          : 'Pick what this video is about',
+      builder: (field) {
+        final bad = field.hasError;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(12),
+                border: bad ? Border.all(color: cs.error) : null,
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: field.value,
+                  isExpanded: true,
+                  dropdownColor: cs.surfaceContainerHigh,
+                  style: TextStyle(color: cs.onSurface),
+                  iconEnabledColor: cs.onSurface.withValues(alpha: 0.7),
+                  // Shown while nothing is picked. Says what to do rather
+                  // than naming a category, so it can never read as an
+                  // answer the creator did not give.
+                  hint: Text(
+                    'Choose a category',
+                    style: TextStyle(
+                      color: cs.onSurfaceVariant.withValues(alpha: 0.8),
+                    ),
+                  ),
+                  items: ContentCategories.choosable
+                      .map((c) => DropdownMenuItem(
+                            value: c,
+                            child: Text(c[0].toUpperCase() + c.substring(1)),
+                          ))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() => _category = v);
+                    // Keep the FormField in step with our copy, and clear
+                    // the error the moment they answer.
+                    field.didChange(v);
+                  },
+                ),
+              ),
+            ),
+            if (bad)
+              Padding(
+                padding: const EdgeInsets.only(left: 12, top: 6),
+                child: Text(
+                  field.errorText!,
+                  style: TextStyle(color: cs.error, fontSize: 12),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 
