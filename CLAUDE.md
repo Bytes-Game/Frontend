@@ -60,3 +60,35 @@ And never answer "I cannot find it" or "I have no fix I can defend". If the
 evidence is not in the log, add a log line and say what the next run should
 show. Silent failure paths are bugs in their own right — `catch (_) { return; }`
 hid a whole page failing for two rounds of diagnosis.
+
+## Before you say something works
+
+Two rules, both learned the expensive way in this repo.
+
+### Cut the wire and run the tests
+
+The most common bug here, hit five times now, is **a thing that works that
+nothing calls**. A decoder probe with no caller. A measured budget worked out
+at startup and never passed on. A link meter nothing fed. A stand-down counter
+nothing wired up. Columns on a table nothing ever wrote to.
+
+Every one of them had tests. Every one passed. Because each test called the far
+end **by hand**, so it never went through the missing wire.
+
+So before claiming something works: **delete the call and run the tests.** If
+nothing goes red, the test is not testing what you think it is.
+
+This is not optional polish. It is the only check that catches this, and it
+takes a minute.
+
+### A test that matches its own comment checks nothing
+
+Two tests here searched the source for the words in the comment explaining a
+trap, not for the code that avoids it. They passed against code with the trap
+wide open.
+
+If a test reads the source, strip the comment lines first.
+
+And watch for the reverse shape: a widget test that asserts something renders
+**nothing** will still pass if you break it so it renders nothing **forever**.
+When every test checks for absence, one of them has to check for presence.
