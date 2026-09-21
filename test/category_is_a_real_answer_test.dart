@@ -11,9 +11,17 @@
 //
 // The fix is two-sided and both sides matter:
 //
-//   * the picker starts on NOTHING and will not let the form post until a
-//     real category is chosen
+//   * the picker starts on NOTHING, and skipping it sends "" — the server's
+//     own word for "nobody said"
 //   * "other" is not offered at all, so every pick means something
+//
+// Picking one is OPTIONAL. It can be, because the server does not need it:
+// the transcode worker reads what is spoken in the video and written on its
+// screen, and that reading BEATS a creator's pick in the ranker
+// (categoryFromEvidence in the backend's content_tags.go). A pick is extra
+// evidence, not a gap that must be filled.
+//
+// What is never allowed is an answer nobody gave. That is the whole bug.
 //
 // These tests hold both in place, plus the quieter copies of the same
 // default that sat in the API layer and the interrupted-upload restore.
@@ -124,7 +132,8 @@ void main() {
     testWidgets('opens with no category chosen', (tester) async {
       await openForm(tester);
 
-      expect(find.text('Choose a category'), findsOneWidget,
+      expect(find.text('Skip and we work it out from the video'),
+          findsOneWidget,
           reason: 'A picker that opens already showing an answer is how the '
               'field stopped meaning anything.');
       // And it is not quietly sitting on a real category either.
@@ -135,36 +144,110 @@ void main() {
       }
     });
 
-    testWidgets('refuses to post until a category is picked', (tester) async {
+    testWidgets('says what happens if you skip it', (tester) async {
       await openForm(tester);
 
-      await tester.tap(find.text('Post Challenge'));
-      await tester.pump();
-
-      expect(find.text('Pick what this video is about'), findsOneWidget,
-          reason: 'Without this the form posts happily and the server files '
-              'the video as undescribed.');
+      expect(find.text('Skip and we work it out from the video'),
+          findsOneWidget,
+          reason: 'Leaving it blank is a supported answer, so the form has '
+              'to say so. Silence here reads as a field you forgot.');
+      expect(find.text('CATEGORY (OPTIONAL)'), findsOneWidget);
     });
 
-    testWidgets('and accepts it once they do', (tester) async {
+    testWidgets('picking one still works', (tester) async {
       await openForm(tester);
 
-      await tester.tap(find.text('Post Challenge'));
-      await tester.pump();
-      expect(find.text('Pick what this video is about'), findsOneWidget);
-
-      // Open the dropdown and choose one.
       await tester.tap(find.byType(DropdownButton<String>));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Comedy').last);
       await tester.pumpAndSettle();
 
-      // Picking one is itself the answer to "does the field still work".
-      // A picker broken so hard it renders nothing would pass the
-      // disappearing-error check below all on its own.
+      // Checking for PRESENCE. Every other check in this group is about
+      // something NOT being shown, and a picker broken so badly it renders
+      // nothing at all would sail through every one of them.
       expect(find.text('Comedy'), findsOneWidget);
-      expect(find.text('Choose a category'), findsNothing);
-      expect(find.text('Pick what this video is about'), findsNothing);
+      expect(find.text('Skip and we work it out from the video'), findsNothing);
+    });
+
+    testWidgets('posting without one is allowed', (tester) async {
+      await openForm(tester);
+
+      // Subject is genuinely required and starts empty, so fill it — other-
+      // wise this test would pass on the subject blocking the post and prove
+      // nothing about the category. (Prefix ships with default text.)
+      await tester.enterText(find.byType(TextFormField).at(1), 'pranks');
+      await tester.pump();
+
+      await tester.tap(find.text('Post Challenge'));
+      await tester.pump();
+
+      // Nothing stops the submit on account of the category. The page gets
+      // as far as the signed-in check, which is the step AFTER validation —
+      // so seeing its message is proof the form validated.
+      expect(find.text('You need to be signed in to post a challenge.'),
+          findsOneWidget,
+          reason: 'If the form refused here, the category would be blocking '
+              'the post — which is the behaviour this change removes.');
+    });
+  });
+
+  group('skipping it reaches the server as "nobody said"', () {
+    // The point of the whole change. If a skipped picker arrives at the
+    // server as any real-looking category, the server believes the creator
+    // answered and stops preferring what it read off the video.
+
+    test('createChallenge sends an empty category when none was picked', () async {
+      Map<String, dynamic>? sent;
+      ApiService.useClient(MockClient((req) async {
+        sent = json.decode(req.body) as Map<String, dynamic>;
+        return http.Response(json.encode({'id': '1'}), 201);
+      }));
+      addTearDown(() => ApiService.useClient(http.Client()));
+
+      await ApiService.createChallenge(
+        creatorId: 'u1',
+        videoUrl: 'https://example.invalid/v.mp4',
+        prefix: 'Who is better at',
+        subject: 'pranks',
+        visibility: 'arena',
+      );
+
+      expect(sent, isNotNull);
+      expect(sent!['category'], '',
+          reason: 'Anything else here is the app answering a question the '
+              'creator did not answer. "other" would be read as a shrug by '
+              'luck rather than by design, and any real category would be '
+              'read as a claim nobody made.');
+    });
+
+    test('and sends the real one when there was a pick', () async {
+      // The presence half. A createChallenge that dropped the field entirely
+      // would pass the test above.
+      Map<String, dynamic>? sent;
+      ApiService.useClient(MockClient((req) async {
+        sent = json.decode(req.body) as Map<String, dynamic>;
+        return http.Response(json.encode({'id': '1'}), 201);
+      }));
+      addTearDown(() => ApiService.useClient(http.Client()));
+
+      await ApiService.createChallenge(
+        creatorId: 'u1',
+        videoUrl: 'https://example.invalid/v.mp4',
+        prefix: 'Who is better at',
+        subject: 'pranks',
+        visibility: 'arena',
+        category: 'comedy',
+      );
+
+      expect(sent!['category'], 'comedy');
+    });
+
+    test('the form hands on what was picked, and "" when nothing was', () {
+      final src = codeOnly(
+          File('lib/pages/challenge_metadata_page.dart').readAsStringSync());
+      expect(src, contains("category: _category ?? ''"),
+          reason: 'The form must pass the empty string through, not fill the '
+              'gap with a category of its own choosing.');
     });
   });
 

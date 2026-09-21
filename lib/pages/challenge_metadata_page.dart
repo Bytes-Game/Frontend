@@ -21,10 +21,11 @@ import 'package:myapp/widgets/tags_input.dart';
 ///      typo-tolerant prefix match, global popularity, and per-user
 ///      category affinity from the recommender.
 ///   3. **Visibility** — public/friends segment.
-///   4. **Category** — dropdown. Starts empty and is REQUIRED: the
-///      server reads "other" as "nobody said", so a picker with a
-///      default produced videos nobody had described. "Other" is not
-///      offered at all — see ContentCategories in config/constants.dart.
+///   4. **Category** — dropdown. Optional, and starts EMPTY. Leaving it
+///      alone is a real answer: the server works the category out from
+///      the video itself, and that reading outranks a creator's pick
+///      anyway. What is not allowed is a pre-filled answer nobody gave —
+///      see ContentCategories in config/constants.dart.
 ///   5. **Tags** — multi-select chip field with custom-add. Replaces
 ///      the previous closed "emotion" picker; same autocomplete
 ///      backend feeds it so users can pull from the global vocabulary
@@ -61,7 +62,7 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
 
   String _visibility = 'arena';
 
-  /// What the creator says the video is about. Null until they pick.
+  /// What the creator says the video is about. Null means they did not say.
   ///
   /// It used to start on 'other', and that made the whole field useless.
   /// The server reads 'other' as "nobody said" — so every creator who did
@@ -69,9 +70,12 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
   /// while the form looked perfectly filled in. 43 of 44 videos on the
   /// platform had no creator category because of this one line.
   ///
-  /// Null means the question has not been answered yet, which is the truth,
-  /// and the form now refuses to post until it has been. See
-  /// ContentCategories in config/constants.dart.
+  /// Null is now sent as an empty string, which is the truth and is exactly
+  /// what the server expects for "nobody said". It then decides the category
+  /// from the video itself — what is spoken in it and written on screen —
+  /// and that reading outranks a creator's pick in the ranker regardless.
+  /// So skipping this costs nothing; filling it in with a default nobody
+  /// chose cost everything. See ContentCategories in config/constants.dart.
   String? _category;
   final List<String> _tags = [];
   bool _busy = false;
@@ -332,7 +336,7 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
               ),
 
               const SizedBox(height: 24),
-              _section('Category'),
+              _section('Category (optional)'),
               _categoryDropdown(cs),
 
               const SizedBox(height: 24),
@@ -495,82 +499,51 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
 
   /// The Category picker.
   ///
-  /// Starts on nothing and will not let the form post until a real category
-  /// is chosen. Both of those matter, and for the same reason: the server
-  /// treats 'other' as no answer at all, so a picker that starts on 'Other'
-  /// — or that offers it — produces videos nobody has described while
-  /// looking like it did its job.
+  /// Optional, and starts on nothing. Both of those matter, and for the same
+  /// reason: the server treats 'other' as no answer at all, so a picker that
+  /// starts on "Other" — or that offers it — produces videos nobody has
+  /// described while looking like it did its job. That is how 43 of 44
+  /// videos ended up with no creator category.
   ///
-  /// Built as a FormField so it goes through the same
-  /// `_formKey.currentState!.validate()` the Post button already calls.
-  /// Checking it separately would be a second place for the rule to live,
-  /// and a second place for it to quietly stop being applied.
+  /// Nothing is required here because nothing needs to be. The server reads
+  /// the video — what is said in it and written on screen — and that reading
+  /// beats a creator's pick in the ranker anyway. A pick is useful extra
+  /// evidence, not a gap that has to be filled.
   Widget _categoryDropdown(ColorScheme cs) {
-    return FormField<String>(
-      initialValue: _category,
-      // Nothing is shown until they have actually touched the picker, so
-      // the form does not open already telling them off. After that the
-      // complaint clears the instant they answer it, rather than sitting
-      // there looking unfixed until the next time they tap Post.
-      autovalidateMode: AutovalidateMode.onUserInteraction,
-      validator: (v) => ContentCategories.isRealAnswer(v)
-          ? null
-          : 'Pick what this video is about',
-      builder: (field) {
-        final bad = field.hasError;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                color: cs.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(12),
-                border: bad ? Border.all(color: cs.error) : null,
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: field.value,
-                  isExpanded: true,
-                  dropdownColor: cs.surfaceContainerHigh,
-                  style: TextStyle(color: cs.onSurface),
-                  iconEnabledColor: cs.onSurface.withValues(alpha: 0.7),
-                  // Shown while nothing is picked. Says what to do rather
-                  // than naming a category, so it can never read as an
-                  // answer the creator did not give.
-                  hint: Text(
-                    'Choose a category',
-                    style: TextStyle(
-                      color: cs.onSurfaceVariant.withValues(alpha: 0.8),
-                    ),
-                  ),
-                  items: ContentCategories.choosable
-                      .map((c) => DropdownMenuItem(
-                            value: c,
-                            child: Text(c[0].toUpperCase() + c.substring(1)),
-                          ))
-                      .toList(),
-                  onChanged: (v) {
-                    if (v == null) return;
-                    setState(() => _category = v);
-                    // Keep the FormField in step with our copy, and clear
-                    // the error the moment they answer.
-                    field.didChange(v);
-                  },
-                ),
-              ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: _category,
+          isExpanded: true,
+          dropdownColor: cs.surfaceContainerHigh,
+          style: TextStyle(color: cs.onSurface),
+          iconEnabledColor: cs.onSurface.withValues(alpha: 0.7),
+          // Shown while nothing is picked. Says what happens if they skip,
+          // rather than naming a category — a category sitting there reads
+          // as an answer the creator never gave.
+          hint: Text(
+            'Skip and we work it out from the video',
+            style: TextStyle(
+              color: cs.onSurfaceVariant.withValues(alpha: 0.8),
             ),
-            if (bad)
-              Padding(
-                padding: const EdgeInsets.only(left: 12, top: 6),
-                child: Text(
-                  field.errorText!,
-                  style: TextStyle(color: cs.error, fontSize: 12),
-                ),
-              ),
-          ],
-        );
-      },
+          ),
+          items: ContentCategories.choosable
+              .map((c) => DropdownMenuItem(
+                    value: c,
+                    child: Text(c[0].toUpperCase() + c.substring(1)),
+                  ))
+              .toList(),
+          onChanged: (v) {
+            if (v == null) return;
+            setState(() => _category = v);
+          },
+        ),
+      ),
     );
   }
 
