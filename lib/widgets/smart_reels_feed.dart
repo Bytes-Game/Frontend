@@ -542,7 +542,8 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       newItems: parsed.length,
       limit: _pageLimit,
     );
-    _logPageComposition(nextPage, parsed, raw.length, data['hasMore'], more);
+    _logPageComposition(
+        nextPage, parsed, raw.length, data['hasMore'], more, data['coldStart']);
     final errorMsg = (data['_ok'] == false) ? data['_error'] as String? : null;
     setState(() {
       _items.addAll(parsed);
@@ -602,12 +603,33 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   /// dedup, `said` is the server's own `hasMore` (`null` when it sent
   /// none), and `more` is what this widget concluded — see
   /// [_decideHasMore].
+  ///
+  /// And `cold`, which is WHICH RANKER answered.
+  ///
+  /// The server has always sent this and nothing ever read it. That cost a
+  /// real investigation hours. A device log showed the same seventeen
+  /// videos served twice with `repeat=0 againThisRun=18` — the server
+  /// insisting they were new — and the answer to why was the flag sitting
+  /// unread in the same response: `coldStart: true`.
+  ///
+  /// It matters because the cold-start ranker is a different machine. It
+  /// pages by page NUMBER rather than by what you have watched, so page 1
+  /// is the same top videos every time it is asked for; it caps each page
+  /// per kind, which is why those pages were short; and until this was
+  /// fixed it did not record what it served at all. Every symptom in that
+  /// log came from this one flag being true, and nobody could see it.
+  ///
+  /// `cold=true` and repeats means the new-user path. `cold=false` and
+  /// repeats means something else entirely. Without it the two are
+  /// indistinguishable, which is exactly the position that investigation
+  /// started from.
   void _logPageComposition(
     int page,
     List<_FeedEntry> parsed,
     int rawCount,
     Object? declaredHasMore,
     bool hasMore,
+    Object? coldStart,
   ) {
     var battles = 0;
     var shorts = 0;
@@ -644,6 +666,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       'battles=$battles shorts=$shorts  mine=$mine noCreatorId=$noCreatorId  '
       'new=$newHere repeat=$repeats againThisRun=$_seenAgainThisSession  '
       'raw=$rawCount/$_pageLimit said=$declaredHasMore more=$hasMore  '
+      'cold=${coldStart == true}  '
       // Which quality is actually being served. "The video looks soft" and
       // "the video keeps stopping" arrive as the same complaint, and without
       // this there is no way to tell being handed 480p from being handed
