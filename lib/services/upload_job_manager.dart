@@ -786,7 +786,11 @@ class UploadJobManager {
             prefix: metaJson['prefix'] as String? ?? '',
             subject: metaJson['subject'] as String? ?? '',
             visibility: metaJson['visibility'] as String? ?? 'arena',
-            category: metaJson['category'] as String? ?? 'other',
+            // Empty, not 'other'. A job saved before the app was killed
+            // either carried a real category or carried nothing; inventing
+            // 'other' on the way back in would tell the server the creator
+            // answered when they had not.
+            category: metaJson['category'] as String? ?? '',
             tags: (metaJson['tags'] as List? ?? [])
                 .map((e) => e.toString())
                 .toList(),

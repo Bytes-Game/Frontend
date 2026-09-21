@@ -816,7 +816,12 @@ class ApiService {
     required String subject,
     required String visibility,
     List<String> visibleTo = const [],
-    String category = 'other',
+    // Empty means "the creator did not say", which is exactly how the
+    // server reads it. This used to default to 'other' — which the server
+    // ALSO reads as "did not say", but which looks like a real answer from
+    // this side, so nobody noticed that the field was doing nothing.
+    // See ContentCategories in config/constants.dart.
+    String category = '',
     List<String> emotionTags = const [],
     // The creator's own words for what the video is about. Sent raw —
     // the server lowercases, strips '#', folds separators, dedupes and

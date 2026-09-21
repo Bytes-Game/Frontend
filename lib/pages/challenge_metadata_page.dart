@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'package:myapp/config/constants.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
@@ -20,7 +21,11 @@ import 'package:myapp/widgets/tags_input.dart';
 ///      typo-tolerant prefix match, global popularity, and per-user
 ///      category affinity from the recommender.
 ///   3. **Visibility** — public/friends segment.
-///   4. **Category** — dropdown.
+///   4. **Category** — dropdown. Optional, and starts EMPTY. Leaving it
+///      alone is a real answer: the server works the category out from
+///      the video itself, and that reading outranks a creator's pick
+///      anyway. What is not allowed is a pre-filled answer nobody gave —
+///      see ContentCategories in config/constants.dart.
 ///   5. **Tags** — multi-select chip field with custom-add. Replaces
 ///      the previous closed "emotion" picker; same autocomplete
 ///      backend feeds it so users can pull from the global vocabulary
@@ -56,7 +61,22 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
   final _subjectCtl = TextEditingController();
 
   String _visibility = 'arena';
-  String _category = 'other';
+
+  /// What the creator says the video is about. Null means they did not say.
+  ///
+  /// It used to start on 'other', and that made the whole field useless.
+  /// The server reads 'other' as "nobody said" — so every creator who did
+  /// not open the dropdown posted a video the server filed as unlabelled,
+  /// while the form looked perfectly filled in. 43 of 44 videos on the
+  /// platform had no creator category because of this one line.
+  ///
+  /// Null is now sent as an empty string, which is the truth and is exactly
+  /// what the server expects for "nobody said". It then decides the category
+  /// from the video itself — what is spoken in it and written on screen —
+  /// and that reading outranks a creator's pick in the ranker regardless.
+  /// So skipping this costs nothing; filling it in with a default nobody
+  /// chose cost everything. See ContentCategories in config/constants.dart.
+  String? _category;
   final List<String> _tags = [];
   bool _busy = false;
 
@@ -86,13 +106,6 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
   String _prefixLastQuery = '';
   String _subjectLastQuery = '';
   String _tagLastQuery = '';
-
-  // Mirrors ContentCategories in devb/models.go.
-  static const _categories = [
-    'comedy', 'motivation', 'sports', 'dance', 'music', 'gaming',
-    'art', 'education', 'story', 'fashion', 'food', 'horror',
-    'emotional', 'lifestyle', 'tech', 'prank', 'news', 'other',
-  ];
 
   // Local fallback when the suggest endpoint is unreachable. Short
   // intentionally — we don't want this to crowd out real network
@@ -213,7 +226,7 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
       pageName: pageName,
       params: {
         'visibility': _visibility,
-        'category': _category,
+        'category': _category ?? '',
         'tagCount': _tags.length,
       },
     );
@@ -222,7 +235,10 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
       prefix: _prefixCtl.text.trim(),
       subject: _subjectCtl.text.trim(),
       visibility: _visibility,
-      category: _category,
+      // Non-null by here: the form will not validate without a pick. The
+      // fallback is what the server already means by "nobody said", so if
+      // that guard is ever loosened this degrades instead of crashing.
+      category: _category ?? '',
       // Tags now go in the field that means tags. They used to ride in on
       // emotionTags because the backend had nowhere else to put them, and
       // that quietly cost twice over: the ranker matches emotions against a
@@ -320,7 +336,7 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
               ),
 
               const SizedBox(height: 24),
-              _section('Category'),
+              _section('Category (optional)'),
               _categoryDropdown(cs),
 
               const SizedBox(height: 24),
@@ -481,6 +497,18 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
     );
   }
 
+  /// The Category picker.
+  ///
+  /// Optional, and starts on nothing. Both of those matter, and for the same
+  /// reason: the server treats 'other' as no answer at all, so a picker that
+  /// starts on "Other" — or that offers it — produces videos nobody has
+  /// described while looking like it did its job. That is how 43 of 44
+  /// videos ended up with no creator category.
+  ///
+  /// Nothing is required here because nothing needs to be. The server reads
+  /// the video — what is said in it and written on screen — and that reading
+  /// beats a creator's pick in the ranker anyway. A pick is useful extra
+  /// evidence, not a gap that has to be filled.
   Widget _categoryDropdown(ColorScheme cs) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -495,14 +523,24 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
           dropdownColor: cs.surfaceContainerHigh,
           style: TextStyle(color: cs.onSurface),
           iconEnabledColor: cs.onSurface.withValues(alpha: 0.7),
-          items: _categories
+          // Shown while nothing is picked. Says what happens if they skip,
+          // rather than naming a category — a category sitting there reads
+          // as an answer the creator never gave.
+          hint: Text(
+            'Skip and we work it out from the video',
+            style: TextStyle(
+              color: cs.onSurfaceVariant.withValues(alpha: 0.8),
+            ),
+          ),
+          items: ContentCategories.choosable
               .map((c) => DropdownMenuItem(
                     value: c,
                     child: Text(c[0].toUpperCase() + c.substring(1)),
                   ))
               .toList(),
           onChanged: (v) {
-            if (v != null) setState(() => _category = v);
+            if (v == null) return;
+            setState(() => _category = v);
           },
         ),
       ),

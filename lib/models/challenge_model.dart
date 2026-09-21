@@ -89,7 +89,11 @@ class ChallengeModel {
   required this.createdAt,
   this.expiresAt = '',
   required this.responseCount,
-  this.category = 'other',
+  /// Empty means the server did not say. NOT 'other' — the backend reads
+  /// 'other' as "nobody said" too, so defaulting to it here turns a silence
+  /// into what looks like an answer. See ContentCategories in
+  /// config/constants.dart.
+  this.category = '',
   this.emotionTags = const [],
   this.tags = const [],
   this.energyLevel = 'medium',
@@ -136,7 +140,7 @@ class ChallengeModel {
       createdAt: json['createdAt'] ?? '',
       expiresAt: json['expiresAt'] ?? '',
       responseCount: json['responseCount'] ?? 0,
-      category: json['category'] ?? 'other',
+      category: json['category'] ?? '',
       emotionTags: (json['emotionTags'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
