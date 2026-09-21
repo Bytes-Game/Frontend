@@ -1,5 +1,6 @@
 import 'dart:io' show Platform;
 
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -76,7 +77,66 @@ class DecoderBudget {
   /// the files it is served today. Guessing yes costs a black screen;
   /// guessing no costs nothing anybody can see.
   bool get hasHardwareHevc =>
+      _iosHevc ||
       hevcByCodec.entries.any((e) => !isSoftware(e.key) && e.value > 0);
+
+  /// iPhones and iPads are answered from the model, not from a channel.
+  bool _iosHevc = false;
+
+  /// The iOS device model string, e.g. "iPhone14,2". Null off iOS or when it
+  /// cannot be read. A seam so the answer below can be tested without an
+  /// iPhone.
+  @visibleForTesting
+  static Future<String?> Function() iosMachine = _realIosMachine;
+
+  static Future<String?> _realIosMachine() async {
+    if (!Platform.isIOS) return null;
+    try {
+      final i = await DeviceInfoPlugin().iosInfo;
+      return i.utsname.machine;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Whether an iOS device model has a hardware H.265 decoder.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// WHY iOS IS ANSWERED FROM A LIST AND ANDROID IS ASKED
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// Android is thousands of chips from dozens of makers, so the only honest
+  /// answer is to ask the chip. Apple makes both the chip and the rule about
+  /// which ones run which iOS, so the answer is already known:
+  ///
+  ///   A9 (2015, iPhone 6s) is the first Apple chip that decodes H.265 in
+  ///   hardware. Everything since does. Apple made H.265 the default camera
+  ///   format in iOS 11, so it is not a corner feature there — it is what
+  ///   iPhones have been recording in for years.
+  ///
+  /// This app's minimum is iOS 13, which already rules out every iPhone
+  /// older than the 6s. So in practice every iPhone that can install this
+  /// has the decoder. The model check below is belt and braces, and it
+  /// matters for iPads: an iPad Air 2 runs iPadOS 13 on an A8X, which does
+  /// NOT decode H.265 in hardware. An iPhone-shaped app runs on iPad unless
+  /// somebody turns that off, so the one device this rule exists for is the
+  /// one that would otherwise get a black screen.
+  ///
+  ///   iPhone8,x  = iPhone 6s      A9    → yes
+  ///   iPhone7,x  = iPhone 6       A8    → no
+  ///   iPad6,x    = iPad Pro / 5th A9X   → yes
+  ///   iPad5,x    = iPad Air 2     A8X   → no
+  ///
+  /// Anything unrecognised — a simulator, an iPod, a model naming scheme
+  /// that changes — answers no, which is the behaviour iOS has today.
+  @visibleForTesting
+  static bool iosModelHasHevc(String? machine) {
+    if (machine == null) return false;
+    final m = RegExp(r'^(iPhone|iPad)(\d+),').firstMatch(machine);
+    if (m == null) return false;
+    final gen = int.tryParse(m.group(2) ?? '') ?? 0;
+    return m.group(1) == 'iPhone' ? gen >= 8 : gen >= 6;
+  }
 
   /// True once [probe] has finished, successfully or not.
   bool probed = false;
@@ -129,6 +189,10 @@ class DecoderBudget {
   Future<void> probe() async {
     if (probed) return;
     probed = true;
+    // iOS has no channel to ask, and does not need one — see iosModelHasHevc.
+    // Done before the Android guard below, which would otherwise return first
+    // and leave every iPhone on the bigger files for no reason.
+    _iosHevc = iosModelHasHevc(await iosMachine());
     if (!canAsk()) return;
     try {
       final raw = await _channel
@@ -154,18 +218,21 @@ class DecoderBudget {
   /// One line for the log: every reading, and which one binds.
   ///
   /// Empty when nothing was read, so a platform that cannot answer does not
-  /// carry a row of nothing through the one line that gets read.
+  /// carry a row of nothing through the one line that gets read — except on
+  /// iOS, where whether H.265 is on is the whole reading.
   String summary() {
-    if (instancesByCodec.isEmpty) return '';
+    if (instancesByCodec.isEmpty) {
+      return _iosHevc ? 'decoders{} hevc=yes' : '';
+    }
     final parts = instancesByCodec.entries.map((e) =>
         '${e.key}${DecoderBudget.isSoftware(e.key) ? '(sw)' : ''}=${e.value}');
     final hw = hardwareBudget;
     // Whether H.265 is on is worth a word in the one line that gets read: it
     // decides which files this phone is served, and "the video looks soft"
     // reads the same either way.
-    final hevc = hevcByCodec.isEmpty
-        ? ' hevc=no'
-        : (hasHardwareHevc ? ' hevc=yes' : ' hevc=software-only');
+    final hevc = hasHardwareHevc
+        ? ' hevc=yes'
+        : (hevcByCodec.isEmpty ? ' hevc=no' : ' hevc=software-only');
     return 'decoders{${parts.join(' ')}}'
         '${hw == null ? '' : ' hardware=$hw'}$hevc';
   }
@@ -179,6 +246,9 @@ class DecoderBudget {
   @visibleForTesting
   void debugReset() {
     instancesByCodec = const {};
+    hevcByCodec = const {};
+    _iosHevc = false;
     probed = false;
+    iosMachine = _realIosMachine;
   }
 }
