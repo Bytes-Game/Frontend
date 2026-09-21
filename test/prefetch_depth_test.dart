@@ -134,7 +134,16 @@ void main() {
     test('the window never closes completely', () {
       // Slower than the smallest rendition. Nothing is spare. The next reel
       // is still one gesture away, so it still gets warmed.
-      linkAt(700000);
+      //
+      // The speed is worked out from the ladder, not typed in. This used to
+      // say 700000, which was below the smallest rung right up until a
+      // smaller rung was added — at which point the link could afford it,
+      // there WAS bandwidth spare, and the test was no longer about a link
+      // with nothing to spare at all.
+      final cheapest = (NetworkQualityService.bitrateNeededFor.values.toList()
+            ..sort())
+          .first;
+      linkAt(cheapest ~/ 2);
 
       expect(net.spareBpsForReadAhead, 0);
       expect(cache.prefetchDepth, VideoCacheService.minPrefetchDepth);

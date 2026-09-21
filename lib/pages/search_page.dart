@@ -263,6 +263,33 @@ class _SearchPageState extends State<SearchPage>
     // category filters cluttering the surface.
     final showTabs = _hasSearched;
 
+    // ONE listener for the whole page, so every scrollable under it counts.
+    //
+    // Scroll notifications bubble UP, so a single listener here catches the
+    // grid, the outer CustomScrollView and the tab views alike. Putting it
+    // on the grid alone would miss the outer scroll, which moves the very
+    // same tiles — and a preview coordinator that thinks the page is still
+    // while it is moving is exactly the churn this is here to stop.
+    //
+    // This is what replaced a fixed 180ms delay. The framework already
+    // knows when the list is moving; asking it costs nothing and, standing
+    // still, a preview now opens with no wait at all.
+    return NotificationListener<ScrollNotification>(
+      onNotification: (n) {
+        if (n is ScrollStartNotification) {
+          _previewCoord.setScrolling(true);
+        } else if (n is ScrollEndNotification) {
+          _previewCoord.setScrolling(false);
+        }
+        // Never swallow it: RefreshIndicator and the tab views are listening
+        // for these too, and eating them would break pull-to-refresh.
+        return false;
+      },
+      child: _buildScaffold(cs, showTabs),
+    );
+  }
+
+  Widget _buildScaffold(ColorScheme cs, bool showTabs) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Search'),
@@ -892,6 +919,64 @@ class _PreviewCoordinator extends ChangeNotifier {
   static const Duration _kPreviewDuration = Duration(seconds: 25);
   static const double _kActivateAt = 0.55;
 
+  /// Whether a preview may open RIGHT NOW, or has to wait for the finger.
+  ///
+  /// ════════════════════════════════════════════════════════════════════════
+  /// STARTING A PREVIEW IS EXPENSIVE. SCROLLING USED TO DO IT PER FRAME.
+  /// ════════════════════════════════════════════════════════════════════════
+  ///
+  /// Every tile reports its visibility on every frame it moves, and the rule
+  /// below is "switch to whoever is most visible, immediately". So a fast
+  /// flick down the grid handed the active slot to tile after tile, and each
+  /// handover opened a hardware video decoder and threw the previous one
+  /// away — several times a second, for videos nobody saw a frame of.
+  ///
+  /// A device log shows what that costs. Eight separate decoders logged
+  /// "sending message to a Handler on a dead thread", which is a decoder
+  /// still reporting back after the thread it belonged to was torn down —
+  /// the signature of being disposed mid-startup. The two biggest bursts,
+  /// twenty warnings between them, land immediately after the search grid
+  /// appears. The system also took decoders back off the app five times
+  /// ("Released by resource manager"), which it only does when too many are
+  /// held at once.
+  ///
+  /// ════════════════════════════════════════════════════════════════════════
+  /// AND THE ANSWER IS NOT A DELAY
+  /// ════════════════════════════════════════════════════════════════════════
+  ///
+  /// The first attempt waited a fixed 180ms after the last visibility report
+  /// before opening anything. It stopped the churn and it was the wrong fix:
+  /// it charged EVERY viewer a fifth of a second, including the one who was
+  /// not scrolling at all, to solve a problem that only exists while the
+  /// finger is moving. A fixed delay is a guess at the thing the framework
+  /// will simply tell you.
+  ///
+  /// So ask instead. Flutter announces when a list starts and stops moving,
+  /// and [setScrolling] passes that through. Standing still, a preview opens
+  /// the instant it is picked — no timer, no wait. Mid-flick, the pick is
+  /// remembered and opened the moment the list comes to rest.
+  ///
+  /// Twenty tiles flicked past now cost one decoder instead of twenty, and
+  /// somebody who simply stops scrolling waits for nothing at all.
+  bool _isScrolling = false;
+
+  /// The tile to open as soon as the grid stops. Only used while scrolling.
+  String? _pendingActive;
+
+  /// Last-resort timer, and it should never be the thing that fires.
+  ///
+  /// [setScrolling] is what normally opens the pending preview, at the exact
+  /// moment the list stops. This exists for the case where that notification
+  /// never arrives — a scroll cancelled by a route change, a platform quirk,
+  /// a gesture stolen mid-flick. Without it a lost end-of-scroll would mean
+  /// the grid never plays anything again, which reads as a dead page rather
+  /// than a slow one, and that is a far worse failure than the churn.
+  ///
+  /// Deliberately long. It is a safety net, not a policy: if it is firing
+  /// often, the scroll notifications are not arriving and THAT is the bug.
+  static const Duration _kScrollLost = Duration(milliseconds: 600);
+  Timer? _settleTimer;
+
   String? _activeId;
   String? get activeId => _activeId;
 
@@ -1010,7 +1095,7 @@ class _PreviewCoordinator extends ChangeNotifier {
 
     // Nothing visible enough — clear active.
     if (mostVisible == null) {
-      _setActive(null);
+      _wantActive(null);
       return;
     }
 
@@ -1018,7 +1103,7 @@ class _PreviewCoordinator extends ChangeNotifier {
     // a fresh cycle.
     if (_activeId == null) {
       _consumedThisCycle.clear();
-      _setActive(mostVisible);
+      _wantActive(mostVisible);
       return;
     }
 
@@ -1035,15 +1120,71 @@ class _PreviewCoordinator extends ChangeNotifier {
     final activeFrac = _fractions[_activeId!] ?? 0;
     if (bestFraction >= activeFrac + 0.05) {
       _consumedThisCycle.clear();
-      _setActive(mostVisible);
+      _wantActive(mostVisible);
       return;
     }
 
     // Active tile scrolled completely out — pick a fresh one even if
     // hysteresis would otherwise hold.
     if (!_fractions.containsKey(_activeId)) {
-      _setActive(mostVisible);
+      _wantActive(mostVisible);
     }
+  }
+
+  /// Open now if the grid is still; otherwise remember it for the moment it
+  /// stops. See [_isScrolling].
+  void _wantActive(String? id) {
+    // Stopping is always immediate, scrolling or not. It hands a decoder
+    // back, which is the scarce thing here — there is nothing to protect by
+    // delaying it.
+    if (id == null) {
+      _cancelSettle();
+      _setActive(null);
+      return;
+    }
+    // Already playing it.
+    if (id == _activeId) {
+      _cancelSettle();
+      return;
+    }
+    // THE COMMON CASE: nobody is scrolling, so there is nothing to wait for.
+    // No timer is even created.
+    if (!_isScrolling) {
+      _cancelSettle();
+      _setActive(id);
+      return;
+    }
+    // Mid-scroll. Remember it; setScrolling(false) will open it the instant
+    // the list stops.
+    _pendingActive = id;
+    // Arm the safety net once, and do NOT push it further away on every
+    // frame — a flick that keeps reporting would otherwise keep resetting
+    // the one thing that can recover a lost end-of-scroll.
+    _settleTimer ??= Timer(_kScrollLost, _openPending);
+  }
+
+  /// Called by the page when the grid starts or stops moving.
+  void setScrolling(bool scrolling) {
+    if (scrolling == _isScrolling) return;
+    _isScrolling = scrolling;
+    if (!scrolling) {
+      // The list has come to rest. Open what we chose, right now.
+      _openPending();
+    }
+  }
+
+  void _openPending() {
+    _settleTimer?.cancel();
+    _settleTimer = null;
+    final want = _pendingActive;
+    _pendingActive = null;
+    if (want != null && want != _activeId) _setActive(want);
+  }
+
+  void _cancelSettle() {
+    _settleTimer?.cancel();
+    _settleTimer = null;
+    _pendingActive = null;
   }
 
   void _setActive(String? id) {
@@ -1092,6 +1233,7 @@ class _PreviewCoordinator extends ChangeNotifier {
   /// Forcibly clear the active tile — used on tab switch so the new tab
   /// can claim its own active without inheriting the prior tab's state.
   void clearActive() {
+    _cancelSettle();
     _advanceTimer?.cancel();
     _advanceTimer = null;
     _consumedThisCycle.clear();
@@ -1104,6 +1246,7 @@ class _PreviewCoordinator extends ChangeNotifier {
 
   @override
   void dispose() {
+    _cancelSettle();
     _advanceTimer?.cancel();
     super.dispose();
   }

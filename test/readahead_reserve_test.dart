@@ -104,7 +104,11 @@ void main() {
       // A soft picture that plays beats a sharp one that stops — and beats
       // no answer at all, which would leave the caller with no ceiling.
       linkAt(400000);
-      expect(net.affordableLabel, '480p');
+      final entries = NetworkQualityService.bitrateNeededFor.entries.toList()
+        ..sort((a, b) => a.value.compareTo(b.value));
+      expect(net.affordableLabel, entries.first.key,
+          reason: 'the floor has to be the smallest rung the server makes; '
+              'anything above it is a file the picker can never reach');
     });
 
     test('and having measured nothing means having no opinion', () {
@@ -128,9 +132,29 @@ void main() {
         linkAt(bps);
         final label = net.affordableLabel!;
         final cost = NetworkQualityService.bitrateNeededFor[label]!;
-        if (label == '480p' && bps < 3000000) {
-          // The documented floor: below this nothing fits and 480p is served
-          // anyway, because a soft picture beats a stopped one.
+
+        // Is this an answer the link can actually afford, or the floor?
+        //
+        // Worked out rather than written down. This used to read
+        // `if (label == '480p' && bps < 3000000) continue;`, and the day a
+        // smaller rung joined the ladder that line stopped describing the
+        // floor and started skipping a real case instead.
+        final forPicture = bps - NetworkQualityService.readAheadReserveBps;
+        final affordable =
+            forPicture >= cost * NetworkQualityService.bitrateHeadroom;
+        if (!affordable) {
+          // The documented floor: nothing on the ladder fits, so the smallest
+          // rung is served anyway, because a soft picture beats a stopped one.
+          //
+          // Checked, not skipped. A blanket `continue` here would have passed
+          // just as happily against a picker that served the LARGEST rung to
+          // the slowest link.
+          final entries = NetworkQualityService.bitrateNeededFor.entries.toList()
+            ..sort((a, b) => a.value.compareTo(b.value));
+          expect(label, entries.first.key,
+              reason: 'at $bps bps nothing on the ladder fits, so the floor '
+                  'applies — and the floor has to be the smallest rung, not '
+                  '$label');
           continue;
         }
         expect(

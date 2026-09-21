@@ -859,7 +859,7 @@ enum UploadJobKind { challenge, response }
 class UploadJobState {
   final UploadJobStage stage;
   final double progress;       // 0..1 overall (covers process + upload + finalize)
-  final String? activeVariant; // "thumbnail" | "720p" | "1080p"
+  final String? activeVariant; // "thumbnail" | a rendition label
   final String? message;
   final String? errorCode;
   final Object? result;        // ChallengeModel | ChallengeResponseModel | null

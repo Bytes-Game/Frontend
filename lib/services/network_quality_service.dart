@@ -234,6 +234,12 @@ class NetworkQualityService {
   /// Sustained bits per second each rendition needs, from what the server
   /// actually encodes to. Kept next to the labels so the two move together.
   static const Map<String, int> bitrateNeededFor = <String, int>{
+    // The rung for a real mobile connection. Everything above it asks for
+    // more than mobile data reliably has — see the floor in [affordableLabel]
+    // for the whole story. 600k of video, like the server's own 360p rung in
+    // cmd/hls-worker/progressive.go, so both halves agree what it costs.
+    // Audio is left out here the same as it is for every other rung.
+    '360p': 600000,
     '480p': 1500000,
     '720p': 2500000,
     '720p_hq': 3500000,
@@ -526,7 +532,30 @@ class NetworkQualityService {
     // the floor below applies — which is right: a soft picture that plays
     // still beats a sharp one that stops.
     final forPicture = bps - readAheadReserveBps;
-    String best = '480p';
+    // ══════════════════════════════════════════════════════════════════
+    // THE FLOOR IS THE SMALLEST THING THE SERVER MAKES
+    // ══════════════════════════════════════════════════════════════════
+    //
+    // This line used to say '480p', and 480p costs 1.5 Mbps. With the
+    // third-again headroom above, that is about 1.95 Mbps of picture, on
+    // top of the 1 Mbps held back for read-ahead — so it wanted roughly
+    // 3 Mbps before it was a sensible choice.
+    //
+    // Mobile data in the field runs at 2–3 Mbps. At 2.6 Mbps the sum above
+    // leaves 1.55 Mbps for the picture and 480p does not fit, so this line
+    // handed it out anyway, because there was nothing underneath. The
+    // promise two comments up — "a soft picture that plays beats a sharp
+    // one that stops" — could not be kept while the smallest thing the
+    // server made was too big.
+    //
+    // 360p costs 600k, or 780k with headroom, which fits inside that
+    // 1.55 Mbps with room to spare. So the floor is 360p now, and the
+    // promise holds.
+    //
+    // This must stay the SMALLEST key in [bitrateNeededFor]. A floor above
+    // the bottom rung is a rendition the picker can never choose, however
+    // slow the link gets. TestEveryLabelIsWiredEverywhere holds that.
+    String best = '360p';
     for (final entry in bitrateNeededFor.entries) {
       if (forPicture < entry.value * bitrateHeadroom) continue;
       if ((_labelRank[entry.key] ?? 0) > (_labelRank[best] ?? 0)) {
@@ -581,10 +610,11 @@ class NetworkQualityService {
   /// 1280-wide picture as 720p with more bits spent on it, so it ranks higher
   /// here and identically for decode cost. See _preferenceOrder.
   static const Map<String, int> _labelRank = {
-    '480p': 0,
-    '720p': 1,
-    '720p_hq': 2,
-    '1080p': 3,
+    '360p': 0,
+    '480p': 1,
+    '720p': 2,
+    '720p_hq': 3,
+    '1080p': 4,
   };
 
   /// The label a video of this picture size belongs under.
@@ -638,6 +668,10 @@ class NetworkQualityService {
 
   static String labelForLongSide(int longSide) {
     if (longSide <= 0) return '720p'; // unmeasurable: the old default
+    // 640 and under is the server's 360p rung. A phone almost never records
+    // this small, so in practice this band is for a file picked out of a
+    // gallery that was already shrunk by something else.
+    if (longSide <= 640) return '360p';
     if (longSide <= 854) return '480p';
     if (longSide <= 1280) return '720p';
     return '1080p';
@@ -903,7 +937,16 @@ class NetworkQualityService {
     // one can decode the other. Ranking it above 720p here would have hidden
     // it from every mid-range phone, which is most of them, for a cost it does
     // not actually impose.
-    const decodeRank = {'480p': 0, '720p': 1, '720p_hq': 1, '1080p': 2};
+    // 360p sits at 0 with 480p: both are well inside what the weakest phone
+    // we support can decode, and the thing that makes 360p worth having is
+    // the connection, not the chip.
+    const decodeRank = {
+      '360p': 0,
+      '480p': 0,
+      '720p': 1,
+      '720p_hq': 1,
+      '1080p': 2
+    };
     final deviceCapRank = ramGb < 3.0
         ? 0
         : ramGb < 5.0
@@ -925,14 +968,23 @@ class NetworkQualityService {
       }).toList(growable: false);
     }
 
+    // Every order lists every label. These are FALLBACK chains: the first
+    // entry that this video actually has, and that the ceiling allows, is
+    // what gets played. A label left out of an order is a file that exists,
+    // was paid for, and can never be chosen on that kind of connection —
+    // which is exactly how 360p would have been wasted if it were only
+    // added to the slow list. TestEveryLabelIsWiredEverywhere holds that.
     switch (q) {
       case NetworkQuality.high:
-        return trim(const ['1080p', '720p_hq', '720p', '480p']);
+        return trim(const ['1080p', '720p_hq', '720p', '480p', '360p']);
       case NetworkQuality.medium:
       case NetworkQuality.unknown:
-        return trim(const ['720p_hq', '720p', '480p', '1080p']);
+        return trim(const ['720p_hq', '720p', '480p', '360p', '1080p']);
       case NetworkQuality.low:
-        return trim(const ['480p', '720p', '720p_hq', '1080p']);
+        // 360p first, not 480p. This branch is the operating system saying
+        // the connection is a slow one before we have measured anything —
+        // the one moment where guessing small is obviously right.
+        return trim(const ['360p', '480p', '720p', '720p_hq', '1080p']);
     }
   }
 }

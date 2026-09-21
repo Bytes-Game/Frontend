@@ -233,6 +233,9 @@ class MediaUploadService {
     final defaultUrl = variantUrls[_defaultVariantLabel] ??
         variantUrls['1080p'] ??
         variantUrls['480p'] ??
+        // Last stop before giving up entirely. 360p is the smallest thing
+        // the server makes, so if it is all we have it is still a video.
+        variantUrls['360p'] ??
         '';
     final thumbUrl =
         units.firstWhere((u) => u.label == 'thumbnail').publicUrl;
@@ -428,6 +431,8 @@ class MediaUploadService {
         variantUrls['1080p'] ??
         variantUrls['720p'] ??
         variantUrls['480p'] ??
+        // Same last stop as upload(): better the smallest rung than nothing.
+        variantUrls['360p'] ??
         '';
     final thumbUrl = publicUrlByLabel['thumbnail'] ?? '';
 
