@@ -892,6 +892,41 @@ class _PreviewCoordinator extends ChangeNotifier {
   static const Duration _kPreviewDuration = Duration(seconds: 25);
   static const double _kActivateAt = 0.55;
 
+  /// How long the grid must hold still before a preview is allowed to open.
+  ///
+  /// ════════════════════════════════════════════════════════════════════════
+  /// STARTING A PREVIEW IS EXPENSIVE. SCROLLING USED TO DO IT PER FRAME.
+  /// ════════════════════════════════════════════════════════════════════════
+  ///
+  /// Every tile reports its visibility on every frame it moves, and the rule
+  /// below is "switch to whoever is most visible, immediately". So a fast
+  /// flick down the grid handed the active slot to tile after tile, and each
+  /// handover opened a hardware video decoder and threw the previous one
+  /// away — several times a second, for videos nobody saw a frame of.
+  ///
+  /// A device log shows what that costs. Eight separate decoders logged
+  /// "sending message to a Handler on a dead thread", which is a decoder
+  /// still reporting back after the thread it belonged to was torn down —
+  /// the signature of being disposed mid-startup. The two biggest bursts,
+  /// twenty warnings between them, land immediately after the search grid
+  /// appears. The system also took decoders back off the app five times
+  /// ("Released by resource manager"), which it only does when too many are
+  /// held at once.
+  ///
+  /// So: decide instantly, ACT once the finger stops. 180ms is below what
+  /// anybody notices on a deliberate pause and far above a scroll frame, so
+  /// a flick through twenty tiles now opens one decoder instead of twenty.
+  ///
+  /// Only opening waits. Stopping stays immediate — handing a decoder back
+  /// is what relieves the pressure, and delaying that would be the opposite
+  /// of the point.
+  static const Duration _kSettle = Duration(milliseconds: 180);
+
+  /// The tile we intend to play once the grid settles, and the timer that
+  /// will do it. See [_wantActive].
+  String? _pendingActive;
+  Timer? _settleTimer;
+
   String? _activeId;
   String? get activeId => _activeId;
 
@@ -1010,7 +1045,7 @@ class _PreviewCoordinator extends ChangeNotifier {
 
     // Nothing visible enough — clear active.
     if (mostVisible == null) {
-      _setActive(null);
+      _wantActive(null);
       return;
     }
 
@@ -1018,7 +1053,7 @@ class _PreviewCoordinator extends ChangeNotifier {
     // a fresh cycle.
     if (_activeId == null) {
       _consumedThisCycle.clear();
-      _setActive(mostVisible);
+      _wantActive(mostVisible);
       return;
     }
 
@@ -1035,15 +1070,57 @@ class _PreviewCoordinator extends ChangeNotifier {
     final activeFrac = _fractions[_activeId!] ?? 0;
     if (bestFraction >= activeFrac + 0.05) {
       _consumedThisCycle.clear();
-      _setActive(mostVisible);
+      _wantActive(mostVisible);
       return;
     }
 
     // Active tile scrolled completely out — pick a fresh one even if
     // hysteresis would otherwise hold.
     if (!_fractions.containsKey(_activeId)) {
-      _setActive(mostVisible);
+      _wantActive(mostVisible);
     }
+  }
+
+  /// Decide now, open once the grid holds still. See [_kSettle].
+  ///
+  /// The timer is reset only when the INTENDED tile changes, never on a
+  /// report that agrees with it. That distinction is the whole design: a
+  /// slow drag over one tile reports a new fraction every frame while the
+  /// winner stays the same, and resetting on each of those would mean the
+  /// preview never opened at all.
+  void _wantActive(String? id) {
+    // Stopping is immediate. It hands a decoder back, which is the scarce
+    // thing here — there is nothing to protect by delaying it.
+    if (id == null) {
+      _cancelSettle();
+      _setActive(null);
+      return;
+    }
+    // Already playing it. Nothing to schedule, and anything pending is
+    // now stale.
+    if (id == _activeId) {
+      _cancelSettle();
+      return;
+    }
+    // Already waiting on this exact tile — let the timer run out rather
+    // than pushing it further away on every frame.
+    if (id == _pendingActive && (_settleTimer?.isActive ?? false)) {
+      return;
+    }
+    _settleTimer?.cancel();
+    _pendingActive = id;
+    _settleTimer = Timer(_kSettle, () {
+      _settleTimer = null;
+      final want = _pendingActive;
+      _pendingActive = null;
+      if (want != null) _setActive(want);
+    });
+  }
+
+  void _cancelSettle() {
+    _settleTimer?.cancel();
+    _settleTimer = null;
+    _pendingActive = null;
   }
 
   void _setActive(String? id) {
@@ -1092,6 +1169,7 @@ class _PreviewCoordinator extends ChangeNotifier {
   /// Forcibly clear the active tile — used on tab switch so the new tab
   /// can claim its own active without inheriting the prior tab's state.
   void clearActive() {
+    _cancelSettle();
     _advanceTimer?.cancel();
     _advanceTimer = null;
     _consumedThisCycle.clear();
@@ -1104,6 +1182,7 @@ class _PreviewCoordinator extends ChangeNotifier {
 
   @override
   void dispose() {
+    _cancelSettle();
     _advanceTimer?.cancel();
     super.dispose();
   }
