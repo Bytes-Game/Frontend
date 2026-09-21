@@ -6,7 +6,8 @@ class ChallengeModel {
   final String creatorUsername;
   final String creatorLeague;
   final String videoUrl;
-  /// Multi-bitrate variants keyed by quality label ("480p","720p","1080p").
+  /// Multi-bitrate variants keyed by quality label ("360p","480p","720p",
+  /// "720p_hq","1080p").
   /// Empty map means "no variants encoded yet" — fall back to [videoUrl],
   /// which is the canonical/default-quality URL kept for backward compat
   /// with every reader that predates the multi-bitrate feature.

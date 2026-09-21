@@ -32,6 +32,19 @@ double affordFor(String label) {
   return need / 1e6;
 }
 
+/// The smallest rung the server makes, read off the same table the picker
+/// uses rather than written down here.
+///
+/// Several tests below are about the FLOOR — what a link too slow for
+/// anything gets served. Naming '480p' in them was fine until a smaller rung
+/// was added, at which point each one quietly became a test that the floor is
+/// the second-smallest rung, which is not a thing anybody wants.
+String get cheapestLabel {
+  final entries = NetworkQualityService.bitrateNeededFor.entries.toList()
+    ..sort((a, b) => a.value.compareTo(b.value));
+  return entries.first.key;
+}
+
 void main() {
   final net = NetworkQualityService.instance;
 
@@ -105,9 +118,17 @@ void main() {
     final need720 = NetworkQualityService.bitrateNeededFor['720p']! / 1e6;
 
     sampleAt(need720 * 1.05);
-    expect(net.affordableLabel, '480p',
+    // Asserted as "something cheaper than 720p" rather than by name. The
+    // name was '480p' and became '360p' the day a smaller rung was added,
+    // which is a change in the ladder and not in the rule being tested here.
+    final chosen = net.affordableLabel!;
+    expect(chosen, isNot('720p'),
         reason: 'a link barely matching the file leaves nothing for a dip; '
             'that is a stall waiting to happen');
+    expect(NetworkQualityService.bitrateNeededFor[chosen]!,
+        lessThan(NetworkQualityService.bitrateNeededFor['720p']!),
+        reason: 'it stepped down to $chosen, which is not actually cheaper '
+            'than the 720p it was refusing');
 
     net.debugClearThroughput();
     sampleAt(affordFor('720p') * 1.1);
@@ -119,8 +140,13 @@ void main() {
     // Even a link too slow for the smallest rendition gets the smallest
     // rendition. A soft picture that plays beats a sharp one that stops.
     sampleAt(0.2);
-    expect(net.affordableLabel, '480p');
-    expect(net.pickVariantUrl({'480p': 'small', '720p': 'big'}), 'small');
+    expect(net.affordableLabel, cheapestLabel,
+        reason: 'the floor has to be the smallest thing the server makes. '
+            'Anything above it is a rung the picker can never reach, however '
+            'slow the link gets.');
+    expect(net.pickVariantUrl({'480p': 'small', '720p': 'big'}), 'small',
+        reason: 'this video has no copy at the floor rung, so the next '
+            'smallest it does have must still play');
   });
 
   test('a cancelled or trivial transfer is not treated as a speed reading', () {
@@ -142,7 +168,10 @@ void main() {
     expect(net.affordableLabel, '1080p');
 
     sampleAt(2.0, n: 8);
-    expect(net.affordableLabel, '480p',
+    // 2 Mbps is ordinary mobile data. Holding back 1 Mbps for read-ahead
+    // leaves under 1 Mbps for the picture, and 480p wants 1.95 Mbps of link
+    // — so the honest answer here is the rung below it.
+    expect(net.affordableLabel, '360p',
         reason: 'the link got slower and the app kept serving the old '
             'quality, which is the freeze happening again');
   });
@@ -222,7 +251,8 @@ void main() {
     // smallest rung whose picture is not smaller than this one. If these
     // two drift apart, an upload is filed under a rung the server would
     // never have put it in.
-    expect(NetworkQualityService.labelForLongSide(640), '480p');
+    expect(NetworkQualityService.labelForLongSide(640), '360p');
+    expect(NetworkQualityService.labelForLongSide(641), '480p');
     expect(NetworkQualityService.labelForLongSide(854), '480p');
     expect(NetworkQualityService.labelForLongSide(855), '720p');
     expect(NetworkQualityService.labelForLongSide(1280), '720p');
@@ -244,7 +274,7 @@ void main() {
     // it, the reel still has to play — including '1080p', which sits above
     // the reels ceiling and so reaches the picker's last-resort branch.
     sampleAt(10);
-    for (final side in [640, 854, 1280, 1920]) {
+    for (final side in [320, 640, 641, 854, 1280, 1920]) {
       final label = NetworkQualityService.labelForLongSide(side);
       expect(net.pickVariantUrl({label: 'only'}), 'only',
           reason: 'an upload labelled \'$label\' was not playable');

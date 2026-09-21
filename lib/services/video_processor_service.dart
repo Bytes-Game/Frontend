@@ -13,7 +13,7 @@ import 'network_quality_service.dart';
 /// by [VideoProcessorService] — caller owns the lifecycle (delete after
 /// upload, or rely on the OS temp-dir cleanup).
 class VideoVariantFile {
-  final String label;          // "480p" | "720p" | "1080p"
+  final String label;          // "360p" | "480p" | "720p" | "1080p"
   final String path;           // absolute local path
   final int sizeBytes;         // file size, used for upload progress bar
   final Duration? duration;    // source duration as reported by ffmpeg
@@ -68,7 +68,7 @@ class ProcessedVideo {
 /// to user-visible status messages on the upload screen — keep them
 /// short (rendered in a thin progress strip).
 class ProcessingEvent {
-  final String stage;     // "thumbnail" | "720p" | "1080p" | "done"
+  final String stage;     // "thumbnail" | a rendition label | "done"
   final double fraction;  // 0..1 across the whole job, monotonic
   const ProcessingEvent(this.stage, this.fraction);
 }
@@ -89,7 +89,8 @@ enum ProcessingArtifactKind { thumbnail, video }
 /// being encoded.
 class ProcessingArtifact {
   final ProcessingArtifactKind kind;
-  /// "thumbnail" for the JPEG, "720p" / "1080p" for video variants.
+  /// "thumbnail" for the JPEG, a rendition label ("360p" ... "1080p") for
+  /// video variants.
   /// Matches the variant labels [MediaUploadService] presigns against.
   final String label;
   final String path;
