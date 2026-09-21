@@ -51,15 +51,22 @@ class MainActivity : FlutterActivity() {
             "devf/device_media",
         ).setMethodCallHandler { call, result ->
             when (call.method) {
-                "videoDecoderInstances" -> result.success(videoDecoderInstances())
+                "videoDecoderInstances" -> result.success(videoDecoderInstances("video/avc"))
+                "hevcDecoderInstances" -> result.success(videoDecoderInstances("video/hevc"))
                 else -> result.notImplemented()
             }
         }
     }
 
     /**
-     * How many H.264 decoders each of this chip's decoders says it will run
-     * at once, as name -> count.
+     * How many decoders of [mime] this chip carries, and how many instances
+     * each says it will run at once, as name -> count.
+     *
+     * Asked for two things. "video/avc" is H.264 and answers "how many videos
+     * may the feed keep open". "video/hevc" is H.265 and answers a different
+     * question — whether this phone can decode it AT ALL. An empty map for
+     * H.265 is the common, correct answer on an older phone, and it is what
+     * keeps that phone on the files it has always been served.
      *
      * The app keeps several videos open so a swipe lands on one already
      * playing, and how many it may keep is a property of the CHIP, not of
@@ -80,7 +87,7 @@ class MainActivity : FlutterActivity() {
      * codec list that would not enumerate. The caller keeps its existing
      * behaviour in that case.
      */
-    private fun videoDecoderInstances(): Map<String, Int> {
+    private fun videoDecoderInstances(mime: String): Map<String, Int> {
         // maxSupportedInstances arrived in API 23.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return emptyMap()
         val out = mutableMapOf<String, Int>()
@@ -88,7 +95,7 @@ class MainActivity : FlutterActivity() {
             for (info in MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos) {
                 if (info.isEncoder) continue
                 val type = info.supportedTypes.firstOrNull {
-                    it.equals("video/avc", ignoreCase = true)
+                    it.equals(mime, ignoreCase = true)
                 } ?: continue
                 // One bad codec entry should not lose the readings from the
                 // others — some devices ship an entry that throws here.

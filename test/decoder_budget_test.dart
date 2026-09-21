@@ -182,16 +182,91 @@ void main() {
     });
 
     test('asking twice only asks once', () async {
-      var calls = 0;
+      // Counted per question rather than in total. One probe asks two things
+      // — how many H.264 decoders, and whether there is an H.265 one — so a
+      // bare total of 1 would only have meant "one of them is not being
+      // asked at all", which is the opposite of what this is for.
+      final calls = <String, int>{};
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(
               const MethodChannel('devf/device_media'), (call) async {
-        calls++;
+        calls[call.method] = (calls[call.method] ?? 0) + 1;
         return <String, int>{'c2.mtk.avc.decoder': 14};
       });
       await b.probe();
       await b.probe();
-      expect(calls, 1);
+      expect(calls['videoDecoderInstances'], 1);
+      expect(calls['hevcDecoderInstances'], 1,
+          reason: 'the H.265 question is never asked, so no phone is ever '
+              'found to support it and the smaller files go unused');
+    });
+
+    test('the H.265 answer is read, and software does not count', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+              const MethodChannel('devf/device_media'), (call) async {
+        if (call.method == 'hevcDecoderInstances') {
+          return <String, int>{
+            'c2.qti.hevc.decoder': 6,
+            'c2.android.hevc.decoder': 32,
+          };
+        }
+        return <String, int>{'c2.mtk.avc.decoder': 14};
+      });
+      await b.probe();
+      expect(b.hasHardwareHevc, isTrue,
+          reason: 'the chip reported its own H.265 decoder and it was ignored');
+      expect(b.summary(), contains('hevc=yes'));
+    });
+
+    test('a phone with only Android\'s software H.265 is treated as having none',
+        () async {
+      // It would decode a full-screen reel at a few frames a second while
+      // emptying the battery — worse than the H.264 file it replaced, which
+      // is the one thing this must never be.
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+              const MethodChannel('devf/device_media'), (call) async {
+        if (call.method == 'hevcDecoderInstances') {
+          return <String, int>{'c2.android.hevc.decoder': 32};
+        }
+        return <String, int>{'c2.mtk.avc.decoder': 14};
+      });
+      await b.probe();
+      expect(b.hasHardwareHevc, isFalse);
+      expect(b.summary(), contains('hevc=software-only'),
+          reason: 'the log must say which of the two it was — "no H.265" and '
+              '"software H.265 refused" look identical from the outside');
+    });
+
+    test('an old phone that answers nothing about H.265 keeps H.264', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+              const MethodChannel('devf/device_media'), (call) async {
+        if (call.method == 'hevcDecoderInstances') return <String, int>{};
+        return <String, int>{'c2.mtk.avc.decoder': 14};
+      });
+      await b.probe();
+      expect(b.hasHardwareHevc, isFalse);
+      // And the H.264 reading it DID give still arrived. Losing both to one
+      // unanswered question would drop the phone back to old defaults for a
+      // reason nothing records.
+      expect(b.hardwareBudget, 14);
+    });
+
+    test('the H.265 question failing does not lose the H.264 answer', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+              const MethodChannel('devf/device_media'), (call) async {
+        if (call.method == 'hevcDecoderInstances') {
+          throw PlatformException(code: 'NOPE');
+        }
+        return <String, int>{'c2.mtk.avc.decoder': 14};
+      });
+      await b.probe();
+      expect(b.hardwareBudget, 14,
+          reason: 'one unanswered question must not cost the other answer');
+      expect(b.hasHardwareHevc, isFalse);
     });
   });
 }

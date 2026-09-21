@@ -44,6 +44,40 @@ class DecoderBudget {
   /// enumerate.
   Map<String, int> instancesByCodec = const {};
 
+  /// The chip's H.265 decoders, same shape as [instancesByCodec].
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// A DIFFERENT QUESTION FROM THE ONE ABOVE
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// [instancesByCodec] asks "how many videos may I keep open". This asks
+  /// something simpler and more consequential: can this phone decode H.265
+  /// AT ALL?
+  ///
+  /// The server now makes an H.265 copy of the 480p and 720p pictures, about
+  /// a third smaller for the same quality. Phones that can play it get a
+  /// video that loads faster on mobile data without looking worse. Phones
+  /// that cannot must never be sent one — an H.265 file on a phone that
+  /// cannot decode it is not a soft picture, it is no picture.
+  ///
+  /// Empty is the common and correct answer on an older phone.
+  Map<String, int> hevcByCodec = const {};
+
+  /// Whether this phone has a HARDWARE H.265 decoder.
+  ///
+  /// Hardware specifically. Android ships a software H.265 decoder on
+  /// devices whose chip has none, and it would answer "yes" to a plain
+  /// "can you decode this" — then decode a full-screen reel at a few frames
+  /// a second while emptying the battery. That is worse than the H.264 file
+  /// it replaced, which is the one thing this must not be.
+  ///
+  /// False unless positively confirmed. A phone that cannot be asked — iOS,
+  /// an old Android, a codec list that will not enumerate — keeps exactly
+  /// the files it is served today. Guessing yes costs a black screen;
+  /// guessing no costs nothing anybody can see.
+  bool get hasHardwareHevc =>
+      hevcByCodec.entries.any((e) => !isSoftware(e.key) && e.value > 0);
+
   /// True once [probe] has finished, successfully or not.
   bool probed = false;
 
@@ -99,8 +133,18 @@ class DecoderBudget {
     try {
       final raw = await _channel
           .invokeMapMethod<String, int>('videoDecoderInstances');
-      if (raw == null || raw.isEmpty) return;
-      instancesByCodec = Map.unmodifiable(raw);
+      if (raw != null && raw.isNotEmpty) {
+        instancesByCodec = Map.unmodifiable(raw);
+      }
+      // Asked separately, and its failure kept separate: an old Android that
+      // answers the H.264 question and not this one should still get its
+      // player pool sized. Losing both to one throw would be a phone quietly
+      // dropping back to the old defaults for a reason nothing records.
+      final hevc =
+          await _channel.invokeMapMethod<String, int>('hevcDecoderInstances');
+      if (hevc != null && hevc.isNotEmpty) {
+        hevcByCodec = Map.unmodifiable(hevc);
+      }
     } catch (e) {
       // A phone that will not answer keeps the behaviour it already had.
       if (kDebugMode) debugPrint('decoder budget probe failed: $e');
@@ -116,8 +160,14 @@ class DecoderBudget {
     final parts = instancesByCodec.entries.map((e) =>
         '${e.key}${DecoderBudget.isSoftware(e.key) ? '(sw)' : ''}=${e.value}');
     final hw = hardwareBudget;
+    // Whether H.265 is on is worth a word in the one line that gets read: it
+    // decides which files this phone is served, and "the video looks soft"
+    // reads the same either way.
+    final hevc = hevcByCodec.isEmpty
+        ? ' hevc=no'
+        : (hasHardwareHevc ? ' hevc=yes' : ' hevc=software-only');
     return 'decoders{${parts.join(' ')}}'
-        '${hw == null ? '' : ' hardware=$hw'}';
+        '${hw == null ? '' : ' hardware=$hw'}$hevc';
   }
 
   @visibleForTesting
