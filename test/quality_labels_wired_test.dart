@@ -28,7 +28,23 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:myapp/services/decoder_budget.dart';
 import 'package:myapp/services/network_quality_service.dart';
+
+/// Pretend this phone has a hardware H.265 decoder, or does not.
+///
+/// The name matters: `c2.android.*` is Android's own SOFTWARE decoder, and
+/// the picker must treat that as "no". Software H.265 would decode a
+/// full-screen reel at a few frames a second while emptying the battery,
+/// which is worse than the H.264 file it replaced.
+void setHevc(bool hardware) {
+  DecoderBudget.instance.hevcByCodec =
+      hardware ? const {'c2.qti.hevc.decoder': 8} : const {};
+}
+
+void setSoftwareOnlyHevc() {
+  DecoderBudget.instance.hevcByCodec = const {'c2.android.hevc.decoder': 32};
+}
 
 /// The file with every line comment and doc comment taken out.
 ///
@@ -151,6 +167,10 @@ void main() {
     // rather than through the source. A freshly uploaded video has exactly
     // one entry in its rendition map for the minutes before the server has
     // converted it, and that one has to play whatever it is called.
+    //
+    // On a phone that can decode H.265, that includes the H.265 rungs.
+    setHevc(true);
+    addTearDown(() => setHevc(false));
     final net = NetworkQualityService.instance;
     for (final speed in [0.3, 2.6, 10.0]) {
       net.debugClearThroughput();
@@ -167,6 +187,8 @@ void main() {
     }
     net.debugClearThroughput();
   });
+
+  _hevcTests();
 
   test('a slow link is actually given the cheapest rung', () {
     // The presence half. Every check above asks whether a label is listed
@@ -193,5 +215,159 @@ void main() {
         reason: 'the picker knew it could only afford $cheapest and served '
             'something else anyway');
     net.debugClearThroughput();
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// THE NEWER CODEC, AND THE PHONES THAT CANNOT READ IT
+// ════════════════════════════════════════════════════════════════════════════
+//
+// H.265 files are a third smaller for the same picture. Older phones cannot
+// decode them at all — not slowly, not softly: a black screen.
+//
+// Every other decision in the picker trades quality against stalling, and
+// being wrong costs a soft picture or a pause. This one costs the video. So
+// it gets its own group, and the tests are written the pessimistic way round:
+// the question is never "does a capable phone get the good file", it is
+// "can an incapable phone EVER be handed one".
+
+void _hevcTests() {
+  final net = NetworkQualityService.instance;
+
+  void linkAt(double mbps) {
+    net.debugClearThroughput();
+    const bytes = 768 * 1024;
+    final ms = (bytes * 8 * 1000 / (mbps * 1e6)).round();
+    for (var i = 0; i < 4; i++) {
+      net.recordThroughput(bytes, Duration(milliseconds: ms));
+    }
+  }
+
+  final hevcLabels = NetworkQualityService.bitrateNeededFor.keys
+      .where(NetworkQualityService.isHevc)
+      .toList();
+
+  group('a phone with no H.265 decoder is never handed an H.265 file', () {
+    setUp(() {
+      setHevc(false);
+      net.debugClearThroughput();
+      net.debugSetQuality(NetworkQuality.high);
+    });
+    tearDown(() {
+      setHevc(false);
+      net.debugClearThroughput();
+    });
+
+    test('there are H.265 rungs to get wrong', () {
+      // The absence checks below would all pass against a picker that knows
+      // no H.265 at all. This is the presence half.
+      expect(hevcLabels, isNotEmpty,
+          reason: 'no H.265 rungs exist, so nothing below is being tested');
+      expect(hevcLabels, contains('720p_hevc'));
+    });
+
+    test('not as the ceiling, at any speed', () {
+      for (final mbps in [0.3, 1.0, 2.0, 2.6, 4.0, 8.0, 20.0, 100.0]) {
+        linkAt(mbps);
+        final label = net.affordableLabel;
+        expect(NetworkQualityService.isHevc(label ?? ''), isFalse,
+            reason: 'at $mbps Mbps the best file it thinks it can carry is '
+                '$label, which this phone cannot decode at all');
+      }
+    });
+
+    test('not when the video has both, at any speed', () {
+      final both = {
+        for (final l in NetworkQualityService.bitrateNeededFor.keys) l: 'url-$l'
+      };
+      for (final mbps in [0.3, 2.6, 8.0, 50.0]) {
+        linkAt(mbps);
+        final picked = net.pickVariantUrl(Map.of(both));
+        expect(picked, isNotNull);
+        for (final h in hevcLabels) {
+          expect(picked, isNot('url-$h'),
+              reason: 'at $mbps Mbps it picked $h, a black screen on this phone');
+        }
+      }
+    });
+
+    test('and not through the last-resort branch either', () {
+      // The branch that runs when nothing in the preference order matched.
+      // It used to hand back literally any rendition, which was safe while
+      // every file was H.264. With H.265 in the map it is a black screen.
+      //
+      // Empty is the right answer: every caller falls back to the original
+      // upload, which came off a camera and is always H.264.
+      linkAt(8.0);
+      final onlyHevc = {for (final h in hevcLabels) h: 'url-$h'};
+      expect(net.pickVariantUrl(onlyHevc), '',
+          reason: 'a video with only H.265 renditions must send this phone '
+              'back to the original upload, not to a file it cannot decode');
+    });
+
+    test('a software H.265 decoder still counts as no', () {
+      // Android ships one on phones whose chip has none. It would decode a
+      // full-screen reel at a few frames a second while emptying the
+      // battery — worse than the H.264 file it replaced.
+      //
+      // Measured at 4 Mbps on purpose. This first read 8, where the best
+      // affordable rung is 720p_hq whether or not H.265 is allowed — so it
+      // passed with the hardware check deleted, which is the one thing it
+      // exists to catch. 4 Mbps is a speed where a wrong yes shows up.
+      setSoftwareOnlyHevc();
+      linkAt(4.0);
+      expect(net.affordableLabel, '480p',
+          reason: 'software H.265 was treated as real support, so this phone '
+              'would be sent a file it can only decode in software');
+
+      // And the same link with a real decoder does take it — otherwise this
+      // is asserting that nothing happens, which would pass on a picker that
+      // knows no H.265 at all.
+      setHevc(true);
+      expect(net.affordableLabel, '720p_hevc');
+    });
+  });
+
+  group('a phone that can decode H.265 is actually given it', () {
+    setUp(() {
+      setHevc(true);
+      net.debugClearThroughput();
+      net.debugSetQuality(NetworkQuality.medium);
+    });
+    tearDown(() {
+      setHevc(false);
+      net.debugClearThroughput();
+    });
+
+    test('the whole point: 720p on a link that could only carry 480p', () {
+      // 720p_hevc costs what plain 480p costs. So a connection that could
+      // only manage the 480p picture before now gets the full 720p one.
+      linkAt(4.0);
+      final capable = net.affordableLabel;
+
+      setHevc(false);
+      final notCapable = net.affordableLabel;
+
+      expect(capable, '720p_hevc',
+          reason: 'a phone that can decode H.265 should be offered the '
+              '720p picture at 1.5 Mbps on a 4 Mbps link');
+      expect(notCapable, '480p',
+          reason: 'and the same link on a phone that cannot is still 480p — '
+              'if these two are equal the feature is doing nothing');
+    });
+
+    test('it prefers the smaller file when both would play', () {
+      linkAt(50.0);
+      final variants = {'720p': 'big', '720p_hevc': 'small'};
+      expect(net.pickVariantUrl(variants), 'small',
+          reason: 'both play and both are the same picture, so the one that '
+              'costs less to send is the one to send');
+    });
+
+    test('and still falls back when the video has no H.265 copy', () {
+      linkAt(8.0);
+      expect(net.pickVariantUrl({'720p': 'only'}), 'only',
+          reason: 'everything uploaded before H.265 existed still has to play');
+    });
   });
 }

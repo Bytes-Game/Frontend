@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
+import 'package:myapp/services/decoder_budget.dart';
 import 'package:myapp/services/device_capabilities.dart';
 
 /// Coarse classification of the user's connection. We deliberately
@@ -241,6 +242,23 @@ class NetworkQualityService {
     // Audio is left out here the same as it is for every other rung.
     '360p': 600000,
     '480p': 1500000,
+    // ══════════════════════════════════════════════════════════════════
+    // THE SAME PICTURE, A THIRD FEWER BITS
+    // ══════════════════════════════════════════════════════════════════
+    //
+    // These two are not extra sizes. They are the 480p and 720p pictures
+    // described in H.265 instead of H.264, which takes about a third fewer
+    // bits to say the same thing.
+    //
+    // Look at what that buys: 720p_hevc costs 1.5 Mbps, which is what plain
+    // 480p costs. A phone that can decode H.265 gets the FULL 720p picture
+    // on a connection that could only carry 480p before.
+    //
+    // Older phones cannot decode H.265, and for them these must never be
+    // chosen — see [_playable]. An H.265 file on a phone that cannot decode
+    // it is not a soft picture, it is no picture.
+    '480p_hevc': 900000,
+    '720p_hevc': 1500000,
     '720p': 2500000,
     '720p_hq': 3500000,
     '1080p': 6000000,
@@ -557,6 +575,12 @@ class NetworkQualityService {
     // slow the link gets. TestEveryLabelIsWiredEverywhere holds that.
     String best = '360p';
     for (final entry in bitrateNeededFor.entries) {
+      // Codec first, speed second. A ceiling naming a file this phone
+      // cannot decode would send the whole chain looking for something
+      // "below" it — and the rungs below an H.265 one are H.264 rungs this
+      // link may not afford. Skipping it here keeps the ceiling honest:
+      // the best file this phone can BOTH play and carry.
+      if (!_playable(entry.key)) continue;
       if (forPicture < entry.value * bitrateHeadroom) continue;
       if ((_labelRank[entry.key] ?? 0) > (_labelRank[best] ?? 0)) {
         best = entry.key;
@@ -609,13 +633,44 @@ class NetworkQualityService {
   /// prefer. Not the same as how hard it is to DECODE: 720p_hq is the same
   /// 1280-wide picture as 720p with more bits spent on it, so it ranks higher
   /// here and identically for decode cost. See _preferenceOrder.
+  /// Each H.265 rung sits directly ABOVE the H.264 one it copies, not level
+  /// with it. They are the same picture, so ranking is really asking "given
+  /// both, which would you rather send?" — and the answer is the smaller
+  /// file every time: it starts sooner and leaves more of the link for the
+  /// next reel.
   static const Map<String, int> _labelRank = {
     '360p': 0,
     '480p': 1,
-    '720p': 2,
-    '720p_hq': 3,
-    '1080p': 4,
+    '480p_hevc': 2,
+    '720p': 3,
+    '720p_hevc': 4,
+    '720p_hq': 5,
+    '1080p': 6,
   };
+
+  /// Whether a label names an H.265 file.
+  ///
+  /// A suffix rather than a lookup table, so a rung added on the server
+  /// cannot be half-known here — see the server's progressiveLadder, which
+  /// names them the same way.
+  static bool isHevc(String label) => label.endsWith('_hevc');
+
+  /// Whether this device can actually play a file with this label.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// THE ONE CHECK THAT MUST NEVER BE OPTIMISTIC
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// Every other decision in this file trades picture quality against
+  /// stalling. This one does not: get it wrong and the viewer gets a black
+  /// screen, which is worse than any quality this file could pick.
+  ///
+  /// So it answers false unless the phone has positively said it has a
+  /// hardware H.265 decoder. A phone that could not be asked — iOS, an old
+  /// Android, a codec list that would not enumerate — is served exactly
+  /// what it is served today.
+  static bool _playable(String label) =>
+      !isHevc(label) || DecoderBudget.instance.hasHardwareHevc;
 
   /// The label a video of this picture size belongs under.
   ///
@@ -874,12 +929,28 @@ class NetworkQualityService {
         return url;
       }
     }
-    // Last-resort: any variant we have.
+    // ══════════════════════════════════════════════════════════════════
+    // LAST RESORT — BUT STILL ONLY SOMETHING THIS PHONE CAN PLAY
+    // ══════════════════════════════════════════════════════════════════
+    //
+    // Nothing in the preference order matched, so this hands back whatever
+    // the video has. It used to hand back literally anything, which was
+    // fine while every file was H.264 and every phone could play all of
+    // them.
+    //
+    // It stopped being fine the moment some files are H.265. A phone with
+    // no H.265 decoder handed an H.265 url shows a black screen — worse
+    // than any picture quality this file could have chosen.
+    //
+    // Empty is the safe answer, not a failure: every caller falls back to
+    // the original upload, which came off somebody's camera and is always
+    // H.264. So a phone that can play none of the renditions plays the
+    // video anyway.
     _countPick('other');
-    return variants.values.firstWhere(
-      (s) => s.isNotEmpty,
-      orElse: () => '',
-    );
+    for (final entry in variants.entries) {
+      if (entry.value.isNotEmpty && _playable(entry.key)) return entry.value;
+    }
+    return '';
   }
 
   /// How many reels were served at each quality, this run.
@@ -940,10 +1011,16 @@ class NetworkQualityService {
     // 360p sits at 0 with 480p: both are well inside what the weakest phone
     // we support can decode, and the thing that makes 360p worth having is
     // the connection, not the chip.
+    // An H.265 rung costs the same to decode as the H.264 picture it copies,
+    // because decode cost follows PIXELS and they are the same pixels. What
+    // differs is whether the chip can decode it at all, and that is not a
+    // matter of degree — it is [_playable], applied in trim below.
     const decodeRank = {
       '360p': 0,
       '480p': 0,
+      '480p_hevc': 0,
       '720p': 1,
+      '720p_hevc': 1,
       '720p_hq': 1,
       '1080p': 2
     };
@@ -960,6 +1037,8 @@ class NetworkQualityService {
 
     List<String> trim(List<String> order) {
       return order.where((label) {
+        // Before anything about size or speed: can this phone decode it?
+        if (!_playable(label)) return false;
         if ((decodeRank[label] ?? 99) > deviceCapRank) return false;
         if (requested != null && (_labelRank[label] ?? 99) > requested) {
           return false;
@@ -976,15 +1055,21 @@ class NetworkQualityService {
     // added to the slow list. TestEveryLabelIsWiredEverywhere holds that.
     switch (q) {
       case NetworkQuality.high:
-        return trim(const ['1080p', '720p_hq', '720p', '480p', '360p']);
+        return trim(const [
+          '1080p', '720p_hq', '720p_hevc', '720p', '480p_hevc', '480p', '360p'
+        ]);
       case NetworkQuality.medium:
       case NetworkQuality.unknown:
-        return trim(const ['720p_hq', '720p', '480p', '360p', '1080p']);
+        return trim(const [
+          '720p_hevc', '720p_hq', '720p', '480p_hevc', '480p', '360p', '1080p'
+        ]);
       case NetworkQuality.low:
         // 360p first, not 480p. This branch is the operating system saying
         // the connection is a slow one before we have measured anything —
         // the one moment where guessing small is obviously right.
-        return trim(const ['360p', '480p', '720p', '720p_hq', '1080p']);
+        return trim(const [
+          '360p', '480p_hevc', '480p', '720p_hevc', '720p', '720p_hq', '1080p'
+        ]);
     }
   }
 }
