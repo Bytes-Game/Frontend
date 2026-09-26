@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
+import 'package:myapp/widgets/arena_ui.dart';
 
 /// Shows all notifications (follow, like, challenge, etc.).
 ///
@@ -44,43 +46,20 @@ class _NotificationsPageState extends State<NotificationsPage>
         centerTitle: true,
       ),
       body: list.isEmpty
-          ? Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.notifications_none,
-                      size: 64,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant),
-                  const SizedBox(height: 16),
-                  Text('No notifications yet',
-                      style: TextStyle(
-                          fontSize: 18,
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onSurfaceVariant)),
-                  const SizedBox(height: 8),
-                  Text('Interactions will appear here',
-                      style: TextStyle(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onSurfaceVariant)),
-                ],
-              ),
+          ? const ArenaEmptyState(
+              icon: Icons.notifications_none_rounded,
+              title: 'No notifications yet',
+              subtitle: 'Follows, likes, votes and battle news will show '
+                  'up here.',
             )
-          : ListView.separated(
+          : ListView.builder(
               padding: const EdgeInsets.symmetric(vertical: 8),
               itemCount: list.length,
-              separatorBuilder: (ctx, i) =>
-                  const Divider(height: 1, indent: 72),
               itemBuilder: (_, i) {
                 final n = list[i];
-                return ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: _color(n.type).withValues(alpha: 0.15),
-                    child: Icon(_icon(n.type), color: _color(n.type)),
-                  ),
-                  title: Text(n.message),
-                  subtitle: Text(_timeAgo(n.timestamp)),
+                final c = _color(n.type);
+                return Pressable(
+                  pressedScale: 0.98,
                   onTap: () {
                     EventTracker.instance.trackNotificationTap(
                       notificationId: n.messageId ??
@@ -89,6 +68,59 @@ class _NotificationsPageState extends State<NotificationsPage>
                       position: i,
                     );
                   },
+                  child: Container(
+                    margin:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurface
+                          .withValues(alpha: 0.04),
+                      borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+                    ),
+                    child: Row(
+                      children: [
+                        // What kind of news, as a tinted icon tile.
+                        Container(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            color: c.withValues(alpha: 0.15),
+                            borderRadius:
+                                BorderRadius.circular(AppTheme.radiusMd),
+                          ),
+                          child: Icon(_icon(n.type), color: c, size: 22),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                n.message,
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                _timeAgo(n.timestamp),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurface
+                                      .withValues(alpha: 0.5),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 );
               },
             ),
@@ -98,38 +130,38 @@ class _NotificationsPageState extends State<NotificationsPage>
   IconData _icon(String type) {
     switch (type) {
       case 'follow':
-        return Icons.person_add;
+        return Icons.person_add_alt_1_rounded;
       case 'like':
-        return Icons.favorite;
+        return Icons.favorite_rounded;
       case 'comment':
-        return Icons.chat_bubble;
+        return Icons.chat_bubble_rounded;
       case 'challenge':
-        return Icons.sports_kabaddi;
+        return Icons.bolt_rounded;
       case 'challenge_accepted':
-        return Icons.emoji_events;
+        return Icons.emoji_events_rounded;
       case 'vote':
-        return Icons.how_to_vote;
+        return Icons.how_to_vote_rounded;
       default:
-        return Icons.notifications;
+        return Icons.notifications_rounded;
     }
   }
 
   Color _color(String type) {
     switch (type) {
       case 'follow':
-        return Colors.blue;
+        return AppTheme.accentBlue;
       case 'like':
-        return Colors.red;
+        return AppTheme.accentPink;
       case 'comment':
-        return Colors.teal;
+        return AppTheme.accentCyan;
       case 'challenge':
-        return Colors.orange;
+        return AppTheme.primary;
       case 'challenge_accepted':
-        return Colors.amber;
+        return AppTheme.warning;
       case 'vote':
-        return Colors.purple;
+        return AppTheme.success;
       default:
-        return Colors.grey;
+        return AppTheme.textMutedDark;
     }
   }
 

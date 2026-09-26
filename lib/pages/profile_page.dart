@@ -24,6 +24,7 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
+import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/battle_record_panel.dart';
 import 'package:myapp/widgets/battles_tab.dart';
 import 'package:myapp/widgets/profile_arena_header.dart';
@@ -490,25 +491,15 @@ class _ProfilePageState extends State<ProfilePage>
     final dp = Provider.of<DataProvider>(context);
     final isOwn = dp.user?.id == widget.user.id;
     final isFollowing = dp.following.contains(widget.user.id);
-    final cs = Theme.of(context).colorScheme;
-
     // Pushed as its own page, the arena runs up under the status bar and
     // leaves room for it; inside the main tabs a SafeArea already has.
     final topInset =
         widget.isEmbedded ? 0.0 : MediaQuery.paddingOf(context).top;
     final record = _shownRecord;
-    Tab tab(IconData icon, String label, [String? countKey]) {
+    ({IconData icon, String label}) tab(IconData icon, String label,
+        [String? countKey]) {
       final n = countKey == null ? 0 : (record.counts[countKey] ?? 0);
-      return Tab(
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 18),
-            const SizedBox(width: 6),
-            Text(n > 0 ? '$label $n' : label),
-          ],
-        ),
-      );
+      return (icon: icon, label: n > 0 ? '$label $n' : label);
     }
 
     final body = NestedScrollView(
@@ -522,24 +513,20 @@ class _ProfilePageState extends State<ProfilePage>
               record: record,
               topInset: topInset,
               leading: widget.isEmbedded ? null : const BackButton(),
+              // Everything that used to be a row of buttons under the
+              // stats lives up here as icons, so the page below is all
+              // about the person.
               actions: [
-                IconButton(
-                  icon: const Icon(Icons.share_outlined),
-                  tooltip: 'Share profile',
-                  onPressed: _shareProfile,
-                ),
                 if (isOwn)
-                  IconButton(
-                    icon: const Icon(Icons.menu_rounded),
-                    tooltip: 'Settings',
-                    onPressed: _showSettingsSheet,
-                  )
+                  _barAction(Icons.edit_rounded, 'Edit profile',
+                      _openEditProfile),
+                _barAction(Icons.share_rounded, 'Share profile', _shareProfile),
+                if (isOwn)
+                  _barAction(Icons.settings_rounded, 'Settings',
+                      _showSettingsSheet)
                 else
-                  IconButton(
-                    icon: const Icon(Icons.more_horiz),
-                    tooltip: 'More',
-                    onPressed: () => _showOtherUserSheet(dp, isFollowing),
-                  ),
+                  _barAction(Icons.more_horiz_rounded, 'More',
+                      () => _showOtherUserSheet(dp, isFollowing)),
               ],
             ),
           ),
@@ -553,8 +540,6 @@ class _ProfilePageState extends State<ProfilePage>
                 onTapFollowers: _openFollowers,
                 onTapFollowing: _openFollowing,
                 onEditProfile: _openEditProfile,
-                onShareProfile: _shareProfile,
-                onOpenSettings: _showSettingsSheet,
                 onFollowToggle: () {
                   if (isFollowing) {
                     EventTracker.instance.trackFollowToggle(
@@ -622,24 +607,23 @@ class _ProfilePageState extends State<ProfilePage>
           SliverPersistentHeader(
             pinned: true,
             delegate: _PinnedTabBarDelegate(
-              TabBar(
-                controller: _tabs,
-                isScrollable: true,
-                tabAlignment: TabAlignment.start,
-                labelColor: cs.onSurface,
-                unselectedLabelColor: cs.onSurfaceVariant,
-                indicatorColor: cs.primary,
-                indicatorWeight: 2.5,
-                tabs: [
-                  tab(Icons.grid_on_rounded, 'Shorts'),
-                  tab(Icons.flag_outlined, 'Open', 'open'),
-                  tab(Icons.bolt_outlined, 'Live', 'live'),
-                  tab(Icons.emoji_events_outlined, 'Won', 'won'),
-                  tab(Icons.trending_down, 'Lost', 'lost'),
-                  if (isOwn) tab(Icons.favorite_border, 'Liked'),
-                  if (isOwn) tab(Icons.bookmark_border, 'Saved'),
-                ],
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+                child: ArenaPillTabs(
+                  controller: _tabs,
+                  scrollable: true,
+                  tabs: [
+                    tab(Icons.grid_view_rounded, 'Shorts'),
+                    tab(Icons.flag_rounded, 'Open', 'open'),
+                    tab(Icons.bolt_rounded, 'Live', 'live'),
+                    tab(Icons.emoji_events_rounded, 'Won', 'won'),
+                    tab(Icons.trending_down_rounded, 'Lost', 'lost'),
+                    if (isOwn) tab(Icons.favorite_rounded, 'Liked'),
+                    if (isOwn) tab(Icons.bookmark_rounded, 'Saved'),
+                  ],
+                ),
               ),
+              height: 56,
               backgroundColor: Theme.of(context).scaffoldBackgroundColor,
             ),
           ),
@@ -677,6 +661,20 @@ class _ProfilePageState extends State<ProfilePage>
     return Scaffold(body: body);
   }
 
+  /// One round icon in the arena's top bar.
+  Widget _barAction(IconData icon, String tooltip, VoidCallback onTap) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 8),
+      child: IconBubble(
+        icon: icon,
+        tooltip: tooltip,
+        size: 38,
+        onImage: true,
+        onTap: onTap,
+      ),
+    );
+  }
+
   // ── Tab bodies ─────────────────────────────────────────────────────
 
   Widget _buildPostsTab({required bool isOwn}) {
@@ -703,11 +701,11 @@ class _ProfilePageState extends State<ProfilePage>
       );
     }
     return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(2, 2, 2, 80),
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 80),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
-        crossAxisSpacing: 2,
-        mainAxisSpacing: 2,
+        crossAxisSpacing: 4,
+        mainAxisSpacing: 4,
         childAspectRatio: 9 / 16,
       ),
       itemCount: _myChallenges.length,
@@ -716,7 +714,7 @@ class _ProfilePageState extends State<ProfilePage>
         return _GridTile(
           thumbnailUrl: c.thumbnailUrl ?? '',
           overlayCount: c.views,
-          overlayIcon: Icons.play_arrow,
+          overlayIcon: Icons.play_arrow_rounded,
           formatCount: _formatViews,
           onTap: () => _openChallengeReels(c),
           // Long-press is destructive for own posts only.
@@ -747,11 +745,11 @@ class _ProfilePageState extends State<ProfilePage>
       );
     }
     return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(2, 2, 2, 80),
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 80),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
-        crossAxisSpacing: 2,
-        mainAxisSpacing: 2,
+        crossAxisSpacing: 4,
+        mainAxisSpacing: 4,
         childAspectRatio: 9 / 16,
       ),
       itemCount: _savedChallenges.length,
@@ -914,8 +912,6 @@ class _ProfileHeader extends StatelessWidget {
   final VoidCallback onTapFollowers;
   final VoidCallback onTapFollowing;
   final VoidCallback onEditProfile;
-  final VoidCallback onShareProfile;
-  final VoidCallback onOpenSettings;
   final VoidCallback onFollowToggle;
   final VoidCallback onMessage;
   final VoidCallback onChallenge;
@@ -929,8 +925,6 @@ class _ProfileHeader extends StatelessWidget {
     required this.onTapFollowers,
     required this.onTapFollowing,
     required this.onEditProfile,
-    required this.onShareProfile,
-    required this.onOpenSettings,
     required this.onFollowToggle,
     required this.onMessage,
     required this.onChallenge,
@@ -943,87 +937,126 @@ class _ProfileHeader extends StatelessWidget {
     final tt = Theme.of(context).textTheme;
     return Padding(
       padding: const EdgeInsets.fromLTRB(
-        AppTheme.space20,
-        AppTheme.space12,
-        AppTheme.space20,
+        AppTheme.space16,
+        AppTheme.space16,
+        AppTheme.space16,
         AppTheme.space16,
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Stats across the full width. The avatar, name and league are up
-          // in the arena, and wins and losses in the record panel below.
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _StatPill(
-                value: compact(postsCount),
-                label: 'Videos',
+          // Stats in one card across the full width. The avatar, name and
+          // league are up in the arena, and wins and losses in the record
+          // panel below.
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: AppTheme.space12),
+            decoration: BoxDecoration(
+              color: cs.onSurface.withValues(alpha: 0.04),
+              borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+              border: Border.all(color: cs.onSurface.withValues(alpha: 0.06)),
+            ),
+            child: IntrinsicHeight(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _StatPill(
+                      value: compact(postsCount),
+                      label: 'Videos',
+                    ),
+                  ),
+                  _divider(cs),
+                  Expanded(
+                    child: _StatPill(
+                      value: compact(user.followersCount),
+                      label: 'Followers',
+                      onTap: onTapFollowers,
+                    ),
+                  ),
+                  _divider(cs),
+                  Expanded(
+                    child: _StatPill(
+                      value: compact(user.followingCount),
+                      label: 'Following',
+                      onTap: onTapFollowing,
+                    ),
+                  ),
+                ],
               ),
-              _StatPill(
-                value: compact(user.followersCount),
-                label: 'Followers',
-                onTap: onTapFollowers,
-              ),
-              _StatPill(
-                value: compact(user.followingCount),
-                label: 'Following',
-                onTap: onTapFollowing,
-              ),
-            ],
+            ),
           ),
-          const SizedBox(height: AppTheme.space12),
 
           // Bio. Three states:
-          //   * Non-empty → render the bio text, multi-line, slightly
-          //     muted. Visible on every profile.
-          //   * Empty + own profile → "Add a bio" CTA that opens the
-          //     edit-profile form.
+          //   * Non-empty → the bio text, on every profile.
+          //   * Empty + own profile → a small "Add a bio" chip that opens
+          //     the edit form.
           //   * Empty + other profile → nothing (no awkward dead row).
           if (user.bio.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
+              padding: const EdgeInsets.fromLTRB(4, AppTheme.space12, 4, 0),
               child: Text(
                 user.bio,
+                textAlign: TextAlign.center,
                 style: tt.bodyMedium,
               ),
             )
           else if (isOwn)
-            InkWell(
-              borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-              onTap: onEditProfile,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Text(
-                  'Add a bio',
-                  style: tt.bodyMedium?.copyWith(
-                    color: cs.primary,
-                    fontWeight: FontWeight.w600,
+            Padding(
+              padding: const EdgeInsets.only(top: AppTheme.space12),
+              child: Center(
+                child: Pressable(
+                  onTap: onEditProfile,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 7),
+                    decoration: BoxDecoration(
+                      borderRadius:
+                          BorderRadius.circular(AppTheme.radiusFull),
+                      border: Border.all(
+                        color: AppTheme.primary.withValues(alpha: 0.4),
+                      ),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        GradientIcon(Icons.add_rounded, size: 16),
+                        SizedBox(width: 4),
+                        Text(
+                          'Add a bio',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
 
-          const SizedBox(height: AppTheme.space12),
-
-          // Action row — split between own and other profiles.
-          if (isOwn)
-            _OwnActionRow(
-              onEditProfile: onEditProfile,
-              onShareProfile: onShareProfile,
-              onOpenSettings: onOpenSettings,
-            )
-          else
+          // Someone else's profile: follow, message, battle. Your own has
+          // nothing here — edit, share and settings are icons in the bar.
+          if (!isOwn) ...[
+            const SizedBox(height: AppTheme.space12),
             _OtherActionRow(
               isFollowing: isFollowing,
               onFollowToggle: onFollowToggle,
               onMessage: onMessage,
               onChallenge: onChallenge,
             ),
+          ],
         ],
       ),
     );
   }
+
+  Widget _divider(ColorScheme cs) => VerticalDivider(
+        width: 1,
+        thickness: 1,
+        indent: 6,
+        endIndent: 6,
+        color: cs.onSurface.withValues(alpha: 0.1),
+      );
 }
 
 class _StatPill extends StatelessWidget {
@@ -1062,70 +1095,12 @@ class _StatPill extends StatelessWidget {
       ],
     );
     if (onTap == null) return col;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppTheme.space8,
-          vertical: AppTheme.space4,
-        ),
-        child: col,
-      ),
-    );
+    return Pressable(onTap: onTap, child: col);
   }
 }
 
-class _OwnActionRow extends StatelessWidget {
-  final VoidCallback onEditProfile;
-  final VoidCallback onShareProfile;
-  final VoidCallback onOpenSettings;
-
-  const _OwnActionRow({
-    required this.onEditProfile,
-    required this.onShareProfile,
-    required this.onOpenSettings,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: onEditProfile,
-            icon: const Icon(Icons.edit_outlined, size: 18),
-            label: const Text('Edit Profile'),
-          ),
-        ),
-        const SizedBox(width: AppTheme.space8),
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: onShareProfile,
-            icon: const Icon(Icons.share_outlined, size: 18),
-            label: const Text('Share'),
-          ),
-        ),
-        const SizedBox(width: AppTheme.space8),
-        SizedBox(
-          width: 44,
-          height: 44,
-          child: OutlinedButton(
-            onPressed: onOpenSettings,
-            style: OutlinedButton.styleFrom(
-              padding: EdgeInsets.zero,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-              ),
-            ),
-            child: const Icon(Icons.menu_rounded, size: 20),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
+/// Follow as the one big button; message and battle as round icons beside
+/// it, so the row says three things without three labels.
 class _OtherActionRow extends StatelessWidget {
   final bool isFollowing;
   final VoidCallback onFollowToggle;
@@ -1141,38 +1116,64 @@ class _OtherActionRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Row(
       children: [
         Expanded(
-          flex: 2,
-          child: isFollowing
-              ? OutlinedButton.icon(
-                  onPressed: onFollowToggle,
-                  icon: const Icon(Icons.check, size: 18),
-                  label: const Text('Following'),
-                )
-              : FilledButton.icon(
-                  onPressed: onFollowToggle,
-                  icon: const Icon(Icons.person_add_alt_1_rounded,
-                      size: 18),
-                  label: const Text('Follow'),
-                ),
-        ),
-        const SizedBox(width: AppTheme.space8),
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: onMessage,
-            icon: const Icon(Icons.message_outlined, size: 18),
-            label: const Text('Message'),
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 180),
+            child: isFollowing
+                ? Pressable(
+                    key: const ValueKey('following'),
+                    onTap: onFollowToggle,
+                    child: Container(
+                      height: 46,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        borderRadius:
+                            BorderRadius.circular(AppTheme.radiusFull),
+                        border: Border.all(
+                          color: cs.onSurface.withValues(alpha: 0.2),
+                        ),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.check_rounded, size: 18),
+                          SizedBox(width: 6),
+                          Text(
+                            'Following',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : GradientButton(
+                    key: const ValueKey('follow'),
+                    label: 'Follow',
+                    icon: Icons.person_add_alt_1_rounded,
+                    height: 46,
+                    onPressed: onFollowToggle,
+                  ),
           ),
         ),
         const SizedBox(width: AppTheme.space8),
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: onChallenge,
-            icon: const Icon(Icons.bolt_outlined, size: 18),
-            label: const Text('Battle'),
-          ),
+        IconBubble(
+          icon: Icons.chat_bubble_rounded,
+          tooltip: 'Message',
+          size: 46,
+          onTap: onMessage,
+        ),
+        const SizedBox(width: AppTheme.space8),
+        IconBubble(
+          icon: Icons.bolt_rounded,
+          tooltip: 'Challenge to a battle',
+          size: 46,
+          onTap: onChallenge,
         ),
       ],
     );
@@ -1183,28 +1184,33 @@ class _OtherActionRow extends StatelessWidget {
 // Tabs
 // ────────────────────────────────────────────────────────────────────
 
-/// SliverPersistentHeaderDelegate that paints a Material-backed
-/// TabBar. Needed because TabBar isn't a sliver by default — without
-/// this wrapper the strip doesn't pin to the top of the scroll.
+/// Pins the tab strip to the top of the scroll once the header has gone
+/// past, on the page's own background so nothing shows through it.
 class _PinnedTabBarDelegate extends SliverPersistentHeaderDelegate {
-  final TabBar tabBar;
+  final Widget child;
+  final double height;
   final Color backgroundColor;
 
-  _PinnedTabBarDelegate(this.tabBar, {required this.backgroundColor});
+  _PinnedTabBarDelegate({
+    required this.child,
+    required this.height,
+    required this.backgroundColor,
+  });
 
   @override
-  double get minExtent => tabBar.preferredSize.height;
+  double get minExtent => height;
   @override
-  double get maxExtent => tabBar.preferredSize.height;
+  double get maxExtent => height;
 
   @override
   Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
-    return Material(color: backgroundColor, child: tabBar);
+    return Material(color: backgroundColor, child: child);
   }
 
   @override
   bool shouldRebuild(covariant _PinnedTabBarDelegate oldDelegate) {
-    return tabBar != oldDelegate.tabBar ||
+    return child != oldDelegate.child ||
+        height != oldDelegate.height ||
         backgroundColor != oldDelegate.backgroundColor;
   }
 }
@@ -1238,8 +1244,20 @@ class _EmptyTab extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(icon, size: 56, color: cs.onSurfaceVariant),
-                  const SizedBox(height: AppTheme.space12),
+                  Container(
+                    width: 80,
+                    height: 80,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppTheme.primary.withValues(alpha: 0.10),
+                      border: Border.all(
+                        color: AppTheme.primary.withValues(alpha: 0.25),
+                      ),
+                    ),
+                    alignment: Alignment.center,
+                    child: GradientIcon(icon, size: 36),
+                  ),
+                  const SizedBox(height: AppTheme.space16),
                   Text(
                     title,
                     style: tt.titleMedium?.copyWith(
@@ -1289,83 +1307,87 @@ class _GridTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return GestureDetector(
+    return Pressable(
       onTap: onTap,
       onLongPress: onLongPress,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          if (thumbnailUrl.isNotEmpty)
-            Image.network(
-              thumbnailUrl,
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => Container(
+      pressedScale: 0.97,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (thumbnailUrl.isNotEmpty)
+              Image.network(
+                thumbnailUrl,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => Container(
+                  color: cs.surfaceContainerHighest,
+                  child: Icon(fallbackIcon,
+                      color: cs.onSurfaceVariant, size: 28),
+                ),
+              )
+            else
+              Container(
                 color: cs.surfaceContainerHighest,
                 child: Icon(fallbackIcon,
                     color: cs.onSurfaceVariant, size: 28),
               ),
-            )
-          else
-            Container(
-              color: cs.surfaceContainerHighest,
-              child: Icon(fallbackIcon,
-                  color: cs.onSurfaceVariant, size: 28),
-            ),
-          if (topRightIcon != null)
-            Positioned(
-              top: 4,
-              right: 4,
-              child: Icon(topRightIcon, color: Colors.white, size: 18),
-            ),
-          if (overlayCount != null && overlayCount! > 0)
-            Positioned(
-              bottom: 4,
-              left: 4,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(overlayIcon ?? Icons.play_arrow,
-                        color: Colors.white, size: 12),
-                    const SizedBox(width: 2),
-                    Text(
-                      formatCount != null
-                          ? formatCount!(overlayCount!)
-                          : '$overlayCount',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
+            if (topRightIcon != null)
+              Positioned(
+                top: 4,
+                right: 4,
+                child: Icon(topRightIcon, color: Colors.white, size: 18),
+              ),
+            if (overlayCount != null && overlayCount! > 0)
+              Positioned(
+                bottom: 4,
+                left: 4,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(overlayIcon ?? Icons.play_arrow_rounded,
+                          color: Colors.white, size: 12),
+                      const SizedBox(width: 2),
+                      Text(
+                        formatCount != null
+                            ? formatCount!(overlayCount!)
+                            : '$overlayCount',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
-            ),
-          if (captionOverlay != null && captionOverlay!.isNotEmpty)
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                padding: const EdgeInsets.all(4),
-                color: Colors.black54,
-                child: Text(
-                  captionOverlay!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      color: Colors.white, fontSize: 10),
+            if (captionOverlay != null && captionOverlay!.isNotEmpty)
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  color: Colors.black54,
+                  child: Text(
+                    captionOverlay!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        color: Colors.white, fontSize: 10),
+                  ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1631,8 +1653,22 @@ class _SettingsSheet extends StatelessWidget {
     Color? iconColor,
     Color? textColor,
   }) {
+    final tint = iconColor ?? AppTheme.primary;
     return ListTile(
-      leading: Icon(icon, color: iconColor),
+      // Each setting's icon sits in a small tinted square, so the list
+      // reads as a set of places to go rather than a wall of text.
+      leading: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: tint.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+        ),
+        alignment: Alignment.center,
+        child: iconColor == null
+            ? GradientIcon(icon, size: 19)
+            : Icon(icon, size: 19, color: iconColor),
+      ),
       title: Row(
         children: [
           Expanded(

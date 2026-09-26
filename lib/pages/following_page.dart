@@ -7,6 +7,7 @@ import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/widgets/user_tile.dart';
 import 'package:myapp/pages/profile_page.dart';
+import 'package:myapp/widgets/arena_ui.dart';
 
 /// Shows who a given user is following
 ///
@@ -61,7 +62,12 @@ class _FollowingPageState extends State<FollowingPage>
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _following.isEmpty
-              ? const Center(child: Text('Not following anyone yet'))
+              ? const ArenaEmptyState(
+                  icon: Icons.person_search_rounded,
+                  title: 'Not following anyone yet',
+                  subtitle: 'Find people in Search and follow them to see '
+                      'their battles first.',
+                )
               : ListView.builder(
                   itemCount: _following.length,
                   itemBuilder: (_, i) {
