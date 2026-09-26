@@ -622,8 +622,15 @@ class VideoCacheService {
 
   /// Whether [url] can start without a network round-trip — either a
   /// whole file on disk, or an opening slice the proxy can serve.
+  ///
+  /// The proxy alone is not enough to say yes. [clear] leaves the proxy
+  /// still knowing about reels whose files it has just deleted (it has to,
+  /// see there), so "the proxy knows it" and "we still hold its opening"
+  /// are two different things after a clear. [_prefixed] is the second.
   bool isReady(String url) =>
-      pathFor(url) != null || LocalMediaServer.instance.localUrlFor(url) != null;
+      pathFor(url) != null ||
+      (_prefixed.contains(url) &&
+          LocalMediaServer.instance.localUrlFor(url) != null);
 
   /// Whether anything has acted on [url] yet: already warmed, being
   /// downloaded now, or waiting in the queue for a slot.
@@ -1551,8 +1558,50 @@ class VideoCacheService {
     return h.toRadixString(16).padLeft(16, '0');
   }
 
-  /// Drop everything (settings "clear cache", logout).
-  Future<void> clear() async {
+  /// How much video the cache is holding on the phone right now, in bytes.
+  ///
+  /// Everything in the folder: whole videos, and the opening pieces the
+  /// proxy serves from. Those pieces grow while a video is watched (the
+  /// proxy keeps the bytes it streams), so during a long session they are
+  /// most of the total, not a rounding error.
+  Future<int> bytesOnDisk() async {
+    final dir = _dir;
+    if (dir == null) return 0;
+    var total = 0;
+    try {
+      for (final f in dir.listSync()) {
+        if (f is! File) continue;
+        try {
+          total += f.lengthSync();
+        } on FileSystemException {
+          // Deleted between the listing and the size check — by the size
+          // sweep, or by the app starting a new download over it. Gone
+          // files take no space, so skipping it is the right answer.
+        }
+      }
+    } on FileSystemException catch (e) {
+      ReelDiagnostics.instance.log('cache size check failed: $e');
+    }
+    return total;
+  }
+
+  /// Empty the cache: every saved opening and every saved whole video.
+  /// Called on logout and by the "Free up space" screen. Returns how many
+  /// bytes it freed.
+  ///
+  /// The proxy is deliberately told nothing. A video on screen, or paused
+  /// behind the settings page, is playing from a proxy address and will
+  /// ask it for more bytes when it carries on. If the proxy had forgotten
+  /// that address, the answer would be "not found" and the video would
+  /// stop dead. Because it still knows it, it finds the file gone and
+  /// fetches from the internet instead, exactly like a video that was
+  /// never saved. LocalMediaServer's range handling says the same thing
+  /// from the other side: a missing file is normal, a missing address is
+  /// not.
+  ///
+  /// [_prefixed] IS forgotten, so the next swipe saves these videos
+  /// again, and [isReady] stops claiming they start instantly.
+  Future<int> clear() async {
     for (final url in _active.keys.toList()) {
       _cancel(url);
     }
@@ -1561,17 +1610,29 @@ class VideoCacheService {
     }
     _queue.clear();
     _ready.clear();
-    for (final url in _prefixed) {
-      LocalMediaServer.instance.unregister(url);
-    }
     _prefixed.clear();
     final dir = _dir;
-    if (dir == null) return;
+    if (dir == null) return 0;
+    var freed = 0;
+    var stuck = 0;
     try {
       for (final f in dir.listSync()) {
-        if (f is File) f.deleteSync();
+        if (f is! File) continue;
+        try {
+          final size = f.lengthSync();
+          f.deleteSync();
+          freed += size;
+        } on FileSystemException {
+          stuck++;
+        }
       }
-    } catch (_) {}
+    } on FileSystemException catch (e) {
+      ReelDiagnostics.instance.log('cache clear could not list the folder: $e');
+    }
+    ReelDiagnostics.instance.log('cache cleared: freed '
+        '${(freed / (1024 * 1024)).toStringAsFixed(1)} MB'
+        '${stuck > 0 ? ", $stuck files would not delete" : ""}');
+    return freed;
   }
 
   @visibleForTesting
