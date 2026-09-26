@@ -27,6 +27,13 @@ class UserModel {
   /// no-settings case is just a missing field, not a `null` literal.
   final Map<String, dynamic> settings;
 
+  /// Battle rating: starts at 1000 and moves with every decided battle.
+  /// The league follows it. See battles.go in the backend.
+  final int rating;
+
+  /// Decided battles that ended level.
+  final int draws;
+
   UserModel({
     required this.id,
     required this.username,
@@ -41,6 +48,8 @@ class UserModel {
     this.visibility = 'public',
     this.twoFactorEnabled = false,
     this.settings = const {},
+    this.rating = 1000,
+    this.draws = 0,
   });
 
   /// Build a copy with selected fields swapped. Used by callers that
@@ -76,6 +85,8 @@ class UserModel {
       visibility: visibility ?? this.visibility,
       twoFactorEnabled: twoFactorEnabled ?? this.twoFactorEnabled,
       settings: settings ?? this.settings,
+      rating: rating,
+      draws: draws,
     );
   }
 
@@ -98,6 +109,8 @@ class UserModel {
       visibility: (json['visibility'] as String?) ?? 'public',
       twoFactorEnabled: json['twoFactorEnabled'] == true,
       settings: (json['settings'] as Map<String, dynamic>?) ?? const {},
+      rating: json['rating'] is num ? (json['rating'] as num).toInt() : 1000,
+      draws: json['draws'] is num ? (json['draws'] as num).toInt() : 0,
       );
   }
 }

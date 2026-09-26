@@ -11,6 +11,7 @@ import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/widgets/profile_card_3d.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/pages/search_reels_viewer_page.dart';
 import 'package:myapp/pages/profile_page.dart';
@@ -787,9 +788,29 @@ class _SearchPageState extends State<SearchPage>
     );
   }
 
+  /// Hold on a person to see their battle card in 3D: league, rating,
+  /// record, and a breakdown on the back. "View profile" opens the page.
+  void _peekProfile(UserModel user, int position) {
+    EventTracker.instance.trackTap(
+      target: 'search_profile_card_3d',
+      pageName: 'search_page',
+      params: {'profileUserId': user.id, 'position': position},
+    );
+    showProfileCard3D(
+      context,
+      user: user,
+      onOpenProfile: () => Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ProfilePage(user: user, isEmbedded: false),
+        ),
+      ),
+    );
+  }
+
   Widget _accountTile(UserModel user, int position) {
     final cs = Theme.of(context).colorScheme;
     return ListTile(
+      onLongPress: () => _peekProfile(user, position),
       leading: CircleAvatar(
         backgroundColor: cs.primaryContainer,
         child: Text(

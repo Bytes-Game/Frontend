@@ -49,4 +49,7 @@ class LeagueBadge extends StatelessWidget {
 
   /// Helper to get a single colour (used elsewhere for simple indicators)
   static Color solidColor(String league) => _gradient(league).first;
+
+  /// The league's two colours, for surfaces tinted by it.
+  static List<Color> gradientFor(String league) => _gradient(league);
 }
