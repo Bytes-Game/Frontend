@@ -165,18 +165,17 @@ class _ChatListPageState extends State<ChatListPage>
                     child: Text(
                       'Messages',
                       style: TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.5,
+                        fontSize: 30,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.6,
                       ),
                     ),
                   ),
-                  IconBubble(
-                    icon: Icons.edit_rounded,
+                  IconButton(
+                    icon: const Icon(Icons.edit_square, size: 24),
+                    color: kAccent,
                     tooltip: 'New message',
-                    filled: true,
-                    size: 42,
-                    onTap: _showNewChatPicker,
+                    onPressed: _showNewChatPicker,
                   ),
                 ],
               ),
@@ -214,7 +213,6 @@ class _ChatListPageState extends State<ChatListPage>
                               if (showActive) ...[
                                 const SectionTitle(
                                   title: 'Active now',
-                                  icon: Icons.bolt_rounded,
                                   padding: EdgeInsets.fromLTRB(20, 14, 16, 8),
                                 ),
                                 SizedBox(
@@ -241,7 +239,6 @@ class _ChatListPageState extends State<ChatListPage>
                               ],
                               SectionTitle(
                                 title: _query.isEmpty ? 'Chats' : 'Results',
-                                icon: Icons.chat_bubble_rounded,
                                 padding:
                                     const EdgeInsets.fromLTRB(20, 14, 16, 4),
                               ),
@@ -297,7 +294,6 @@ class _ActivePerson extends StatelessWidget {
             ArenaAvatar(
               name: name,
               size: 58,
-              ring: kBrandColors,
               online: true,
             ),
             const SizedBox(height: 6),
@@ -344,16 +340,13 @@ class _ConversationTile extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-          color: hasUnread
-              ? AppTheme.primary.withValues(alpha: 0.07)
-              : Colors.transparent,
+          color: Colors.transparent,
         ),
         child: Row(
           children: [
             ArenaAvatar(
               name: username,
               size: 54,
-              ring: hasUnread ? kBrandColors : null,
               online: isOnline,
             ),
             const SizedBox(width: 12),
@@ -371,7 +364,7 @@ class _ConversationTile extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 15.5,
                             fontWeight:
-                                hasUnread ? FontWeight.w800 : FontWeight.w600,
+                                hasUnread ? FontWeight.w700 : FontWeight.w600,
                           ),
                         ),
                       ),
@@ -383,7 +376,7 @@ class _ConversationTile extends StatelessWidget {
                             fontWeight:
                                 hasUnread ? FontWeight.w700 : FontWeight.w500,
                             color: hasUnread
-                                ? AppTheme.accentPink
+                                ? kAccent
                                 : cs.onSurface.withValues(alpha: 0.45),
                           ),
                         ),
@@ -414,8 +407,7 @@ class _ConversationTile extends StatelessWidget {
                               horizontal: 7, vertical: 2),
                           constraints: const BoxConstraints(minWidth: 20),
                           decoration: BoxDecoration(
-                            gradient:
-                                const LinearGradient(colors: kBrandColors),
+                            color: kAccent,
                             borderRadius:
                                 BorderRadius.circular(AppTheme.radiusFull),
                           ),
@@ -492,15 +484,9 @@ class _NewChatSheetState extends State<_NewChatSheet> {
         children: [
           const Padding(
             padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
-            child: Row(
-              children: [
-                GradientIcon(Icons.edit_rounded, size: 20),
-                SizedBox(width: 8),
-                Text(
-                  'New message',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-                ),
-              ],
+            child: Text(
+              'New message',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
             ),
           ),
           Padding(
@@ -525,25 +511,25 @@ class _NewChatSheetState extends State<_NewChatSheet> {
                     itemCount: shown.length,
                     itemBuilder: (_, i) {
                       final u = shown[i];
-                      final league = LeagueBadge.gradientFor(u.league);
+                      final league = LeagueBadge.solidColor(u.league);
                       return ListTile(
                         contentPadding:
                             const EdgeInsets.symmetric(horizontal: 20),
-                        leading:
-                            ArenaAvatar(name: u.username, size: 44, ring: league),
+                        leading: ArenaAvatar(name: u.username, size: 44),
                         title: Text(
                           u.username,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
+                          style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                         subtitle: Align(
                           alignment: Alignment.centerLeft,
                           child: InfoChip(
                             label: u.league,
                             icon: Icons.shield_rounded,
-                            color: league.first,
+                            color: league,
                           ),
                         ),
-                        trailing: const GradientIcon(Icons.send_rounded, size: 20),
+                        trailing: Icon(Icons.chevron_right_rounded,
+                            color: quietText(context)),
                         onTap: () => widget.onPick(u),
                       );
                     },

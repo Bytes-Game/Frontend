@@ -20,6 +20,7 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
+import 'package:myapp/widgets/arena_ui.dart';
 
 /// The signed-in user for every test below.
 UserModel _me() => UserModel(
@@ -314,6 +315,25 @@ void main() {
       expect(find.byIcon(Icons.done_all_rounded), findsOneWidget);
       expect(find.text('Sent'), findsNothing);
       expect(find.text('Delivered'), findsNothing);
+    });
+
+    testWidgets('your bubbles are plain blue, theirs plain grey', (
+      tester,
+    ) async {
+      await openThread(tester, messages: thread());
+
+      BoxDecoration bubbleOf(String text) => tester
+          .widget<Container>(find
+              .ancestor(of: find.text(text), matching: find.byType(Container))
+              .first)
+          .decoration! as BoxDecoration;
+
+      final mine = bubbleOf('on my way');
+      expect(mine.color, kAccent);
+      expect(mine.gradient, isNull);
+      final theirs = bubbleOf('hey');
+      expect(theirs.color, isNot(kAccent));
+      expect(theirs.gradient, isNull);
     });
 
     testWidgets('unread own message reads "Sent"', (tester) async {

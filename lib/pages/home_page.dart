@@ -4,7 +4,7 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/pages/notifications_page.dart';
-import 'package:myapp/widgets/arena_ui.dart';
+import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/widgets/smart_reels_feed.dart';
 
 /// Full-screen TikTok-style home: video plays edge-to-edge, top filters
@@ -207,7 +207,7 @@ class _TopTabStripState extends State<_TopTabStrip> {
                   height: 3,
                   width: active ? 22 : 0,
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(colors: kBrandColors),
+                    color: Colors.white,
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -252,7 +252,7 @@ class _TopActionIcons extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(colors: kBrandColors),
+                    color: AppTheme.error,
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(color: Colors.black54, width: 1),
                   ),

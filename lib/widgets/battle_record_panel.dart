@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/models/battle_model.dart';
 import 'package:myapp/widgets/league_badge.dart';
 
@@ -27,42 +28,22 @@ class BattleRecordPanel extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
     final step = LeagueStep.of(record.rating, decided: record.decided);
-    final colors = LeagueBadge.gradientFor(record.league);
-    // The lighter league colour vanishes on a light background (silver on
-    // near-white), so words in the league's colour take the darker one there.
-    final ink = Theme.of(context).brightness == Brightness.light
-        ? colors.last
-        : colors.first;
+    // The league's own colour lives in its emblem; the words stay grey.
+    final ink = cs.onSurface.withValues(alpha: 0.55);
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(22),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            colors.first.withValues(alpha: 0.22),
-            colors.last.withValues(alpha: 0.10),
-            cs.surface.withValues(alpha: 0.4),
-          ],
-        ),
-        border: Border.all(color: colors.first.withValues(alpha: 0.45)),
-        boxShadow: [
-          BoxShadow(
-            color: colors.last.withValues(alpha: 0.12),
-            blurRadius: 18,
-            offset: const Offset(0, 6),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+        color: cs.onSurface.withValues(alpha: 0.05),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              LeagueEmblem(league: record.league, size: 64),
+              LeagueEmblem(league: record.league, size: 56),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -71,8 +52,8 @@ class BattleRecordPanel extends StatelessWidget {
                     Text(
                       record.league.toUpperCase(),
                       style: tt.labelLarge?.copyWith(
-                        letterSpacing: 2.4,
-                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.2,
+                        fontWeight: FontWeight.w600,
                         color: ink,
                       ),
                     ),
@@ -89,7 +70,7 @@ class BattleRecordPanel extends StatelessWidget {
                           CountUp(
                             value: record.rating,
                             style: tt.headlineMedium?.copyWith(
-                              fontWeight: FontWeight.w900,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
                           const SizedBox(width: 6),
@@ -108,15 +89,19 @@ class BattleRecordPanel extends StatelessWidget {
           const SizedBox(height: 14),
           Row(
             children: [
-              _Tally(label: 'Wins', value: record.wins, color: Colors.green),
+              _Tally(label: 'Wins', value: record.wins, color: AppTheme.success),
               const SizedBox(width: 10),
               _Tally(
                 label: 'Losses',
                 value: record.losses,
-                color: Colors.redAccent,
+                color: AppTheme.error,
               ),
               const SizedBox(width: 10),
-              _Tally(label: 'Draws', value: record.draws, color: Colors.grey),
+              _Tally(
+                label: 'Draws',
+                value: record.draws,
+                color: cs.onSurface.withValues(alpha: 0.55),
+              ),
             ],
           ),
           if (record.streak > 1) ...[
@@ -150,12 +135,6 @@ class LeagueEmblem extends StatelessWidget {
           end: Alignment.bottomRight,
           colors: colors,
         ),
-        boxShadow: [
-          BoxShadow(
-            color: colors.last.withValues(alpha: 0.45),
-            blurRadius: size * 0.3,
-          ),
-        ],
       ),
       child: Icon(
         unranked ? Icons.shield_outlined : Icons.shield,
@@ -210,7 +189,6 @@ class _LeagueProgress extends StatelessWidget {
     } else {
       caption = '${step.pointsToNext} points to ${step.next}';
     }
-    final nextColors = LeagueBadge.gradientFor(step.next ?? step.league);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -222,9 +200,9 @@ class _LeagueProgress extends StatelessWidget {
             borderRadius: BorderRadius.circular(8),
             child: LinearProgressIndicator(
               value: v,
-              minHeight: 8,
+              minHeight: 6,
               backgroundColor: cs.onSurface.withValues(alpha: 0.08),
-              valueColor: AlwaysStoppedAnimation(nextColors.first),
+              valueColor: const AlwaysStoppedAnimation(AppTheme.primary),
             ),
           ),
         ),
@@ -264,7 +242,7 @@ class _WinRateRing extends StatelessWidget {
                 value: v,
                 strokeWidth: 6,
                 backgroundColor: cs.onSurface.withValues(alpha: 0.08),
-                valueColor: const AlwaysStoppedAnimation(Colors.green),
+                valueColor: const AlwaysStoppedAnimation(AppTheme.primary),
               ),
             ),
             Column(
@@ -298,15 +276,15 @@ class _Tally extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(14),
+          color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
         ),
         child: Column(
           children: [
             CountUp(
               value: value,
               style: tt.titleLarge?.copyWith(
-                fontWeight: FontWeight.w900,
+                fontWeight: FontWeight.w700,
                 color: color,
               ),
             ),
@@ -336,8 +314,8 @@ class _StreakLine extends StatelessWidget {
     return Row(
       children: [
         Icon(
-          won ? Icons.local_fire_department : Icons.trending_down,
-          color: won ? Colors.deepOrange : Colors.redAccent,
+          won ? Icons.local_fire_department_rounded : Icons.trending_down_rounded,
+          color: won ? AppTheme.warning : AppTheme.error,
           size: 20,
         ),
         const SizedBox(width: 6),

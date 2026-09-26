@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
-import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/video_player_service.dart';
@@ -124,20 +123,22 @@ class _MainShellState extends State<MainShell> {
         data: NavigationBarThemeData(
           backgroundColor: Colors.black,
           surfaceTintColor: Colors.transparent,
-          indicatorColor: AppTheme.primary.withValues(alpha: 0.18),
-          height: 64,
+          // No pill behind the chosen tab: it is simply white, the others
+          // grey, the way an iPhone's tab bar says where you are.
+          indicatorColor: Colors.transparent,
+          height: 60,
           labelTextStyle: WidgetStateProperty.resolveWith((states) {
             final active = states.contains(WidgetState.selected);
             return TextStyle(
-              color: active ? Colors.white : Colors.white60,
-              fontSize: 11,
-              fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+              color: active ? Colors.white : const Color(0xFF8E8E93),
+              fontSize: 10.5,
+              fontWeight: active ? FontWeight.w600 : FontWeight.w500,
             );
           }),
           iconTheme: WidgetStateProperty.resolveWith((states) {
             final active = states.contains(WidgetState.selected);
             return IconThemeData(
-              color: active ? Colors.white : Colors.white70,
+              color: active ? Colors.white : const Color(0xFF8E8E93),
               size: 26,
             );
           }),
@@ -145,17 +146,16 @@ class _MainShellState extends State<MainShell> {
         child: NavigationBar(
           selectedIndex: _currentIndex,
           onDestinationSelected: _onDestination,
-          // The chosen tab's icon fills and takes the brand gradient, so
-          // where you are reads at a glance on the black bar.
+          // The chosen tab's icon fills in; the rest stay outlines.
           destinations: const [
             NavigationDestination(
               icon: Icon(Icons.home_outlined),
-              selectedIcon: GradientIcon(Icons.home_rounded, size: 26),
+              selectedIcon: Icon(Icons.home_rounded),
               label: 'Home',
             ),
             NavigationDestination(
               icon: Icon(Icons.chat_bubble_outline_rounded),
-              selectedIcon: GradientIcon(Icons.chat_bubble_rounded, size: 26),
+              selectedIcon: Icon(Icons.chat_bubble_rounded),
               label: 'Messages',
             ),
             // Center create action. Custom pill so it reads as a primary
@@ -169,12 +169,12 @@ class _MainShellState extends State<MainShell> {
             ),
             NavigationDestination(
               icon: Icon(Icons.search_rounded),
-              selectedIcon: GradientIcon(Icons.search_rounded, size: 26),
+              selectedIcon: Icon(Icons.search_rounded),
               label: 'Search',
             ),
             NavigationDestination(
               icon: Icon(Icons.person_outline_rounded),
-              selectedIcon: GradientIcon(Icons.person_rounded, size: 26),
+              selectedIcon: Icon(Icons.person_rounded),
               label: 'Profile',
             ),
           ],
@@ -184,26 +184,24 @@ class _MainShellState extends State<MainShell> {
   }
 }
 
-/// The "+" in the middle of the bar, filled with the brand gradient and
-/// glowing slightly, so it reads as the one thing to do rather than
-/// another place to go.
+/// The "+" in the middle of the bar: a white key with a black plus, so it
+/// reads as the one thing to do rather than another place to go.
 class _CreatePill extends StatelessWidget {
   const _CreatePill();
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 46,
+      width: 44,
       height: 30,
       decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: kBrandColors),
-        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-        boxShadow: AppTheme.glowPink(intensity: 0.35),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(AppTheme.radiusSm + 1),
       ),
       alignment: Alignment.center,
       child: const Icon(
         Icons.add_rounded,
-        color: Colors.white,
+        color: Colors.black,
         size: 24,
       ),
     );

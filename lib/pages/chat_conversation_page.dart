@@ -9,7 +9,6 @@ import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/widgets/arena_ui.dart';
-import 'package:myapp/widgets/league_badge.dart';
 
 /// One conversation.
 ///
@@ -281,13 +280,10 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                     height: 52,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: AppTheme.primary.withValues(alpha: 0.12),
-                      border: Border.all(
-                        color: AppTheme.primary.withValues(alpha: 0.25),
-                      ),
+                      color: quietFill(ctx),
                     ),
                     alignment: Alignment.center,
-                    child: GradientIcon(icon, size: 22),
+                    child: Icon(icon, size: 22, color: cs.onSurface),
                   ),
                   const SizedBox(height: 6),
                   Text(
@@ -423,15 +419,9 @@ class _ChatConversationPageState extends State<ChatConversationPage>
           children: [
             const Padding(
               padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
-              child: Row(
-                children: [
-                  GradientIcon(Icons.forward_rounded, size: 20),
-                  SizedBox(width: 8),
-                  Text('Forward to',
-                      style: TextStyle(
-                          fontWeight: FontWeight.w800, fontSize: 18)),
-                ],
-              ),
+              child: Text('Forward to',
+                  style:
+                      TextStyle(fontWeight: FontWeight.w700, fontSize: 18)),
             ),
             Expanded(
               child: ListView.builder(
@@ -441,15 +431,11 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                   final u = users[i];
                   return ListTile(
                     contentPadding: const EdgeInsets.symmetric(horizontal: 20),
-                    leading: ArenaAvatar(
-                      name: u.username,
-                      size: 42,
-                      ring: LeagueBadge.gradientFor(u.league),
-                    ),
+                    leading: ArenaAvatar(name: u.username, size: 42),
                     title: Text(u.username,
-                        style: const TextStyle(fontWeight: FontWeight.w700)),
-                    trailing:
-                        const GradientIcon(Icons.send_rounded, size: 20),
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    trailing: const Icon(Icons.send_rounded,
+                        size: 20, color: kAccent),
                     onTap: () async {
                       Navigator.pop(ctx);
                       await ApiService.forwardChatMessage(
@@ -514,7 +500,6 @@ class _ChatConversationPageState extends State<ChatConversationPage>
             ArenaAvatar(
               name: widget.otherUsername,
               size: 40,
-              ring: _otherOnline ? kBrandColors : null,
               online: _otherOnline,
             ),
             const SizedBox(width: 10),
@@ -704,7 +689,7 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                                 key: const ValueKey('send'),
                                 icon: _editingMsgId != null
                                     ? Icons.check_rounded
-                                    : Icons.send_rounded,
+                                    : Icons.arrow_upward_rounded,
                                 tooltip:
                                     _editingMsgId != null ? 'Save' : 'Send',
                                 filled: true,
@@ -754,7 +739,7 @@ class _EmptyThread extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ArenaAvatar(name: name, size: 88, ring: kBrandColors),
+            ArenaAvatar(name: name, size: 88),
             const SizedBox(height: 14),
             Text(
               name,
@@ -780,15 +765,12 @@ class _EmptyThread extends StatelessWidget {
                       decoration: BoxDecoration(
                         borderRadius:
                             BorderRadius.circular(AppTheme.radiusFull),
-                        color: AppTheme.primary.withValues(alpha: 0.10),
-                        border: Border.all(
-                          color: AppTheme.primary.withValues(alpha: 0.30),
-                        ),
+                        color: quietFill(context),
                       ),
                       child: Text(
                         o,
                         style: const TextStyle(
-                            fontSize: 13.5, fontWeight: FontWeight.w600),
+                            fontSize: 14, fontWeight: FontWeight.w500),
                       ),
                     ),
                   ),
@@ -833,15 +815,11 @@ class _ComposerBanner extends StatelessWidget {
             height: body == null ? 20 : 34,
             margin: const EdgeInsets.only(left: 8, right: 10),
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: kBrandColors,
-              ),
+              color: kAccent,
               borderRadius: BorderRadius.circular(2),
             ),
           ),
-          GradientIcon(icon, size: 18),
+          Icon(icon, size: 18, color: kAccent),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
@@ -1016,10 +994,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
       bottomRight: isMe && widget.groupedWithNext ? rs : r,
     );
 
-    final incoming = dark
-        ? Color.alphaBlend(
-            Colors.white.withValues(alpha: 0.08), AppTheme.bgDark)
-        : const Color(0xFFF0EEF7);
+    // Apple's Messages greys for the other person's bubbles.
+    final incoming = dark ? const Color(0xFF26252A) : const Color(0xFFE9E9EB);
 
     final bubble = Container(
       constraints: BoxConstraints(
@@ -1032,24 +1008,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
               border: Border.all(color: cs.onSurface.withValues(alpha: 0.3)),
             )
           : BoxDecoration(
-              gradient: isMe
-                  ? const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: kBrandColors,
-                    )
-                  : null,
-              color: isMe ? null : incoming,
+              color: isMe ? kAccent : incoming,
               borderRadius: radius,
-              boxShadow: isMe
-                  ? [
-                      BoxShadow(
-                        color: AppTheme.primary.withValues(alpha: 0.22),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ]
-                  : null,
             ),
       child: Text(
         message['message'] ?? '',
@@ -1086,9 +1046,13 @@ class _MessageBubbleState extends State<_MessageBubble> {
           height: 30,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: AppTheme.primary.withValues(alpha: _armed ? 0.9 : 0.25),
+            color: _armed ? kAccent : quietFill(context),
           ),
-          child: const Icon(Icons.reply_rounded, size: 18, color: Colors.white),
+          child: Icon(
+            Icons.reply_rounded,
+            size: 18,
+            color: _armed ? Colors.white : cs.onSurface,
+          ),
         ),
       ),
     );
@@ -1206,7 +1170,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
                     _statusIcon(),
                     size: 14,
                     color: message['isRead'] == true
-                        ? AppTheme.accentCyan
+                        ? kAccent
                         : cs.onSurface.withValues(alpha: 0.45),
                   ),
                   const SizedBox(width: 3),
