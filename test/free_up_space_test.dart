@@ -6,6 +6,7 @@
 // rather than the far end. Delete any one of those calls and something in
 // this file goes red.
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -283,6 +284,77 @@ void main() {
       await LeftoverFiles.instance.clear();
       expect(trimmed.existsSync(), isFalse);
       expect(uploadCopy.existsSync(), isFalse);
+    });
+  });
+
+  // ── Cleaning up by itself at start ──────────────────────────────────
+
+  group('the cleanup when the app starts', () {
+    final lastRun = DateTime.now().subtract(const Duration(days: 1));
+    late File recording;
+    late File waiting;
+
+    setUp(() {
+      recording = put(tempDir, 'devf_record_1.mp4', 100)
+        ..setLastModifiedSync(lastRun);
+      waiting = put(tempDir, 'devf_trim_1.mp4', 200)
+        ..setLastModifiedSync(lastRun);
+    });
+
+    test('waits for unsent posts to come back before deleting', () async {
+      final restore = Completer<void>();
+      final cleanup = LeftoverFiles.instance.clearAtStartup(restore.future);
+
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(
+        recording.existsSync(),
+        isTrue,
+        reason: 'nothing may go before the unsent posts are known',
+      );
+
+      // The restore brings back a post that failed last time.
+      UploadJobManager.instance.activeJobs.value = [
+        UploadJob.debug(sourcePath: waiting.path, stage: UploadJobStage.failed),
+      ];
+      restore.complete();
+
+      expect(await cleanup, 100);
+      expect(recording.existsSync(), isFalse);
+      expect(
+        waiting.existsSync(),
+        isTrue,
+        reason: 'its "tap to retry" still needs this video',
+      );
+    });
+
+    test('a recording made after the app opened is left alone', () async {
+      final fresh = put(tempDir, 'devf_record_2.mp4', 300)
+        ..setLastModifiedSync(DateTime.now().add(const Duration(seconds: 5)));
+      await LeftoverFiles.instance.clearAtStartup(Future<void>.value());
+      expect(recording.existsSync(), isFalse);
+      expect(fresh.existsSync(), isTrue);
+    });
+
+    test('if unsent posts cannot be read back, nothing is deleted', () async {
+      final freed = await LeftoverFiles.instance.clearAtStartup(
+        Future<void>.error(StateError('corrupt')),
+      );
+      expect(freed, 0);
+      expect(recording.existsSync() && waiting.existsSync(), isTrue);
+    });
+
+    test('the app runs it on start, fed by the restore', () {
+      final code = File('lib/main.dart')
+          .readAsLinesSync()
+          .where((l) => !l.trimLeft().startsWith('//'))
+          .join('\n');
+      expect(
+        RegExp(
+          r'LeftoverFiles\.instance\s*\.clearAtStartup\(\s*'
+          r'UploadJobManager\.instance\.restorePersisted\(\)\s*,?\s*\)',
+        ).hasMatch(code),
+        isTrue,
+      );
     });
   });
 

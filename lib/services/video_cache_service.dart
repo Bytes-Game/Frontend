@@ -55,12 +55,19 @@ import 'package:myapp/services/reel_diagnostics.dart';
 class VideoCacheService {
   VideoCacheService._() {
     ReelDiagnostics.instance.setPipelineProbe(_pipelineSnapshot);
+    // Saved videos grow while they play, which finishes no download, so the
+    // size limit has to be checked from the proxy's side too.
+    LocalMediaServer.instance.onHeadGrown = () => unawaited(_enforceSizeCap());
   }
   static final VideoCacheService instance = VideoCacheService._();
 
   /// Total bytes of cached video we keep on disk before evicting the
   /// least-recently-used entries. Reels are short; this holds a few
   /// hundred of them and is trivial next to a photo library.
+  ///
+  /// It covers everything in the folder: whole videos, and the saved
+  /// openings the proxy serves from, which grow as a video is watched.
+  /// See [_enforceSizeCap].
   static const int maxCacheBytes = 300 * 1024 * 1024;
 
   /// Refuse to download a WHOLE file larger than this. A reel is seconds
@@ -408,6 +415,11 @@ class VideoCacheService {
   /// URLs whose opening slice is cached and registered with the proxy.
   final Set<String> _prefixed = <String>{};
 
+  /// The reels most recently asked to be warmed: the next few, and the
+  /// one or two behind. The size sweep never deletes their saved copies —
+  /// they are where the viewer is about to be.
+  Set<String> _window = const <String>{};
+
   /// Every distinct URL [warm] has ever been asked for. This is the
   /// denominator `downloads` was missing: if the feed only ever offered
   /// fifteen URLs, a download count that stops climbing is warming having
@@ -459,9 +471,9 @@ class VideoCacheService {
       //
       // `.prefix` and `.tail` files are fragments that are only ever
       // useful via an in-memory proxy registration, and that registration
-      // does not survive a restart. Since both are exempt from LRU
-      // eviction, nothing else would ever reclaim them, so they would
-      // accumulate across every launch of the app.
+      // does not survive a restart. Nothing can play from them after that,
+      // so they are dead weight from the moment the app starts, and the
+      // size sweep would only get round to them once the cache was full.
       for (final f in dir.listSync()) {
         if (f is File &&
             (f.path.endsWith('.part') ||
@@ -693,6 +705,7 @@ class VideoCacheService {
     }
     final wanted = urls.where((u) => u.isNotEmpty).toList();
     final wantedSet = wanted.toSet();
+    _window = wantedSet;
     // Diagnostics only, and it grows with every reel the session sees, so
     // release builds — which never print the summary — don't carry it.
     if (!kReleaseMode) _seen.addAll(wanted);
@@ -1492,48 +1505,136 @@ class VideoCacheService {
     if (done != null && !done.isCompleted) done.complete();
   }
 
-  /// Evict least-recently-used files until the cache fits in
+  /// Delete the least recently used saved videos until the cache fits in
   /// [maxCacheBytes].
+  ///
+  /// THE LIMIT USED TO LEAVE OUT MOST OF WHAT IT WAS LIMITING
+  ///
+  /// The saved openings the proxy serves from (`.prefix`, `.tail`) were
+  /// never deleted here, on the grounds that they were "bounded and tiny":
+  /// three-quarters of a megabyte each, a handful at a time. That stopped
+  /// being true when the proxy started keeping every byte it streams, so
+  /// an opening now grows into the whole video once it is watched. In a
+  /// session of eighty reels they were most of the folder, and the only
+  /// part the limit could not touch. They were wiped at the next launch and
+  /// nowhere before.
+  ///
+  /// Now a video's saved copy is one thing to delete, like a whole file,
+  /// and the oldest go first. "Oldest" means least recently played or
+  /// saved to — the proxy's [LocalMediaServer.lastServed], not just the
+  /// file's age, because a reel looping on screen adds nothing to its file
+  /// after the first pass and would otherwise look abandoned while it is
+  /// being watched.
+  ///
+  /// Never deleted:
+  ///   * a download still being written;
+  ///   * a video the player is reading right now;
+  ///   * the videos in the current warm window, which is where the viewer
+  ///     is about to be.
+  ///
+  /// Deleting one that a player still holds is safe: the proxy keeps its
+  /// address, finds the file gone, and streams from the internet (see
+  /// [clear] for the same rule). It only costs data, which is why the
+  /// three above are kept.
   Future<void> _enforceSizeCap() async {
+    // It now also runs from the proxy while a video plays, so a surprise
+    // here must be a log line, not an error thrown into playback.
+    try {
+      _sweep();
+    } catch (e) {
+      ReelDiagnostics.instance.log('cache sweep failed: $e');
+    }
+  }
+
+  void _sweep() {
     final dir = _dir;
     if (dir == null) return;
+    final List<File> all;
     try {
-      final all = dir.listSync().whereType<File>().toList();
-      var total = 0;
-      for (final f in all) {
-        total += f.statSync().size;
+      all = dir.listSync().whereType<File>().toList();
+    } on FileSystemException catch (e) {
+      ReelDiagnostics.instance.log('cache sweep could not list the folder: $e');
+      return;
+    }
+    int sizeOf(File f) {
+      final n = f.statSync().size;
+      return n < 0 ? 0 : n; // gone since the listing
+    }
+
+    var total = 0;
+    for (final f in all) {
+      total += sizeOf(f);
+    }
+    if (total <= maxCacheBytes) return;
+
+    // Which reel each saved opening belongs to. Its file name is a hash of
+    // the URL, so it has to be looked up from the URLs we know.
+    final server = LocalMediaServer.instance;
+    final urlByPath = <String, String>{};
+    for (final url in {..._prefixed, ..._active.keys, ..._window}) {
+      final base = _fileFor(url);
+      urlByPath['$base.prefix'] = url;
+      urlByPath['$base.tail'] = url;
+    }
+    bool keep(String? url) =>
+        url != null &&
+        (_active.containsKey(url) ||
+            _window.contains(url) ||
+            server.isServing(url));
+
+    // One entry per thing that gets deleted together: a whole file, or a
+    // reel's opening plus its end slice.
+    final units = <String, _Evictable>{};
+    for (final f in all) {
+      final path = f.path;
+      if (path.endsWith('.part')) continue; // a download mid-write
+      final fragment = path.endsWith('.prefix') || path.endsWith('.tail');
+      if (!fragment) {
+        units[path] = _Evictable(url: null, lastUsed: f.statSync().accessed)
+          ..files.add(f);
+        continue;
       }
-      if (total <= maxCacheBytes) return;
+      final url = urlByPath[path];
+      if (keep(url)) continue;
+      var used = f.statSync().modified;
+      final served = url == null ? null : server.lastServed(url);
+      if (served != null && served.isAfter(used)) used = served;
+      final unit =
+          units.putIfAbsent(url ?? path, () => _Evictable(url: url, lastUsed: used));
+      if (used.isAfter(unit.lastUsed)) unit.lastUsed = used;
+      unit.files.add(f);
+    }
 
-      // In-flight downloads and registered fragments are not eviction
-      // candidates. Fragments especially: a player that is mid-reel holds
-      // a loopback URL pointing at them, and deleting one underneath
-      // forces that reel back to a cold origin fetch at the worst
-      // possible moment. They are also bounded and tiny — prefetchDepth *
-      // (768 + 256) KB is single-digit megabytes against a 300 MB cap —
-      // so exempting them costs nothing worth reclaiming. Their bytes
-      // still count toward [total] above, so the cap stays honest about
-      // real disk use.
-      final files = all
-          .where((f) =>
-              !f.path.endsWith('.part') &&
-              !f.path.endsWith('.prefix') &&
-              !f.path.endsWith('.tail'))
-          .toList();
-
-      files.sort((a, b) =>
-          a.statSync().accessed.compareTo(b.statSync().accessed));
-      for (final f in files) {
-        if (total <= maxCacheBytes) break;
-        final size = f.statSync().size;
+    final order = units.values.toList()
+      ..sort((a, b) => a.lastUsed.compareTo(b.lastUsed));
+    var stuck = 0;
+    var evicted = 0;
+    for (final u in order) {
+      if (total <= maxCacheBytes) break;
+      for (final f in u.files) {
+        final size = sizeOf(f);
         try {
           f.deleteSync();
           total -= size;
-          _ready.removeWhere((u) => _fileFor(u) == f.path);
-        } catch (_) {}
+        } on FileSystemException {
+          stuck++;
+        }
       }
-    } catch (e) {
-      if (kDebugMode) debugPrint('video cache sweep failed: $e');
+      evicted++;
+      final url = u.url;
+      if (url != null) {
+        // Forgotten here so the next warm saves it again and isReady stops
+        // claiming it starts instantly. The proxy keeps the address.
+        _prefixed.remove(url);
+      } else {
+        _ready.removeWhere((r) => _fileFor(r) == u.files.first.path);
+      }
+    }
+    if (stuck > 0 || total > maxCacheBytes) {
+      ReelDiagnostics.instance.log('cache sweep: removed $evicted, '
+          '${(total / (1024 * 1024)).toStringAsFixed(0)} MB left'
+          '${stuck > 0 ? ", $stuck files would not delete" : ""}'
+          '${total > maxCacheBytes ? " — still over the limit, the rest is in use" : ""}');
     }
   }
 
@@ -1638,6 +1739,10 @@ class VideoCacheService {
   @visibleForTesting
   void debugSetDirectory(Directory dir) => _dir = dir;
 
+  /// Where [url]'s saved files live, minus the `.prefix` / `.tail` ending.
+  @visibleForTesting
+  String debugFileFor(String url) => _fileFor(url);
+
   @visibleForTesting
   Set<String> get debugReady => _ready;
 
@@ -1649,6 +1754,17 @@ class VideoCacheService {
 
   @visibleForTesting
   String get debugPipeline => _pipelineSnapshot();
+}
+
+/// Files the size sweep deletes together, and when they were last used.
+class _Evictable {
+  _Evictable({required this.url, required this.lastUsed});
+
+  /// The reel a saved opening belongs to, or null for a whole file (and
+  /// for an opening whose reel is no longer known).
+  final String? url;
+  DateTime lastUsed;
+  final List<File> files = [];
 }
 
 class _Download {
