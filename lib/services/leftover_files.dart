@@ -72,12 +72,43 @@ class LeftoverFiles {
     return LeftoverScan(bytes: bytes, keptBytes: kept);
   }
 
+  /// Clear leftovers once, as the app starts. Returns the bytes freed.
+  ///
+  /// Without this they piled up until someone found the button: every post
+  /// leaves its copies behind, and the phone only empties this folder when
+  /// it is nearly full.
+  ///
+  /// [restored] is the upload list coming back from the last run. It is
+  /// waited for first, because until it lands a post waiting for "tap to
+  /// retry" is not on the list, and its video would look like a leftover.
+  /// If it fails, nothing is deleted: not knowing is a reason to keep.
+  ///
+  /// Only files from before this launch are touched. Somebody who opens
+  /// the app and records straight away must not lose that recording to a
+  /// cleanup that happened to run a moment later.
+  Future<int> clearAtStartup(Future<void> restored) async {
+    final launchedAt = DateTime.now();
+    try {
+      await restored;
+    } catch (e) {
+      debugPrint(
+        'Free up space: skipped the startup cleanup, the unsent '
+        'posts could not be read back: $e',
+      );
+      return 0;
+    }
+    return clear(olderThan: launchedAt);
+  }
+
   /// Delete every leftover that nothing still needs. Returns the bytes freed.
-  Future<int> clear() async {
+  ///
+  /// With [olderThan], only leftovers last changed before then.
+  Future<int> clear({DateTime? olderThan}) async {
     var freed = 0;
     var stuck = 0;
     for (final u in await _units()) {
       if (u.keep) continue;
+      if (olderThan != null && !_changedBefore(u.entity, olderThan)) continue;
       final size = _sizeOf(u.entity);
       try {
         u.entity.deleteSync(recursive: true);
@@ -140,6 +171,14 @@ class LeftoverFiles {
       units.add(_Unit(e, keep: keep));
     }
     return units;
+  }
+
+  static bool _changedBefore(FileSystemEntity e, DateTime when) {
+    try {
+      return e.statSync().modified.isBefore(when);
+    } on FileSystemException {
+      return false; // cannot tell, so keep it
+    }
   }
 
   static int _sizeOf(FileSystemEntity e) {

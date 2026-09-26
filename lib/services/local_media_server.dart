@@ -68,6 +68,27 @@ class LocalMediaServer {
   /// spare.
   static const int readAheadBytes = 4 * 1024 * 1024;
 
+  /// The most of any one video that is kept on the phone while it plays.
+  ///
+  /// Everything watched is saved as it streams (see "KEEP WHAT WE ARE
+  /// ALREADY PAYING FOR" in [_handle]), and without a ceiling one long,
+  /// high-bitrate video could fill the whole cache by itself. A quarter of
+  /// the cache's 300 MB leaves room for the video on screen, the one behind
+  /// it and the next few to all be this size at once.
+  ///
+  /// It is not small. A reel is at most three minutes, and three minutes of
+  /// our 720p rung (2.5 Mbps) is about 56 MB, so every reel we encode at
+  /// that size is kept whole. Past the limit the start stays saved and the
+  /// rest streams, which is what every video did before saving existed.
+  static const int maxHeadBytes = 75 * 1024 * 1024;
+
+  /// Called after a video's saved copy has grown, so the cache can check it
+  /// is still inside its limit. The cache sets this; see
+  /// VideoCacheService's constructor. Growing happens during playback, when
+  /// no download finishes, so without this the limit would only be checked
+  /// on the next swipe that happened to start one.
+  void Function()? onHeadGrown;
+
   HttpServer? _server;
   final Map<String, _Entry> _byId = {};
   final Map<String, String> _idByOrigin = {};
@@ -170,6 +191,19 @@ class LocalMediaServer {
     return 'http://127.0.0.1:${_server!.port}/m/$id';
   }
 
+  /// When the player last asked for [originUrl], or null if it never has.
+  ///
+  /// The cache deletes the least recently used saved videos first, and a
+  /// video that loops on screen adds nothing to its file after the first
+  /// pass — so the file's own age says it is old while it is the one being
+  /// watched. This is the answer that does not go stale.
+  DateTime? lastServed(String originUrl) =>
+      _byId[_idByOrigin[originUrl]]?.lastServed;
+
+  /// Whether the player is reading [originUrl] from us right now.
+  bool isServing(String originUrl) =>
+      (_byId[_idByOrigin[originUrl]]?.open ?? 0) > 0;
+
   void _noteFailure(String why) {
     _failures++;
     ReelDiagnostics.instance.log('proxy failure $_failures/$maxFailuresBeforeDemote: $why');
@@ -191,6 +225,7 @@ class LocalMediaServer {
     // response we opened but never got around to reading.
     Future<http.StreamedResponse>? tail;
     var tailConsumed = false;
+    _Entry? serving;
     try {
       final segments = req.uri.pathSegments;
       final entry =
@@ -200,6 +235,9 @@ class LocalMediaServer {
         await res.close();
         return;
       }
+      serving = entry
+        ..open += 1
+        ..lastServed = DateTime.now();
 
       final total = entry.totalLength;
       final rangeHeader = req.headers.value(HttpHeaders.rangeHeader);
@@ -391,7 +429,10 @@ class LocalMediaServer {
         // trusts its length over any recorded number. A short write costs
         // a cache hit, never correctness.
         RandomAccessFile? grow;
-        if (prefixFile != null && !entry.growing) {
+        // Room left under [maxHeadBytes]. Past it the file stops growing and
+        // the rest of the video simply streams.
+        final room = maxHeadBytes - originStart;
+        if (prefixFile != null && !entry.growing && room > 0) {
           try {
             final f = await File(entry.prefixPath).open(mode: FileMode.append);
             // Asked of the FILE, not worked out from the numbers above.
@@ -412,7 +453,8 @@ class LocalMediaServer {
           }
         }
         try {
-          await _pipeReadAhead(origin.stream, res, alsoTo: grow);
+          await _pipeReadAhead(origin.stream, res,
+              alsoTo: grow, copyLimit: room);
         } finally {
           _backfills--;
           if (grow != null) {
@@ -423,6 +465,7 @@ class LocalMediaServer {
             try {
               await grow.close();
             } catch (_) {}
+            onHeadGrown?.call();
           }
         }
       }
@@ -459,6 +502,11 @@ class LocalMediaServer {
       try {
         await res.close();
       } catch (_) {}
+    } finally {
+      if (serving != null) {
+        serving.open -= 1;
+        serving.lastServed = DateTime.now();
+      }
     }
   }
 
@@ -503,11 +551,16 @@ class LocalMediaServer {
     Stream<List<int>> source,
     IOSink out, {
     RandomAccessFile? alsoTo,
+    int copyLimit = maxHeadBytes,
   }) {
     // Local, because it is turned off on the first write failure and the
     // closure below needs a variable it can promote to non-null after an
     // await. A parameter cannot be promoted that way.
     var copyTo = alsoTo;
+    // Bytes still allowed into [copyTo]. When it runs out the copy stops
+    // mid-chunk if need be: the bytes written are still the front of the
+    // video with no gap, so the file stays a valid, shorter prefix.
+    var copyLeft = copyLimit;
     final done = Completer<void>();
     final queue = Queue<List<int>>();
     var queued = 0;
@@ -544,7 +597,14 @@ class LocalMediaServer {
           final copy = copyTo;
           if (copy != null) {
             try {
-              await copy.writeFrom(chunk);
+              if (chunk.length < copyLeft) {
+                await copy.writeFrom(chunk);
+                copyLeft -= chunk.length;
+              } else {
+                await copy.writeFrom(chunk, 0, copyLeft);
+                copyLeft = 0;
+                copyTo = null;
+              }
             } catch (_) {
               // Out of space, or the file went away under us. Stop copying
               // and keep playing: what is already written is still a valid,
@@ -653,6 +713,13 @@ class LocalMediaServer {
   Future<void> debugPipeReadAhead(Stream<List<int>> source, IOSink out) =>
       _pipeReadAhead(source, out);
 
+  /// The copy-while-playing on its own, with a small limit, so a test can
+  /// watch it stop without streaming 75 MB.
+  @visibleForTesting
+  Future<void> debugPipeWithCopy(Stream<List<int>> source, IOSink out,
+          RandomAccessFile copyTo, int copyLimit) =>
+      _pipeReadAhead(source, out, alsoTo: copyTo, copyLimit: copyLimit);
+
   @visibleForTesting
   void debugReset() {
     _failures = 0;
@@ -688,6 +755,12 @@ class _Entry {
   /// anything. One at a time; the other simply does not grow it, which costs
   /// nothing but a later cache hit.
   bool growing = false;
+
+  /// Requests the player has open against this video right now.
+  int open = 0;
+
+  /// When the player last asked for this video (start or end of a request).
+  DateTime? lastServed;
 }
 
 class _Range {

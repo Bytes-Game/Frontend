@@ -14,6 +14,7 @@ import 'package:myapp/providers/theme_provider.dart';
 import 'package:myapp/services/connection_prewarm_service.dart';
 import 'package:myapp/services/device_capabilities.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/leftover_files.dart';
 import 'package:myapp/services/link_speed_store.dart';
 import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/services/video_cache_service.dart';
@@ -171,8 +172,12 @@ Future<void> main() async {
   // and runApp runs directly — no overhead, no console spam.
   // Restore any upload jobs interrupted by an app kill — they surface
   // as tappable-retry entries in the status overlay. Fire-and-forget.
+  // Then delete the copies recording and posting left behind last time,
+  // keeping anything one of those restored posts still needs. It waits for
+  // the restore on its own; see LeftoverFiles.clearAtStartup.
   // ignore: discarded_futures
-  UploadJobManager.instance.restorePersisted();
+  LeftoverFiles.instance
+      .clearAtStartup(UploadJobManager.instance.restorePersisted());
 
   if (_sentryDsn.isEmpty) {
     runApp(const MyApp());
