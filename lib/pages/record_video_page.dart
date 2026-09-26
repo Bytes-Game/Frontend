@@ -9,6 +9,23 @@ import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/video_processor_service.dart';
 
+/// Copy the camera's recording to [dest], then delete the camera's file.
+///
+/// Once copied, the camera's file is a second full copy of the recording
+/// that nothing will ever read again, and it used to be left behind on
+/// every single recording. It is only deleted after the copy has landed,
+/// so a failed copy loses nothing.
+@visibleForTesting
+Future<void> adoptCameraRecording(String cameraPath, String dest) async {
+  await File(cameraPath).copy(dest);
+  try {
+    await File(cameraPath).delete();
+  } on FileSystemException catch (e) {
+    debugPrint("Could not delete the camera's copy of the recording "
+        '($cameraPath): $e. "Free up space" or the phone will clear it.');
+  }
+}
+
 /// Full-screen camera with record button. Returns the recorded video's
 /// local file path on Navigator.pop, or null on cancel.
 ///
@@ -170,7 +187,7 @@ class _RecordVideoPageState extends State<RecordVideoPage>
       final dest = File(
         '${tmp.path}/devf_record_${DateTime.now().millisecondsSinceEpoch}.mp4',
       );
-      await File(file.path).copy(dest.path);
+      await adoptCameraRecording(file.path, dest.path);
       EventTracker.instance.track(
         eventType: 'record_stop',
         contentId: 'pending',

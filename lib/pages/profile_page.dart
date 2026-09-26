@@ -10,6 +10,7 @@ import 'package:myapp/pages/create_challenge_page.dart';
 import 'package:myapp/pages/edit_profile_page.dart';
 import 'package:myapp/pages/followers_page.dart';
 import 'package:myapp/pages/following_page.dart';
+import 'package:myapp/pages/free_up_space_page.dart';
 import 'package:myapp/pages/liked_videos_page.dart';
 import 'package:myapp/pages/notification_settings_page.dart';
 import 'package:myapp/pages/preferences_pages.dart';
@@ -364,6 +365,12 @@ class _ProfilePageState extends State<ProfilePage>
           Navigator.pop(ctx);
           Navigator.of(context).push(
             MaterialPageRoute(builder: (_) => const LanguagePage()),
+          );
+        },
+        onFreeUpSpace: () {
+          Navigator.pop(ctx);
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const FreeUpSpacePage()),
           );
         },
         onTwoFactor: () {
@@ -1448,6 +1455,7 @@ class _SettingsSheet extends StatelessWidget {
   final VoidCallback onPrivacy;
   final VoidCallback onAppearance;
   final VoidCallback onLanguage;
+  final VoidCallback onFreeUpSpace;
   final VoidCallback onTwoFactor;
   final VoidCallback onHelp;
   final VoidCallback onReportBug;
@@ -1469,6 +1477,7 @@ class _SettingsSheet extends StatelessWidget {
     required this.onPrivacy,
     required this.onAppearance,
     required this.onLanguage,
+    required this.onFreeUpSpace,
     required this.onTwoFactor,
     required this.onHelp,
     required this.onReportBug,
@@ -1574,6 +1583,12 @@ class _SettingsSheet extends StatelessWidget {
                     'Language',
                     'English (default)',
                     onLanguage,
+                  ),
+                  _row(
+                    Icons.cleaning_services_outlined,
+                    'Free up space',
+                    'Clear saved videos and leftover recordings',
+                    onFreeUpSpace,
                   ),
 
                   _section('Account & security', cs),

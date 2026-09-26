@@ -169,6 +169,27 @@ class UploadJobManager {
     return job;
   }
 
+  /// The videos that posts on this phone still need.
+  ///
+  /// Asked by "Free up space" before it deletes leftovers. A post that
+  /// failed and is waiting for a retry still needs the video it was made
+  /// from; delete it and "tap to retry" quietly becomes "record it again".
+  /// A finished post needs nothing, so its video is fair game.
+  Set<String> get filesStillNeeded => {
+        for (final j in activeJobs.value)
+          if (j.state.value.stage != UploadJobStage.done) j.sourcePath,
+      };
+
+  /// Whether a post is being prepared or sent right now.
+  ///
+  /// While one is, its working copies sit in a folder of their own that is
+  /// not named after the job, so there is no telling which folder is whose.
+  /// "Free up space" leaves all of them alone until nothing is running.
+  bool get anyRunning => activeJobs.value.any((j) => switch (j.state.value.stage) {
+        UploadJobStage.done || UploadJobStage.failed => false,
+        _ => true,
+      });
+
   /// Remove a terminal job from [activeJobs]. Safe to call on
   /// non-terminal jobs (no-op) so UI code can dismiss without checking.
   void dismiss(String jobId) {
@@ -930,6 +951,23 @@ class UploadJob {
     required this.title,
     this.challengeId,
   });
+
+  /// A job that runs nothing, sitting at [stage], for tests of code that
+  /// reads the job list — "Free up space" asks it which files to keep.
+  @visibleForTesting
+  factory UploadJob.debug({
+    required String sourcePath,
+    required UploadJobStage stage,
+  }) {
+    final job = UploadJob._(
+      id: 'debug_${sourcePath.hashCode}_${stage.name}',
+      kind: UploadJobKind.challenge,
+      sourcePath: sourcePath,
+      title: '',
+    );
+    job.state.value = UploadJobState(stage: stage);
+    return job;
+  }
 
   void _update(UploadJobState Function(UploadJobState) f) {
     state.value = f(state.value);

@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/session_store.dart';
+import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/providers/theme_provider.dart';
 
@@ -197,6 +200,11 @@ class AuthProvider with ChangeNotifier {
     ApiService.clearAuth();
     // ignore: discarded_futures
     SessionStore.clear();
+    // Empty the saved videos too. They are in the app's private folder, so
+    // nobody can open them, but the next person to sign in on this phone
+    // should start with the app's space back, not with what the last
+    // person watched.
+    unawaited(VideoCacheService.instance.clear());
     _isAuthenticated = false;
     _needsOnboarding = false;
     notifyListeners();
