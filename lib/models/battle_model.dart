@@ -266,3 +266,54 @@ class ActionResult {
   final String message;
   const ActionResult(this.ok, [this.message = '']);
 }
+
+/// Where a rating sits on the league ladder.
+///
+/// The thresholds are the server's (leagueFor in battles.go): a league is
+/// earned by rating, and nobody has one until a battle of theirs is decided.
+/// They are repeated here only to draw progress towards the next league; the
+/// league itself always comes from the server.
+class LeagueStep {
+  final String league;
+
+  /// The next league up, or null at the top.
+  final String? next;
+
+  /// How far from this league's floor to the next one's, 0..1. Always 1 at
+  /// the top.
+  final double progress;
+
+  /// Rating points still needed for the next league. Zero at the top.
+  final int pointsToNext;
+
+  const LeagueStep(this.league, this.next, this.progress, this.pointsToNext);
+
+  static const _floors = <(String, int)>[
+    ('Bronze', 0),
+    ('Silver', 1050),
+    ('Gold', 1150),
+    ('Platinum', 1300),
+    ('Diamond', 1500),
+  ];
+
+  /// Bronze's progress is drawn from this rating, not from zero, so a new
+  /// player's bar means something.
+  static const _bronzeFloor = 900;
+
+  factory LeagueStep.of(int rating, {required int decided}) {
+    if (decided == 0) {
+      return const LeagueStep('Unranked', 'Bronze', 0, 0);
+    }
+    var i = 0;
+    for (var k = 0; k < _floors.length; k++) {
+      if (rating >= _floors[k].$2) i = k;
+    }
+    if (i == _floors.length - 1) {
+      return LeagueStep(_floors[i].$1, null, 1, 0);
+    }
+    final floor = i == 0 ? _bronzeFloor : _floors[i].$2;
+    final ceiling = _floors[i + 1].$2;
+    final p = ((rating - floor) / (ceiling - floor)).clamp(0.0, 1.0);
+    return LeagueStep(_floors[i].$1, _floors[i + 1].$1, p, ceiling - rating);
+  }
+}

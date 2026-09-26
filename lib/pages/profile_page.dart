@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/models/battle_model.dart';
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/blocked_users_page.dart';
+import 'package:myapp/pages/challenge_detail_page.dart';
 import 'package:myapp/pages/chat_conversation_page.dart';
 import 'package:myapp/pages/create_challenge_page.dart';
 import 'package:myapp/pages/edit_profile_page.dart';
@@ -22,23 +24,27 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
-import 'package:myapp/widgets/league_badge.dart';
+import 'package:myapp/widgets/battle_record_panel.dart';
+import 'package:myapp/widgets/battles_tab.dart';
+import 'package:myapp/widgets/profile_arena_header.dart';
+import 'package:myapp/widgets/scroll_reveal.dart';
 import 'package:myapp/widgets/shimmer_loading.dart';
 import 'package:myapp/widgets/smart_reels_feed.dart';
 
-/// Polished, TikTok/Instagram-style profile surface.
+/// A profile built around the person's battles.
 ///
-/// Layout: a NestedScrollView whose `headerSliverBuilder` paints the
-/// hero header (avatar + stats + bio + action row), then a pinned
-/// TabBar with three tabs: Posts · Liked · Saved. Each tab body is its
-/// own grid (or empty state). The tab strip stays glued to the top as
-/// the user scrolls — matches what Instagram does so the swipe gesture
-/// is always discoverable.
-///
-/// Why the "Liked" tab exists even though the endpoint isn't ready:
-/// shipping the empty-state surface now means the discovery affordance
-/// is in place the moment the backend lands; we don't have to ship a
-/// follow-up UI patch coordinated with backend deploy.
+/// From the top, and moved by the scroll rather than by timers:
+///   - an arena in their league's colours; the avatar shrinks into the top
+///     bar as the page goes up, and the lights behind drift slower than the
+///     page (see ArenaHeroHeader),
+///   - who they are: stats, bio, and follow / message / challenge,
+///   - their battle record: league, rating, how close the next league is,
+///     wins, losses and draws, streak — tilting into place as it scrolls
+///     into view (see ScrollReveal),
+///   - tabs: Shorts (their videos), Open (challenges nobody has accepted
+///     yet), Live (battles being voted on, with who is ahead), Won and Lost
+///     — a lost battle says by how much and to whom, so there is something
+///     to work on. Your own profile adds Liked and Saved.
 ///
 /// [isEmbedded] = true  -> shown as a tab inside MainShell (no AppBar
 ///                         on the Scaffold — the SliverAppBar inside
@@ -66,6 +72,10 @@ class _ProfilePageState extends State<ProfilePage>
   bool _isLoadingSaved = false;
   bool _isLoadingMyChallenges = false;
 
+  /// Their battle record, from the server. Until it arrives the page draws
+  /// one from what the user model already carries.
+  BattleRecord? _record;
+
   // ── Tabs ───────────────────────────────────────────────────────────
   late final TabController _tabs;
 
@@ -91,7 +101,7 @@ class _ProfilePageState extends State<ProfilePage>
     // 2 — saved isn't anyone's business but the owner's. The tab count
     // has to match the children count in TabBarView so we branch here
     // and reuse the same controller across rebuilds.
-    _tabs = TabController(length: isOwn ? 3 : 2, vsync: this);
+    _tabs = TabController(length: isOwn ? 7 : 5, vsync: this);
 
     EventTracker.instance.trackProfileView(
       profileUserId: widget.user.id,
@@ -112,6 +122,7 @@ class _ProfilePageState extends State<ProfilePage>
     }
 
     _fetchMyChallenges();
+    _fetchRecord();
     if (isOwn) _fetchSavedChallenges();
   }
 
@@ -132,6 +143,35 @@ class _ProfilePageState extends State<ProfilePage>
         _isLoadingSaved = false;
       });
     }
+  }
+
+  Future<void> _fetchRecord() async {
+    final page = await ApiService.getUserBattles(
+        userId: widget.user.id, tab: 'live', limit: 1);
+    if (mounted && page != null) setState(() => _record = page.record);
+  }
+
+  BattleRecord get _shownRecord =>
+      _record ??
+      BattleRecord(
+        rating: widget.user.rating,
+        league: widget.user.league,
+        wins: widget.user.wins,
+        losses: widget.user.losses,
+        draws: widget.user.draws,
+      );
+
+  void _openBattle(String challengeId) {
+    EventTracker.instance.trackTap(
+      target: 'profile_open_battle_card',
+      pageName: pageName,
+      params: {'challengeId': challengeId, 'profileUserId': widget.user.id},
+    );
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ChallengeDetailPage(challengeId: challengeId),
+      ),
+    );
   }
 
   Future<void> _fetchMyChallenges() async {
@@ -329,7 +369,7 @@ class _ProfilePageState extends State<ProfilePage>
         },
         onSaved: () {
           Navigator.pop(ctx);
-          _tabs.animateTo(2); // Saved tab index
+          _tabs.animateTo(6); // Saved tab index
         },
         onHistory: () {
           Navigator.pop(ctx);
@@ -339,7 +379,7 @@ class _ProfilePageState extends State<ProfilePage>
         },
         onLiked: () {
           Navigator.pop(ctx);
-          _tabs.animateTo(1); // Liked tab
+          _tabs.animateTo(5); // Liked tab
         },
         onNotifications: () {
           Navigator.pop(ctx);
@@ -452,140 +492,152 @@ class _ProfilePageState extends State<ProfilePage>
     final isFollowing = dp.following.contains(widget.user.id);
     final cs = Theme.of(context).colorScheme;
 
+    // Pushed as its own page, the arena runs up under the status bar and
+    // leaves room for it; inside the main tabs a SafeArea already has.
+    final topInset =
+        widget.isEmbedded ? 0.0 : MediaQuery.paddingOf(context).top;
+    final record = _shownRecord;
+    Tab tab(IconData icon, String label, [String? countKey]) {
+      final n = countKey == null ? 0 : (record.counts[countKey] ?? 0);
+      return Tab(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 18),
+            const SizedBox(width: 6),
+            Text(n > 0 ? '$label $n' : label),
+          ],
+        ),
+      );
+    }
+
     final body = NestedScrollView(
       headerSliverBuilder: (context, _) {
         return [
-          // Top app bar — pinned so the user can always tap the
-          // overflow / share icons even after scrolling.
-          SliverAppBar(
+          // The arena: moves with the scroll. See ArenaHeroHeader.
+          SliverPersistentHeader(
             pinned: true,
-            floating: false,
-            elevation: 0,
-            backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-            surfaceTintColor: Theme.of(context).scaffoldBackgroundColor,
-            automaticallyImplyLeading: !widget.isEmbedded,
-            title: Row(
-              children: [
-                if (isOwn)
-                  const Icon(Icons.lock_outline, size: 16),
-                if (isOwn) const SizedBox(width: 6),
-                Flexible(
-                  child: Text(
-                    '@${widget.user.username}',
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 16,
-                    ),
-                  ),
+            delegate: ArenaHeroHeader(
+              user: widget.user,
+              record: record,
+              topInset: topInset,
+              leading: widget.isEmbedded ? null : const BackButton(),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.share_outlined),
+                  tooltip: 'Share profile',
+                  onPressed: _shareProfile,
                 ),
+                if (isOwn)
+                  IconButton(
+                    icon: const Icon(Icons.menu_rounded),
+                    tooltip: 'Settings',
+                    onPressed: _showSettingsSheet,
+                  )
+                else
+                  IconButton(
+                    icon: const Icon(Icons.more_horiz),
+                    tooltip: 'More',
+                    onPressed: () => _showOtherUserSheet(dp, isFollowing),
+                  ),
               ],
             ),
-            actions: [
-              if (isOwn) ...[
-                IconButton(
-                  icon: const Icon(Icons.share_outlined),
-                  tooltip: 'Share profile',
-                  onPressed: _shareProfile,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.menu_rounded),
-                  tooltip: 'Settings',
-                  onPressed: _showSettingsSheet,
-                ),
-              ] else ...[
-                IconButton(
-                  icon: const Icon(Icons.share_outlined),
-                  tooltip: 'Share profile',
-                  onPressed: _shareProfile,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.more_horiz),
-                  tooltip: 'More',
-                  onPressed: () => _showOtherUserSheet(dp, isFollowing),
-                ),
-              ],
-            ],
           ),
           SliverToBoxAdapter(
-            child: _ProfileHeader(
-              user: widget.user,
-              isOwn: isOwn,
-              isFollowing: isFollowing,
-              postsCount: _myChallenges.length,
-              onTapFollowers: _openFollowers,
-              onTapFollowing: _openFollowing,
-              onEditProfile: _openEditProfile,
-              onShareProfile: _shareProfile,
-              onOpenSettings: _showSettingsSheet,
-              onFollowToggle: () {
-                if (isFollowing) {
-                  EventTracker.instance.trackFollowToggle(
-                    targetUserId: widget.user.id,
-                    becameFollowing: false,
-                    fromPage: pageName,
+            child: ScrollReveal(
+              child: _ProfileHeader(
+                user: widget.user,
+                isOwn: isOwn,
+                isFollowing: isFollowing,
+                postsCount: _myChallenges.length,
+                onTapFollowers: _openFollowers,
+                onTapFollowing: _openFollowing,
+                onEditProfile: _openEditProfile,
+                onShareProfile: _shareProfile,
+                onOpenSettings: _showSettingsSheet,
+                onFollowToggle: () {
+                  if (isFollowing) {
+                    EventTracker.instance.trackFollowToggle(
+                      targetUserId: widget.user.id,
+                      becameFollowing: false,
+                      fromPage: pageName,
+                    );
+                    dp.unfollowUser(widget.user);
+                  } else {
+                    EventTracker.instance.trackFollowToggle(
+                      targetUserId: widget.user.id,
+                      becameFollowing: true,
+                      fromPage: pageName,
+                    );
+                    dp.followUser(widget.user);
+                  }
+                },
+                onMessage: () {
+                  EventTracker.instance.trackTap(
+                    target: 'profile_open_dm',
+                    pageName: pageName,
+                    params: {'targetUserId': widget.user.id},
                   );
-                  dp.unfollowUser(widget.user);
-                } else {
-                  EventTracker.instance.trackFollowToggle(
-                    targetUserId: widget.user.id,
-                    becameFollowing: true,
-                    fromPage: pageName,
-                  );
-                  dp.followUser(widget.user);
-                }
-              },
-              onMessage: () {
-                EventTracker.instance.trackTap(
-                  target: 'profile_open_dm',
-                  pageName: pageName,
-                  params: {'targetUserId': widget.user.id},
-                );
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => ChatConversationPage(
-                      otherUserId: widget.user.id,
-                      otherUsername: widget.user.username,
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => ChatConversationPage(
+                        otherUserId: widget.user.id,
+                        otherUsername: widget.user.username,
+                      ),
                     ),
-                  ),
-                );
-              },
-              onChallenge: () {
-                EventTracker.instance.trackTap(
-                  target: 'profile_open_battle',
-                  pageName: pageName,
-                  params: {'targetUserId': widget.user.id},
-                );
-                // The create-challenge flow doesn't yet accept a
-                // pre-filled opponent — it lets the user open a
-                // challenge that anyone can respond to. We open the
-                // page directly; targeted-opponent deep-linking is a
-                // future task. Toast so the user knows.
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const CreateChallengePage(),
-                  ),
-                );
-              },
-              compact: _compact,
+                  );
+                },
+                onChallenge: () {
+                  EventTracker.instance.trackTap(
+                    target: 'profile_open_battle',
+                    pageName: pageName,
+                    params: {'targetUserId': widget.user.id},
+                  );
+                  // The create-challenge flow doesn't yet accept a
+                  // pre-filled opponent — it lets the user open a
+                  // challenge that anyone can respond to. We open the
+                  // page directly; targeted-opponent deep-linking is a
+                  // future task. Toast so the user knows.
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const CreateChallengePage(),
+                    ),
+                  );
+                },
+                compact: _compact,
+              ),
             ),
           ),
-          // Pinned TabBar. Sliver wrapper so it sticks to the top edge
-          // as the user scrolls past the header.
+          // Their battle record, tilting into place as it scrolls in.
+          SliverToBoxAdapter(
+            child: ScrollReveal(
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 14),
+                child: BattleRecordPanel(record: record, isOwn: isOwn),
+              ),
+            ),
+          ),
+          // Pinned tabs. Sliver wrapper so it sticks to the top edge as the
+          // user scrolls past the header.
           SliverPersistentHeader(
             pinned: true,
             delegate: _PinnedTabBarDelegate(
               TabBar(
                 controller: _tabs,
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
                 labelColor: cs.onSurface,
                 unselectedLabelColor: cs.onSurfaceVariant,
                 indicatorColor: cs.primary,
                 indicatorWeight: 2.5,
                 tabs: [
-                  const Tab(icon: Icon(Icons.grid_on_rounded)),
-                  const Tab(icon: Icon(Icons.favorite_border)),
-                  if (isOwn)
-                    const Tab(icon: Icon(Icons.bookmark_border)),
+                  tab(Icons.grid_on_rounded, 'Shorts'),
+                  tab(Icons.flag_outlined, 'Open', 'open'),
+                  tab(Icons.bolt_outlined, 'Live', 'live'),
+                  tab(Icons.emoji_events_outlined, 'Won', 'won'),
+                  tab(Icons.trending_down, 'Lost', 'lost'),
+                  if (isOwn) tab(Icons.favorite_border, 'Liked'),
+                  if (isOwn) tab(Icons.bookmark_border, 'Saved'),
                 ],
               ),
               backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -597,7 +649,16 @@ class _ProfilePageState extends State<ProfilePage>
         controller: _tabs,
         children: [
           _buildPostsTab(isOwn: isOwn),
-          const LikedVideosPage(embedded: true),
+          for (final t in const ['open', 'live', 'won', 'lost'])
+            BattlesTab(
+              userId: widget.user.id,
+              tab: t,
+              isOwn: isOwn,
+              onOpen: _openBattle,
+            ),
+          // Liked reads the signed-in person's likes, so it is only
+          // meaningful on their own profile.
+          if (isOwn) const LikedVideosPage(embedded: true),
           if (isOwn) _buildSavedTab(),
         ],
       ),
@@ -890,87 +951,28 @@ class _ProfileHeader extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Top row: gradient-ringed avatar + 4 stats (Posts /
-          // Followers / Following / Wins). Wraps using Flexible so
-          // long stat numbers (1.2M) don't overflow on narrow phones.
+          // Stats across the full width. The avatar, name and league are up
+          // in the arena, and wins and losses in the record panel below.
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _RingedAvatar(initial: _avatarInitial(user.username)),
-              const SizedBox(width: AppTheme.space20),
-              Expanded(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: [
-                    _StatPill(
-                      value: compact(postsCount),
-                      label: 'Posts',
-                    ),
-                    _StatPill(
-                      value: compact(user.followersCount),
-                      label: 'Followers',
-                      onTap: onTapFollowers,
-                    ),
-                    _StatPill(
-                      value: compact(user.followingCount),
-                      label: 'Following',
-                      onTap: onTapFollowing,
-                    ),
-                  ],
-                ),
+              _StatPill(
+                value: compact(postsCount),
+                label: 'Videos',
+              ),
+              _StatPill(
+                value: compact(user.followersCount),
+                label: 'Followers',
+                onTap: onTapFollowers,
+              ),
+              _StatPill(
+                value: compact(user.followingCount),
+                label: 'Following',
+                onTap: onTapFollowing,
               ),
             ],
           ),
           const SizedBox(height: AppTheme.space12),
-
-          // Full name (or @username fallback) + league badge.
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  user.fullName.isNotEmpty
-                      ? user.fullName
-                      : '@${user.username}',
-                  style: tt.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              LeagueBadge(league: user.league),
-            ],
-          ),
-          const SizedBox(height: AppTheme.space4),
-
-          // Win/loss + wins-as-stat row. Wins is the closest thing we
-          // have to "ranking" — it's what determines league placement
-          // — so we surface it on the header rather than burying it
-          // under stats.
-          Row(
-            children: [
-              Icon(Icons.emoji_events_outlined,
-                  size: 16, color: cs.primary),
-              const SizedBox(width: 4),
-              Text(
-                '${user.wins}W · ${user.losses}L',
-                style: tt.bodySmall?.copyWith(
-                  color: cs.onSurfaceVariant,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(width: AppTheme.space12),
-              Icon(Icons.trending_up_rounded,
-                  size: 16, color: cs.secondary),
-              const SizedBox(width: 4),
-              Text(
-                _winRateLabel(user.wins, user.losses),
-                style: tt.bodySmall?.copyWith(
-                  color: cs.onSurfaceVariant,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppTheme.space8),
 
           // Bio. Three states:
           //   * Non-empty → render the bio text, multi-line, slightly
@@ -1019,71 +1021,6 @@ class _ProfileHeader extends StatelessWidget {
               onChallenge: onChallenge,
             ),
         ],
-      ),
-    );
-  }
-
-  /// Single-char avatar fallback. Defends against empty usernames
-  /// (rare but possible during the brief window between signup and
-  /// the user table catching up on the cache).
-  static String _avatarInitial(String username) {
-    if (username.isEmpty) return '?';
-    return username[0].toUpperCase();
-  }
-
-  /// Win-rate label as a percent. Returns a dash on zero battles so
-  /// brand-new users don't see "0% win rate" on day 1.
-  static String _winRateLabel(int w, int l) {
-    final total = w + l;
-    if (total == 0) return 'No battles yet';
-    final pct = ((w / total) * 100).round();
-    return '$pct% win rate';
-  }
-}
-
-/// Gradient-ringed circular avatar. Mimics Instagram's story-ring
-/// look so the profile reads as social-grade rather than utility.
-/// We use the theme primary color for the ring instead of IG's
-/// pink/yellow gradient so it matches the app's brand.
-class _RingedAvatar extends StatelessWidget {
-  final String initial;
-  const _RingedAvatar({required this.initial});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(2.5),
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: LinearGradient(
-          colors: [
-            cs.primary,
-            cs.secondary,
-            cs.tertiary,
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
-      child: Container(
-        padding: const EdgeInsets.all(2),
-        decoration: BoxDecoration(
-          color: Theme.of(context).scaffoldBackgroundColor,
-          shape: BoxShape.circle,
-        ),
-        child: CircleAvatar(
-          radius: 40,
-          backgroundColor: cs.surfaceContainerHighest,
-          child: Text(
-            initial,
-            style: TextStyle(
-              fontSize: 32,
-              fontWeight: FontWeight.w700,
-              color: cs.onSurface,
-            ),
-          ),
-        ),
       ),
     );
   }
