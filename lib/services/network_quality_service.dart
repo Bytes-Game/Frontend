@@ -53,6 +53,11 @@ class NetworkQualityService {
   /// Current cached classification. Safe to call before [start].
   NetworkQuality get current => _current;
 
+  /// The connection as the phone names it — "wifi", "mobile", "wifi+vpn" —
+  /// for log lines. [current] folds several of these into one class.
+  String get connectionKind => _kind;
+  String _kind = 'unknown';
+
   /// Force the classification. Tests need this because the 1080p problem
   /// only appears on a HIGH-quality link — on `unknown` the preference
   /// order already puts 720p first, so a cap test that doesn't set this
@@ -86,7 +91,13 @@ class NetworkQualityService {
     await _controller.close();
   }
 
+  /// Feed the service a connectivity report, as the plugin would.
+  @visibleForTesting
+  void debugApplyConnectivity(List<ConnectivityResult> results) =>
+      _apply(results);
+
   void _apply(List<ConnectivityResult> results) {
+    _kind = results.isEmpty ? 'none' : results.map((r) => r.name).join('+');
     final next = _classify(results);
     if (next == _current) return;
     _current = next;
@@ -474,6 +485,43 @@ class NetworkQualityService {
   /// the session.
   int? _rememberedBps;
 
+  /// The most last run's speed may claim before this run has measured its
+  /// own: just enough to afford [unmeasuredMaxLabel], the same careful
+  /// picture a first-ever launch opens on.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// LAST TIME'S SPEED MAY MAKE THE OPENING MORE CAREFUL, NEVER BOLDER
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// The remembered figure was trusted both ways, and the bold way is the
+  /// one that hurts. A device log opened on last session's reading and
+  /// found out otherwise a page later:
+  ///
+  ///     cache ready: mode=prefix (sliver) depth=10
+  ///     quality{720p:7 720p_hq:16 720p_hevc:3 480p:3 link=61.1Mbps ...}
+  ///     quality{... link=10.3Mbps ...}
+  ///     starts=21  proxy=5 (24%)  network=16 (76%)   swipe 3/3 warm/cold
+  ///     wait ... p90=7136ms
+  ///
+  /// 61 Mbps was a different connection, or the same one on a better day.
+  /// Believing it, the app opened ten downloads deep on five lanes and put
+  /// the heaviest file on most of the first page — on a link that turned
+  /// out to be 10 Mbps. The first videos waited three and five seconds for
+  /// their first frame, fast scrolling outran every download, and three
+  /// quarters of the videos started from the network. The session before,
+  /// which opened on a remembered 4.1 Mbps and then measured 25-48, had 95%
+  /// of videos ready.
+  ///
+  /// Too careful costs a softer picture on the first few videos, and those
+  /// guesses are revisited as soon as this run has measured anything (see
+  /// [pickedInTheDark]). Too bold costs the opening stall. So a remembered
+  /// speed can still pull the opening DOWN — a phone that was on a bad
+  /// connection last time starts gently — but not up past what a phone
+  /// with no memory at all would assume.
+  static int get rememberedCeilingBps =>
+      (bitrateNeededFor[unmeasuredMaxLabel]! * bitrateHeadroom).round() +
+      readAheadReserveBps;
+
   /// Seed the opening guess from a previous run. Idempotent; ignored once
   /// this run has measured anything itself.
   void restoreRememberedBps(int? bps) {
@@ -531,7 +579,12 @@ class NetworkQualityService {
   /// The median rather than the average, because one download finishing
   /// against a warm CDN edge should not convince us the whole link is fast.
   int? get measuredBps {
-    if (_throughputSamples.length < _minSamples) return _rememberedBps;
+    if (_throughputSamples.length < _minSamples) {
+      final r = _rememberedBps;
+      if (r == null) return null;
+      final cap = rememberedCeilingBps;
+      return r < cap ? r : cap;
+    }
     final sorted = List<int>.from(_throughputSamples)..sort();
     return sorted[sorted.length ~/ 2];
   }
@@ -976,11 +1029,23 @@ class NetworkQualityService {
   /// can carry, so a log says WHY a quality was chosen and not just which.
   static String variantPicksSummary() {
     final parts = variantPicks.entries.map((e) => '${e.key}:${e.value}').toList();
+    // What KIND of connection, which the log could not tell until now. A
+    // session that opened on one speed and measured another was either a
+    // different network or the same one on a worse day, and the two want
+    // different fixes.
+    parts.add('net=${instance.connectionKind}');
     final bps = instance.measuredBps;
     if (bps == null) {
       parts.add('link=measuring');
     } else {
       parts.add('link=${(bps / 1e6).toStringAsFixed(1)}Mbps');
+      // Whether that is this run's measurement or last run's guess, and if a
+      // guess, what it actually said before it was capped.
+      final remembered = instance._rememberedBps;
+      if (instance.pickedInTheDark && remembered != null) {
+        parts.add('(remembered ${(remembered / 1e6).toStringAsFixed(1)}Mbps'
+            '${remembered > bps ? ', capped' : ''})');
+      }
       // How many downloads were sharing the link when that was measured.
       // A reading taken across three lanes means something different from
       // the same reading taken across one, and for a long time the log

@@ -1609,6 +1609,7 @@ class VideoCacheService {
       ..sort((a, b) => a.lastUsed.compareTo(b.lastUsed));
     var stuck = 0;
     var evicted = 0;
+    var openings = 0;
     for (final u in order) {
       if (total <= maxCacheBytes) break;
       for (final f in u.files) {
@@ -1621,6 +1622,7 @@ class VideoCacheService {
         }
       }
       evicted++;
+      if (u.files.any((f) => f.path.endsWith('.prefix'))) openings++;
       final url = u.url;
       if (url != null) {
         // Forgotten here so the next warm saves it again and isReady stops
@@ -1630,8 +1632,13 @@ class VideoCacheService {
         _ready.removeWhere((r) => _fileFor(r) == u.files.first.path);
       }
     }
-    if (stuck > 0 || total > maxCacheBytes) {
-      ReelDiagnostics.instance.log('cache sweep: removed $evicted, '
+    // Said every time it deletes anything, not only when it goes wrong. A
+    // deleted opening is a video that will no longer start instantly, so a
+    // log that is silent about it cannot tell a slow feed from a sweep
+    // that is eating the window.
+    if (evicted > 0 || stuck > 0 || total > maxCacheBytes) {
+      ReelDiagnostics.instance.log('cache sweep: removed $evicted '
+          '($openings saved openings, ${evicted - openings} whole files), '
           '${(total / (1024 * 1024)).toStringAsFixed(0)} MB left'
           '${stuck > 0 ? ", $stuck files would not delete" : ""}'
           '${total > maxCacheBytes ? " — still over the limit, the rest is in use" : ""}');

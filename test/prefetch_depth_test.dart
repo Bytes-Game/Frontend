@@ -150,6 +150,19 @@ void main() {
       expect(VideoCacheService.minPrefetchDepth, greaterThan(0));
     });
 
+    test('a fast speed from last run does not open ten deep', () {
+      // The device log: remembered 61 Mbps, real 10. "depth=10" on five
+      // lanes before a byte was measured, and three quarters of the videos
+      // started from the network.
+      net.debugClearThroughput();
+      net.restoreRememberedBps(61100000);
+      expect(cache.prefetchDepth, VideoCacheService.minPrefetchDepth);
+
+      // Once this run has measured it for itself, the depth follows.
+      linkAt(61100000);
+      expect(cache.prefetchDepth, VideoCacheService.maxPrefetchDepth);
+    });
+
     test('the window is never deeper than what shipped before', () {
       linkAt(100000000);
 
