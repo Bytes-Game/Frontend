@@ -5,6 +5,7 @@ import 'package:myapp/config/constants.dart';
 import 'package:myapp/services/device_capabilities.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/models/challenge_model.dart';
+import 'package:myapp/models/battle_model.dart';
 
 /// Thin wrapper over package:http that injects the session bearer token (held
 /// in [ApiService.authToken]) into every backend request. Introduced so the
@@ -840,6 +841,9 @@ class ApiService {
     // server fetches anything. Zero means "not known" and is allowed
     // through to that measurement.
     Duration duration = Duration.zero,
+    // How many days voting runs once somebody answers. The server keeps it
+    // between 7 and 30; zero means "the usual", which is 7.
+    int battleDays = 0,
   }) async {
     try {
       final res = await _authHttp.post(
@@ -864,6 +868,7 @@ class ApiService {
           'category': category,
           'emotionTags': emotionTags,
           'tags': tags,
+          if (battleDays > 0) 'battleDays': battleDays,
         }),
       );
       if (res.statusCode == 200 || res.statusCode == 201) {
@@ -1113,24 +1118,120 @@ class ApiService {
     }
   }
 
-  /// POST /api/v1/challenges/vote -> vote for a challenge response
-  static Future<Map<String, dynamic>?> voteChallenge({
+  /// POST /api/v1/challenges/vote -> vote for one side of a battle.
+  ///
+  /// The vote dialogs name the creator's side by the challenge's own id, as
+  /// they always have. That id is not an answer, and the server used to save
+  /// such a vote against whichever answer happened to share the number — or
+  /// not at all. So it goes up as `side: creator` and the server has nothing
+  /// to guess.
+  ///
+  /// A refused vote comes back with the server's reason ("You can't vote in
+  /// your own battle.", "This battle has ended.") so the person can be told
+  /// why, not just that it failed.
+  static Future<ActionResult> voteChallenge({
     required String challengeId,
     required String responseId,
     required String voterId,
   }) async {
+    final forCreator = responseId.isEmpty || responseId == challengeId;
     try {
       final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/challenges/vote'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
           'challengeId': challengeId,
-          'responseId': responseId,
+          'responseId': forCreator ? '' : responseId,
+          if (forCreator) 'side': 'creator',
           'voterId': voterId,
         }),
       );
-      if (res.statusCode == 200) return json.decode(res.body);
+      if (res.statusCode == 200) return const ActionResult(true);
+      if (res.statusCode >= 400 && res.statusCode < 500) {
+        final why = res.body.trim();
+        return ActionResult(false, why.isEmpty ? 'Vote not counted.' : why);
+      }
+      return const ActionResult(false, 'Vote failed. Try again.');
+    } catch (_) {
+      return const ActionResult(false, 'Vote failed. Try again.');
+    }
+  }
+
+  /// GET /api/v1/challenges/{id}/standings -> the live count of a battle:
+  /// genuine votes, likes, views and shares per side, who is ahead, what
+  /// was taken off and why, and when voting closes. Null when it could not
+  /// be read (the failure is logged by [_AuthHttp]).
+  static Future<BattleStandings?> getBattleStandings(String challengeId) async {
+    try {
+      final res = await _authHttp.get(
+        Uri.parse('$_base/api/v1/challenges/$challengeId/standings'),
+      );
+      if (res.statusCode != 200) return null;
+      return BattleStandings.fromJson(
+          json.decode(res.body) as Map<String, dynamic>);
+    } catch (_) {
       return null;
+    }
+  }
+
+  /// POST /api/v1/challenges/{id}/battle-length -> the creator makes their
+  /// battle run longer. Never shorter, and never past 30 days; the server
+  /// says so in [ActionResult.message] when it refuses.
+  static Future<ActionResult> extendBattle({
+    required String challengeId,
+    required int days,
+  }) async {
+    try {
+      final res = await _authHttp.post(
+        Uri.parse('$_base/api/v1/challenges/$challengeId/battle-length'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'days': days}),
+      );
+      if (res.statusCode == 200) return const ActionResult(true);
+      final why = res.body.trim();
+      return ActionResult(false,
+          why.isEmpty || res.statusCode >= 500 ? 'Could not change the length.' : why);
+    } catch (_) {
+      return const ActionResult(false, 'Could not change the length.');
+    }
+  }
+
+  /// POST /api/v1/challenges/responses/like -> like, or un-like, the ANSWER
+  /// in a battle. A like on a battle used to go to the challenge whichever
+  /// video was on screen, so answers never had any. Returns the server's
+  /// {liked, likes} or null.
+  static Future<Map<String, dynamic>?> likeResponse({
+    required String responseId,
+  }) async {
+    try {
+      final res = await _authHttp.post(
+        Uri.parse('$_base/api/v1/challenges/responses/like'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'responseId': responseId}),
+      );
+      if (res.statusCode == 200) {
+        return json.decode(res.body) as Map<String, dynamic>;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// GET /api/v1/users/{id}/battles?tab= -> one of a profile's battle tabs
+  /// (open, live, won, lost, draw) with the person's record. Null when it
+  /// could not be read.
+  static Future<BattlesPage?> getUserBattles({
+    required String userId,
+    required String tab,
+    int limit = 30,
+    int offset = 0,
+  }) async {
+    try {
+      final res = await _authHttp.get(Uri.parse(
+          '$_base/api/v1/users/$userId/battles?tab=$tab&limit=$limit&offset=$offset'));
+      if (res.statusCode != 200) return null;
+      return BattlesPage.fromJson(json.decode(res.body) as Map<String, dynamic>);
     } catch (_) {
       return null;
     }

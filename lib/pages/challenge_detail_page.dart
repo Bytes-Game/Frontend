@@ -11,6 +11,7 @@ import 'package:myapp/pages/video_player_page.dart';
 import 'package:myapp/pages/video_trim_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/widgets/battle_scoreboard.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/upload_job_manager.dart';
@@ -30,7 +31,8 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     with PageTracker<ChallengeDetailPage> {
   ChallengeModel? _challenge;
   List<ChallengeResponseModel> _responses = [];
-  List<VoteSummary> _votes = [];
+  /// Bumped on every reload so the live score reloads with the page.
+  int _scoreVersion = 0;
   bool _loading = true;
   bool _accepting = false;
 
@@ -76,7 +78,7 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
         _challenge = data['challenge'] as ChallengeModel;
         _responses =
             (data['responses'] as List).cast<ChallengeResponseModel>();
-        _votes = (data['votes'] as List?)?.cast<VoteSummary>() ?? [];
+        _scoreVersion++;
         _loading = false;
       });
     } else if (mounted) {
@@ -110,11 +112,16 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
         'responseId': responseId,
       },
     );
-    await ApiService.voteChallenge(
+    final res = await ApiService.voteChallenge(
       challengeId: _challenge!.id,
       responseId: responseId,
       voterId: dp.user!.id,
     );
+    if (!res.ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(res.message), duration: const Duration(seconds: 3)),
+      );
+    }
     _load(); // refresh to show updated votes
   }
 
@@ -610,42 +617,20 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                       const SizedBox(height: 20),
                     ],
 
-                    // —— Responses ——
-                    // —— Vote Summary ——
-                    if (_votes.isNotEmpty) ...[
-                      Row(
-                        children: [
-                          Icon(Icons.how_to_vote, color: cs.primary, size: 22),
-                          const SizedBox(width: 6),
-                          Text('Votes', style: tt.titleMedium),
-                        ],
+                    // —— Live score ——
+                    // Genuine votes, likes, views and shares per side, how
+                    // long is left, and what did not count — the same count
+                    // that decides the winner. Replaces the raw vote list,
+                    // which counted every vote and had no way to vote for
+                    // the person who posted the challenge.
+                    if (_challenge!.status != 'open' ||
+                        _responses.isNotEmpty) ...[
+                      BattleScoreboard(
+                        challengeId: _challenge!.id,
+                        viewerId: dp.user?.id,
+                        onVote: dp.user == null ? null : _vote,
+                        refreshToken: _scoreVersion,
                       ),
-                      const SizedBox(height: 8),
-                      ..._votes.map((v) => Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 2),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(v.username,
-                                  style: tt.bodyMedium?.copyWith(
-                                      fontWeight: FontWeight.w600)),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: cs.primary.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text('${v.votes} votes',
-                                  style: TextStyle(
-                                      color: cs.primary,
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 12)),
-                            ),
-                          ],
-                        ),
-                      )),
                       const SizedBox(height: 16),
                     ],
 

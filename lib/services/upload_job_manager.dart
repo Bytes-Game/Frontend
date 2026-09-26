@@ -366,6 +366,7 @@ class UploadJobManager {
         category: meta.category,
         emotionTags: meta.emotionTags,
         tags: meta.tags,
+        battleDays: meta.battleDays,
       );
       if (challenge == null) {
         _fail(job, 'create_fail',
@@ -519,6 +520,7 @@ class UploadJobManager {
         category: meta.category,
         emotionTags: meta.emotionTags,
         tags: meta.tags,
+        battleDays: meta.battleDays,
         // energyLevel removed from the create payload — the server
         // derives it from the metadata it already has. See
         // energy_classifier.go on the backend.
@@ -818,6 +820,7 @@ class UploadJobManager {
             emotionTags: (metaJson['emotionTags'] as List? ?? [])
                 .map((e) => e.toString())
                 .toList(),
+            battleDays: metaJson['battleDays'] as int? ?? 0,
           );
         }
         if (!job._hasRetryInfo) continue;
@@ -994,6 +997,7 @@ class UploadJob {
             'category': _challengeMeta!.category,
             'emotionTags': _challengeMeta!.emotionTags,
             'tags': _challengeMeta!.tags,
+            'battleDays': _challengeMeta!.battleDays,
           },
       };
 }
@@ -1021,6 +1025,10 @@ class ChallengeSubmissionMeta {
   /// mood, while these are free text. Mixed together, neither worked.
   final List<String> tags;
 
+  /// How many days voting runs once somebody answers: 7 to 30. Zero means
+  /// the usual, which the server reads as 7.
+  final int battleDays;
+
   const ChallengeSubmissionMeta({
     required this.prefix,
     required this.subject,
@@ -1028,6 +1036,7 @@ class ChallengeSubmissionMeta {
     required this.category,
     required this.emotionTags,
     this.tags = const [],
+    this.battleDays = 0,
   });
 }
 
