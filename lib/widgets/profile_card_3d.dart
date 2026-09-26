@@ -7,7 +7,8 @@ import 'package:myapp/models/user_model.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/widgets/battle_record_panel.dart'
     show LeagueEmblem, CountUp;
-import 'package:myapp/widgets/league_badge.dart';
+import 'package:myapp/widgets/arena_ui.dart';
+import 'package:myapp/config/app_theme.dart';
 
 /// Shows [user]'s battle card floating over the screen, in 3D.
 ///
@@ -211,30 +212,28 @@ class _Shell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = LeagueBadge.gradientFor(league);
-    // A sheen that slides across as the card tilts, like light on foil.
+    // A sheen that slides across as the card tilts, like light on glass.
     final sheen = Alignment(-tilt.dy * 3, -tilt.dx * 3);
     return Material(
       type: MaterialType.transparency,
       child: Container(
+        // Charcoal, like a dark Apple card: the league shows in its emblem,
+        // not by painting the whole card in it.
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(28),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color.lerp(colors.first, Colors.black, 0.35)!,
-              Color.lerp(colors.last, Colors.black, 0.65)!,
-            ],
+          gradient: const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFF2C2C2E), Color(0xFF1C1C1E)],
           ),
           border: Border.all(
-            color: colors.first.withValues(alpha: 0.8),
-            width: 1.5,
+            color: Colors.white.withValues(alpha: 0.12),
+            width: 1,
           ),
           boxShadow: [
             BoxShadow(
-              color: colors.last.withValues(alpha: 0.5),
-              blurRadius: 40,
+              color: Colors.black.withValues(alpha: 0.45),
+              blurRadius: 36,
               offset: Offset(tilt.dy * -40, 20 + tilt.dx * 40),
             ),
           ],
@@ -250,7 +249,7 @@ class _Shell extends StatelessWidget {
                       center: sheen,
                       radius: 0.9,
                       colors: [
-                        Colors.white.withValues(alpha: 0.22),
+                        Colors.white.withValues(alpha: 0.10),
                         Colors.white.withValues(alpha: 0.0),
                       ],
                     ),
@@ -296,8 +295,8 @@ class _Front extends StatelessWidget {
                 record.league.toUpperCase(),
                 style: const TextStyle(
                   color: white,
-                  letterSpacing: 2.2,
-                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.4,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
               const Spacer(),
@@ -309,25 +308,14 @@ class _Front extends StatelessWidget {
             ],
           ),
           const Spacer(),
-          CircleAvatar(
-            radius: 44,
-            backgroundColor: white.withValues(alpha: 0.18),
-            child: Text(
-              user.username.isEmpty ? '?' : user.username[0].toUpperCase(),
-              style: const TextStyle(
-                color: white,
-                fontSize: 38,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ),
+          ArenaAvatar(name: user.username, size: 88),
           const SizedBox(height: 10),
           Text(
             '@${user.username}',
             style: const TextStyle(
               color: white,
               fontSize: 20,
-              fontWeight: FontWeight.w800,
+              fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 4),
@@ -341,7 +329,7 @@ class _Front extends StatelessWidget {
                 style: const TextStyle(
                   color: white,
                   fontSize: 34,
-                  fontWeight: FontWeight.w900,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
               const SizedBox(width: 6),
@@ -356,8 +344,8 @@ class _Front extends StatelessWidget {
           const Spacer(),
           Row(
             children: [
-              _Stat('Wins', record.wins, Colors.greenAccent),
-              _Stat('Losses', record.losses, Colors.redAccent),
+              _Stat('Wins', record.wins, AppTheme.success),
+              _Stat('Losses', record.losses, AppTheme.error),
               _Stat('Draws', record.draws, Colors.white70),
             ],
           ),
@@ -411,7 +399,7 @@ class _Back extends StatelessWidget {
             '$n',
             style: const TextStyle(
               color: white,
-              fontWeight: FontWeight.w800,
+              fontWeight: FontWeight.w600,
               fontSize: 16,
             ),
           ),
@@ -428,7 +416,7 @@ class _Back extends StatelessWidget {
             style: const TextStyle(
               color: white,
               fontSize: 18,
-              fontWeight: FontWeight.w800,
+              fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 16),
@@ -439,7 +427,7 @@ class _Back extends StatelessWidget {
                 style: const TextStyle(
                   color: white,
                   fontSize: 40,
-                  fontWeight: FontWeight.w900,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
               const SizedBox(width: 8),
@@ -494,7 +482,7 @@ class _Stat extends StatelessWidget {
             style: TextStyle(
               color: color,
               fontSize: 24,
-              fontWeight: FontWeight.w900,
+              fontWeight: FontWeight.w700,
             ),
           ),
           Text(

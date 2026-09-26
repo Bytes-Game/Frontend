@@ -359,10 +359,10 @@ class _SearchPageState extends State<SearchPage>
                       child: ArenaPillTabs(
                         controller: _tabCtrl,
                         tabs: const [
-                          (icon: Icons.auto_awesome_rounded, label: 'Top'),
-                          (icon: Icons.person_rounded, label: 'Accounts'),
-                          (icon: Icons.bolt_rounded, label: 'Battles'),
-                          (icon: Icons.play_circle_rounded, label: 'Shorts'),
+                          (icon: null, label: 'Top'),
+                          (icon: null, label: 'Accounts'),
+                          (icon: null, label: 'Battles'),
+                          (icon: null, label: 'Shorts'),
                         ],
                       ),
                     )
@@ -413,7 +413,6 @@ class _SearchPageState extends State<SearchPage>
           const SliverToBoxAdapter(
             child: SectionTitle(
               title: 'Discover',
-              icon: Icons.explore_rounded,
             ),
           ),
           SliverPadding(
@@ -446,8 +445,7 @@ class _SearchPageState extends State<SearchPage>
   /// Recent (yours) and Trending (everyone's) searches as rows of chips
   /// that scroll sideways. Tapping one runs it — the classic search entry.
   Widget _suggestionRows() {
-    Widget chipRow(String label, IconData icon, IconData chipIcon,
-        List<String> queries) {
+    Widget chipRow(String label, IconData chipIcon, List<String> queries) {
       if (queries.isEmpty) return const SizedBox.shrink();
       final shown = queries.take(10).toList();
       return Column(
@@ -455,7 +453,6 @@ class _SearchPageState extends State<SearchPage>
         children: [
           SectionTitle(
             title: label,
-            icon: icon,
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
           ),
           SizedBox(
@@ -492,10 +489,8 @@ class _SearchPageState extends State<SearchPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          chipRow('Recent', Icons.history_rounded, Icons.history_rounded,
-              _recentSearches),
-          chipRow('Trending', Icons.local_fire_department_rounded,
-              Icons.trending_up_rounded, _trendingSearches),
+          chipRow('Recent', Icons.history_rounded, _recentSearches),
+          chipRow('Trending', Icons.trending_up_rounded, _trendingSearches),
         ],
       ),
     );
@@ -533,32 +528,26 @@ class _SearchPageState extends State<SearchPage>
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-        gradient: LinearGradient(
-          colors: [
-            AppTheme.primary.withValues(alpha: 0.14),
-            AppTheme.accentPink.withValues(alpha: 0.06),
-          ],
-        ),
-        border: Border.all(color: AppTheme.primary.withValues(alpha: 0.25)),
+        color: quietFill(context),
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
       ),
       child: Row(
         children: [
-          GradientIcon(
+          Icon(
             aboutSubjects
-                ? Icons.lightbulb_rounded
+                ? Icons.lightbulb_outline_rounded
                 : recent
                     ? Icons.schedule_rounded
                     : Icons.trending_up_rounded,
-            size: 20,
+            size: 18,
+            color: quietText(context),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               message,
               style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
+                fontSize: 13.5,
                 color: cs.onSurface.withValues(alpha: 0.8),
               ),
             ),
@@ -580,7 +569,6 @@ class _SearchPageState extends State<SearchPage>
       children: [
         const SectionTitle(
           title: 'Related',
-          icon: Icons.hub_rounded,
           padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
         ),
         SizedBox(
@@ -652,7 +640,6 @@ class _SearchPageState extends State<SearchPage>
       if (accountsHead.isNotEmpty) ...[
         SectionTitle(
           title: 'Accounts',
-          icon: Icons.people_alt_rounded,
           action: 'See all',
           onAction: () => _tabCtrl.animateTo(1),
         ),
@@ -703,8 +690,7 @@ class _SearchPageState extends State<SearchPage>
           if (battlesHead.isNotEmpty) ...[
             SectionTitle(
               title: 'Battles',
-              icon: Icons.bolt_rounded,
-              action: 'See all',
+
               onAction: () => _tabCtrl.animateTo(2),
             ),
             videoRow(battlesHead, 'battle'),
@@ -712,8 +698,7 @@ class _SearchPageState extends State<SearchPage>
           if (shortsHead.isNotEmpty) ...[
             SectionTitle(
               title: 'Shorts',
-              icon: Icons.play_circle_rounded,
-              action: 'See all',
+
               onAction: () => _tabCtrl.animateTo(3),
             ),
             videoRow(shortsHead, 'short'),
@@ -855,13 +840,16 @@ class _SearchPageState extends State<SearchPage>
         child: Container(
           padding: const EdgeInsets.fromLTRB(10, 10, 6, 10),
           decoration: BoxDecoration(
-            color: cs.onSurface.withValues(alpha: 0.04),
-            borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-            border: Border.all(color: cs.onSurface.withValues(alpha: 0.06)),
+            color: cs.onSurface.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(AppTheme.radiusMd),
           ),
           child: Row(
             children: [
-              ArenaAvatar(name: user.username, size: 50, ring: leagueColors),
+              ArenaAvatar(
+                name: user.username,
+                size: 50,
+                ring: leagueColors.first,
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -898,8 +886,7 @@ class _SearchPageState extends State<SearchPage>
                         ),
                         InfoChip(
                           label: '${user.wins}W · ${user.losses}L',
-                          icon: Icons.emoji_events_rounded,
-                          color: AppTheme.warning,
+                          icon: Icons.emoji_events_outlined,
                         ),
                       ],
                     ),
@@ -1002,19 +989,22 @@ class _QueryChip extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
-          color: cs.onSurface.withValues(alpha: 0.05),
+          color: quietFill(context),
           borderRadius: BorderRadius.circular(AppTheme.radiusFull),
-          border: Border.all(color: cs.onSurface.withValues(alpha: 0.08)),
         ),
         alignment: Alignment.center,
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 15, color: cs.onSurface.withValues(alpha: 0.55)),
+            Icon(icon, size: 15, color: quietText(context)),
             const SizedBox(width: 6),
             Text(
               label,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                color: cs.onSurface,
+              ),
             ),
           ],
         ),
@@ -1843,15 +1833,12 @@ class _PreviewableTileState extends State<_PreviewableTile> {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                     decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [AppTheme.accentPink, AppTheme.primary],
-                      ),
-                      borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+                      color: Colors.black.withValues(alpha: 0.55),
+                      borderRadius: BorderRadius.circular(AppTheme.radiusSm),
                     ),
                     child: const Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.bolt_rounded, color: Colors.white, size: 11),
                         Text('VS',
                             style: TextStyle(
                                 color: Colors.white,

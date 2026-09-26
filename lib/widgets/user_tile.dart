@@ -25,7 +25,7 @@ class UserTile extends StatelessWidget{
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final league = LeagueBadge.gradientFor(user.league);
+    final league = LeagueBadge.solidColor(user.league);
 
     return Pressable(
       onTap: onTap,
@@ -34,7 +34,7 @@ class UserTile extends StatelessWidget{
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         child: Row(
           children: [
-            ArenaAvatar(name: user.username, size: 48, ring: league),
+            ArenaAvatar(name: user.username, size: 48),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -46,7 +46,7 @@ class UserTile extends StatelessWidget{
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       fontSize: 15,
-                      fontWeight: FontWeight.w700,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -57,12 +57,11 @@ class UserTile extends StatelessWidget{
                       InfoChip(
                         label: user.league,
                         icon: Icons.shield_rounded,
-                        color: league.first,
+                        color: league,
                       ),
                       InfoChip(
                         label: '${user.wins}W · ${user.losses}L',
-                        icon: Icons.emoji_events_rounded,
-                        color: AppTheme.warning,
+                        icon: Icons.emoji_events_outlined,
                       ),
                     ],
                   ),
@@ -79,22 +78,21 @@ class UserTile extends StatelessWidget{
                         padding: const EdgeInsets.symmetric(horizontal: 14),
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
+                          color: quietFill(context),
                           borderRadius:
-                              BorderRadius.circular(AppTheme.radiusFull),
-                          border: Border.all(
-                            color: cs.onSurface.withValues(alpha: 0.2),
-                          ),
+                              BorderRadius.circular(AppTheme.radiusSm + 2),
                         ),
-                        child: const Text(
+                        child: Text(
                           'Following',
                           style: TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13.5,
+                            color: cs.onSurface,
                           ),
                         ),
                       ),
                     )
-                  : GradientButton(
+                  : PrimaryButton(
                       label: 'Follow',
                       height: 34,
                       onPressed: onFollowToggle,

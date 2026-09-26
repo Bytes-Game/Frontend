@@ -22,6 +22,7 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
+import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/user_tile.dart';
 
 UserModel person(String id, String name, {String bio = ''}) => UserModel(
@@ -260,6 +261,30 @@ void main() {
       expect(find.text('3W · 1L'), findsOneWidget);
       await t.tap(find.text('Follow'));
       expect(toggled, 1);
+    });
+
+    testWidgets('the look is quiet: the main button is one solid accent', (
+      t,
+    ) async {
+      await t.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: PrimaryButton(label: 'Follow', onPressed: () {}),
+            ),
+          ),
+        ),
+      );
+      final box = t.widget<Container>(
+        find
+            .ancestor(of: find.text('Follow'), matching: find.byType(Container))
+            .first,
+      );
+      final deco = box.decoration! as BoxDecoration;
+      expect(deco.color, kAccent);
+      expect(deco.gradient, isNull, reason: 'no rainbow gradients');
+      expect(deco.boxShadow, isNull, reason: 'no glow');
+      expect(kAccent, const Color(0xFF0A84FF), reason: "Apple's blue");
     });
 
     testWidgets('an empty notifications page says what will appear', (t) async {

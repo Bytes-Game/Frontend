@@ -71,26 +71,18 @@ class _NotificationsPageState extends State<NotificationsPage>
                   child: Container(
                     margin:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withValues(alpha: 0.04),
-                      borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-                    ),
+                    padding: const EdgeInsets.all(10),
                     child: Row(
                       children: [
                         // What kind of news, as a tinted icon tile.
                         Container(
-                          width: 42,
-                          height: 42,
+                          width: 40,
+                          height: 40,
                           decoration: BoxDecoration(
-                            color: c.withValues(alpha: 0.15),
-                            borderRadius:
-                                BorderRadius.circular(AppTheme.radiusMd),
+                            color: quietFill(context),
+                            shape: BoxShape.circle,
                           ),
-                          child: Icon(_icon(n.type), color: c, size: 22),
+                          child: Icon(_icon(n.type), color: c, size: 20),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -100,8 +92,8 @@ class _NotificationsPageState extends State<NotificationsPage>
                               Text(
                                 n.message,
                                 style: const TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
                               const SizedBox(height: 2),
@@ -146,22 +138,16 @@ class _NotificationsPageState extends State<NotificationsPage>
     }
   }
 
+  /// Grey for everything, except where the colour means something: a like
+  /// is red, a battle won is green.
   Color _color(String type) {
     switch (type) {
-      case 'follow':
-        return AppTheme.accentBlue;
       case 'like':
-        return AppTheme.accentPink;
-      case 'comment':
-        return AppTheme.accentCyan;
-      case 'challenge':
-        return AppTheme.primary;
+        return AppTheme.error;
       case 'challenge_accepted':
-        return AppTheme.warning;
-      case 'vote':
         return AppTheme.success;
       default:
-        return AppTheme.textMutedDark;
+        return Theme.of(context).colorScheme.onSurface;
     }
   }
 

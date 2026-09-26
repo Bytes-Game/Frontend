@@ -4,10 +4,14 @@ import 'package:google_fonts/google_fonts.dart';
 
 /// Single source of truth for the app's design system.
 ///
-/// Aesthetic: gaming / futuristic — deep space backgrounds with vibrant
-/// purple→pink→cyan neon gradients, glassmorphic surfaces, and subtle glows
-/// on interactive elements. Inspired by TikTok + PlayStation + modern gaming
-/// UIs.
+/// Aesthetic: calm and professional, the way Apple's own apps look. Black
+/// and white, greys for anything secondary, and one accent colour — Apple's
+/// blue — for the thing on a screen you are meant to press. Red, green and
+/// orange appear only where they MEAN something: a like, a win, a loss, a
+/// warning. No neon, no glows, no rainbow gradients.
+///
+/// The colour values are Apple's own system colours (dark-mode variants,
+/// which also read well on white).
 ///
 /// Exposes design tokens (colors, spacing, radii, gradients, shadows) as
 /// static members so individual screens can build consistent custom widgets
@@ -19,80 +23,83 @@ class AppTheme {
   // CORE PALETTE
   // ═══════════════════════════════════════════════════════════════════════
 
-  /// Primary brand color — vibrant purple. Used for CTAs, highlights, accents.
-  static const Color primary = Color(0xFF8B5CF6);
+  /// The one accent: Apple's system blue. Buttons, links, selection, your
+  /// own chat bubbles.
+  static const Color primary = Color(0xFF0A84FF);
 
-  /// Hot pink accent — for highlights, likes, alerts, gradient endpoints.
-  static const Color accentPink = Color(0xFFEC4899);
+  /// Red, for likes and anything that needs attention. (The name is kept
+  /// from the old palette so existing screens keep compiling.)
+  static const Color accentPink = Color(0xFFFF375F);
 
-  /// Neon cyan — for secondary highlights, online status, futuristic details.
-  static const Color accentCyan = Color(0xFF06B6D4);
+  /// Light blue — the soft Apple blue — for small details like read ticks
+  /// and online state.
+  static const Color accentCyan = Color(0xFF64D2FF);
 
-  /// Electric blue — for links, info states.
-  static const Color accentBlue = Color(0xFF3B82F6);
+  /// Links and info: the same blue as [primary].
+  static const Color accentBlue = primary;
 
   /// Success green.
-  static const Color success = Color(0xFF10B981);
+  static const Color success = Color(0xFF30D158);
 
-  /// Warning amber.
-  static const Color warning = Color(0xFFF59E0B);
+  /// Warning orange.
+  static const Color warning = Color(0xFFFF9F0A);
 
   /// Error red.
-  static const Color error = Color(0xFFEF4444);
+  static const Color error = Color(0xFFFF453A);
 
   // ─── Dark surfaces ────────────────────────────────────────────────────
-  /// Deepest background — near-black with a faint purple undertone.
-  static const Color bgDark = Color(0xFF0A0B1E);
+  /// True black, like an iPhone in dark mode.
+  static const Color bgDark = Color(0xFF000000);
 
   /// Elevated surface (cards, sheets).
-  static const Color surfaceDark = Color(0xFF141629);
+  static const Color surfaceDark = Color(0xFF1C1C1E);
 
   /// Higher-elevation surface (dialogs, modals, popups).
-  static const Color surfaceDarkHigh = Color(0xFF1B1E3B);
+  static const Color surfaceDarkHigh = Color(0xFF2C2C2E);
 
-  /// Subtle border for dark surfaces.
-  static const Color borderDark = Color(0xFF2A2D4F);
+  /// Hairline separators on dark.
+  static const Color borderDark = Color(0xFF38383A);
 
-  /// Muted text on dark.
-  static const Color textMutedDark = Color(0xFF8B8FA7);
+  /// Secondary text on dark.
+  static const Color textMutedDark = Color(0xFF8E8E93);
 
   // ─── Light surfaces ───────────────────────────────────────────────────
-  static const Color bgLight = Color(0xFFF8F9FC);
+  static const Color bgLight = Colors.white;
   static const Color surfaceLight = Colors.white;
-  static const Color surfaceLightHigh = Color(0xFFF1F3F9);
-  static const Color borderLight = Color(0xFFE5E7EF);
-  static const Color textMutedLight = Color(0xFF6B7280);
+  static const Color surfaceLightHigh = Color(0xFFF2F2F7);
+  static const Color borderLight = Color(0xFFE5E5EA);
+  static const Color textMutedLight = Color(0xFF6E6E73);
 
   // ═══════════════════════════════════════════════════════════════════════
-  // GRADIENTS — the soul of the design system
+  // GRADIENTS — kept quiet: one hue at a time, never a rainbow
   // ═══════════════════════════════════════════════════════════════════════
 
-  /// Primary CTA gradient — purple to pink (Instagram story ring vibe).
+  /// Primary: the accent, with the slightest shading.
   static const LinearGradient gradientPrimary = LinearGradient(
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-    colors: [Color(0xFF8B5CF6), Color(0xFFEC4899)],
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [Color(0xFF0A84FF), Color(0xFF0071E3)],
   );
 
-  /// Hero gradient — 3-stop for banners, login backgrounds, feature cards.
+  /// Hero — for banners and the login background: charcoal to black.
   static const LinearGradient gradientHero = LinearGradient(
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-    colors: [Color(0xFFEC4899), Color(0xFF8B5CF6), Color(0xFF06B6D4)],
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [Color(0xFF1C1C1E), Color(0xFF000000)],
   );
 
-  /// Futuristic accent gradient — cyan to purple.
+  /// Secondary accent: blue to the soft light blue.
   static const LinearGradient gradientCyber = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF06B6D4), Color(0xFF8B5CF6)],
+    colors: [Color(0xFF0A84FF), Color(0xFF64D2FF)],
   );
 
   /// Subtle surface gradient — for elevated cards with depth.
   static const LinearGradient gradientSurface = LinearGradient(
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-    colors: [Color(0xFF1B1E3B), Color(0xFF141629)],
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [Color(0xFF2C2C2E), Color(0xFF1C1C1E)],
   );
 
   /// Vertical dim-to-transparent gradient — for video overlays & hero bottoms.
@@ -165,46 +172,36 @@ class AppTheme {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // GLOW / SHADOW HELPERS
+  // SHADOW HELPERS
+  //
+  // These used to be coloured glows. They are soft neutral shadows now:
+  // something lifted off the page casts a shadow, it does not light up.
+  // The names are kept so existing screens keep compiling.
   // ═══════════════════════════════════════════════════════════════════════
 
-  /// Soft purple glow for primary buttons and highlighted elements.
-  static List<BoxShadow> glowPrimary({double intensity = 0.35}) => [
+  static List<BoxShadow> _soft(double intensity) => [
         BoxShadow(
-          color: primary.withValues(alpha: intensity),
-          blurRadius: 24,
-          spreadRadius: -4,
-          offset: const Offset(0, 8),
+          color: Colors.black.withValues(alpha: intensity * 0.6),
+          blurRadius: 12,
+          offset: const Offset(0, 4),
         ),
       ];
 
-  /// Pink glow — for likes, important alerts.
-  static List<BoxShadow> glowPink({double intensity = 0.35}) => [
-        BoxShadow(
-          color: accentPink.withValues(alpha: intensity),
-          blurRadius: 24,
-          spreadRadius: -4,
-          offset: const Offset(0, 8),
-        ),
-      ];
+  static List<BoxShadow> glowPrimary({double intensity = 0.35}) =>
+      _soft(intensity);
 
-  /// Cyan glow — for online status, futuristic accents.
-  static List<BoxShadow> glowCyan({double intensity = 0.35}) => [
-        BoxShadow(
-          color: accentCyan.withValues(alpha: intensity),
-          blurRadius: 24,
-          spreadRadius: -4,
-          offset: const Offset(0, 8),
-        ),
-      ];
+  static List<BoxShadow> glowPink({double intensity = 0.35}) =>
+      _soft(intensity);
+
+  static List<BoxShadow> glowCyan({double intensity = 0.35}) =>
+      _soft(intensity);
 
   /// Standard elevation shadow — for cards on dark backgrounds.
   static final List<BoxShadow> elevationShadow = [
     BoxShadow(
-      color: Colors.black.withValues(alpha: 0.4),
-      blurRadius: 20,
-      spreadRadius: -2,
-      offset: const Offset(0, 8),
+      color: Colors.black.withValues(alpha: 0.3),
+      blurRadius: 16,
+      offset: const Offset(0, 6),
     ),
   ];
 
@@ -242,21 +239,21 @@ class AppTheme {
   static TextTheme _buildTextTheme(Color onSurface, Color muted) {
     return TextTheme(
       // Display — for hero titles, big stats
-      displayLarge: GoogleFonts.poppins(
+      displayLarge: GoogleFonts.inter(
         fontSize: 40,
         fontWeight: FontWeight.w800,
         color: onSurface,
         letterSpacing: -1,
         height: 1.1,
       ),
-      displayMedium: GoogleFonts.poppins(
+      displayMedium: GoogleFonts.inter(
         fontSize: 32,
         fontWeight: FontWeight.w800,
         color: onSurface,
         letterSpacing: -0.5,
         height: 1.15,
       ),
-      displaySmall: GoogleFonts.poppins(
+      displaySmall: GoogleFonts.inter(
         fontSize: 26,
         fontWeight: FontWeight.w700,
         color: onSurface,
@@ -264,34 +261,34 @@ class AppTheme {
       ),
 
       // Headline — section headers
-      headlineLarge: GoogleFonts.poppins(
+      headlineLarge: GoogleFonts.inter(
         fontSize: 22,
         fontWeight: FontWeight.w700,
         color: onSurface,
       ),
-      headlineMedium: GoogleFonts.poppins(
+      headlineMedium: GoogleFonts.inter(
         fontSize: 20,
         fontWeight: FontWeight.w700,
         color: onSurface,
       ),
-      headlineSmall: GoogleFonts.poppins(
+      headlineSmall: GoogleFonts.inter(
         fontSize: 18,
         fontWeight: FontWeight.w600,
         color: onSurface,
       ),
 
       // Title — cards, list items, app bars
-      titleLarge: GoogleFonts.poppins(
+      titleLarge: GoogleFonts.inter(
         fontSize: 17,
         fontWeight: FontWeight.w600,
         color: onSurface,
       ),
-      titleMedium: GoogleFonts.poppins(
+      titleMedium: GoogleFonts.inter(
         fontSize: 15,
         fontWeight: FontWeight.w600,
         color: onSurface,
       ),
-      titleSmall: GoogleFonts.poppins(
+      titleSmall: GoogleFonts.inter(
         fontSize: 13,
         fontWeight: FontWeight.w600,
         color: onSurface,
@@ -362,7 +359,7 @@ class AppTheme {
       onSurface: Colors.white,
       surfaceContainerHighest: surfaceDarkHigh,
       outline: borderDark,
-      outlineVariant: Color(0xFF3A3D5F),
+      outlineVariant: Color(0xFF48484A),
     ),
     textTheme: _buildTextTheme(Colors.white, textMutedDark),
     appBarTheme: AppBarTheme(
@@ -372,7 +369,7 @@ class AppTheme {
       backgroundColor: bgDark,
       foregroundColor: Colors.white,
       surfaceTintColor: Colors.transparent,
-      titleTextStyle: GoogleFonts.poppins(
+      titleTextStyle: GoogleFonts.inter(
         fontSize: 18,
         fontWeight: FontWeight.w700,
         color: Colors.white,
@@ -553,7 +550,7 @@ class AppTheme {
         borderRadius: BorderRadius.circular(radiusXl),
         side: const BorderSide(color: borderDark),
       ),
-      titleTextStyle: GoogleFonts.poppins(
+      titleTextStyle: GoogleFonts.inter(
         fontSize: 20,
         fontWeight: FontWeight.w700,
         color: Colors.white,
@@ -653,7 +650,7 @@ class AppTheme {
       backgroundColor: surfaceLight,
       foregroundColor: const Color(0xFF111827),
       surfaceTintColor: Colors.transparent,
-      titleTextStyle: GoogleFonts.poppins(
+      titleTextStyle: GoogleFonts.inter(
         fontSize: 18,
         fontWeight: FontWeight.w700,
         color: const Color(0xFF111827),

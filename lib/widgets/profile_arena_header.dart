@@ -3,17 +3,19 @@ import 'package:flutter/material.dart';
 import 'package:myapp/models/battle_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
-import 'package:myapp/widgets/league_badge.dart';
+import 'package:myapp/widgets/arena_ui.dart';
 
-/// The top of a profile: an arena in the person's league colours.
+/// The top of a profile: who they are, in a plain header that turns into
+/// the top bar as the page scrolls.
 ///
 /// Everything in it is moved by the scroll itself. As the page goes up:
 ///   - the avatar shrinks and slides from the middle into the top bar,
 ///   - the name and league fade out and the @handle fades into the bar,
-///   - the lights in the background drift up more slowly than the page,
-///     so the page seems to move over them,
-///   - the rings round the avatar turn.
+///   - a hairline appears under the bar once it has closed.
 /// Scroll back down and it all runs the other way.
+///
+/// Quiet on purpose, like the top of a contact on an iPhone: black in dark
+/// mode, light grey in light mode, no colour but the league's own emblem.
 class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
   final UserModel user;
   final BattleRecord record;
@@ -61,14 +63,14 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
   Widget _build(BuildContext context, double shrinkOffset, double width) {
     final t = closedFraction(shrinkOffset);
     final move = Curves.easeInOut.transform(t);
-    final colors = LeagueBadge.gradientFor(record.league);
-    final dark = [
-      Color.lerp(colors.first, Colors.black, 0.45)!,
-      Color.lerp(colors.last, Colors.black, 0.75)!,
-    ];
+    final cs = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final fg = cs.onSurface;
+    final muted = fg.withValues(alpha: 0.55);
+    final bg = dark ? Colors.black : const Color(0xFFF2F2F7);
 
-    const bigR = 50.0;
-    const smallR = 17.0;
+    const bigR = 46.0;
+    const smallR = 16.0;
     final r = bigR + (smallR - bigR) * move;
     final endCx = (leading != null ? 56.0 : 16.0) + smallR;
     final cx = width / 2 + (endCx - width / 2) * move;
@@ -82,72 +84,24 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
     return ClipRect(
       child: Stack(
         children: [
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: dark,
-                ),
-              ),
-            ),
-          ),
-          // Lights, drifting slower than the page.
+          Positioned.fill(child: ColoredBox(color: bg)),
+          // Hairline under the bar once the header has closed into it.
           Positioned(
-            top: -60 - shrinkOffset * 0.35,
-            left: -50,
-            child: _Glow(
-              size: 240,
-              color: colors.first.withValues(alpha: 0.35),
-            ),
-          ),
-          Positioned(
-            top: 80 - shrinkOffset * 0.6,
-            right: -70,
-            child: _Glow(size: 260, color: colors.last.withValues(alpha: 0.30)),
-          ),
-          // Rings that turn with the scroll.
-          Positioned(
-            left: cx - r * 1.9,
-            top: cy - r * 1.9,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: 0.5,
             child: Opacity(
-              opacity: (1 - t * 1.6).clamp(0.0, 1.0),
-              child: Transform.rotate(
-                angle: shrinkOffset * 0.012,
-                child: _Rings(size: r * 3.8, color: colors.first),
-              ),
+              opacity: barTitleOpacity,
+              child: ColoredBox(color: fg.withValues(alpha: 0.15)),
             ),
           ),
           Positioned(
             left: cx - r,
             top: cy - r,
-            child: Container(
-              width: r * 2,
-              height: r * 2,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 2 + 1 * (1 - t)),
-                gradient: LinearGradient(colors: colors),
-                boxShadow: [
-                  BoxShadow(
-                    color: colors.first.withValues(alpha: 0.6 * (1 - t)),
-                    blurRadius: 30,
-                  ),
-                ],
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                user.username.isEmpty ? '?' : user.username[0].toUpperCase(),
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w900,
-                  fontSize: r * 0.9,
-                ),
-              ),
-            ),
+            child: ArenaAvatar(name: user.username, size: r * 2),
           ),
-          // Name and league, under the avatar while the arena is open.
+          // Name and league, under the avatar while the header is open.
           Positioned(
             left: 16,
             right: 16,
@@ -162,30 +116,32 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Colors.white,
+                      style: TextStyle(
+                        color: fg,
                         fontSize: 22,
-                        fontWeight: FontWeight.w900,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.3,
                       ),
                     ),
                     if (user.fullName.isNotEmpty)
                       Text(
                         '@${user.username}',
-                        style: const TextStyle(color: Colors.white70),
+                        style: TextStyle(color: muted, fontSize: 14),
                       ),
                     const SizedBox(height: 8),
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        LeagueEmblem(league: record.league, size: 22),
+                        LeagueEmblem(league: record.league, size: 18),
                         const SizedBox(width: 6),
                         Text(
                           record.decided == 0
                               ? 'Unranked'
                               : '${record.league} · ${record.rating}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700,
+                          style: TextStyle(
+                            color: muted,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
                       ],
@@ -195,7 +151,7 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
               ),
             ),
           ),
-          // The @handle in the bar, once the arena has closed.
+          // The @handle in the bar, once the header has closed.
           Positioned(
             left: endCx + smallR + 10,
             right: 16 + 48.0 * actions.length,
@@ -209,9 +165,9 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
                   child: Text(
                     '@${user.username}',
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
+                    style: TextStyle(
+                      color: fg,
+                      fontWeight: FontWeight.w600,
                       fontSize: 16,
                     ),
                   ),
@@ -225,18 +181,15 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
               top: topInset,
               height: barHeight,
               child: IconTheme(
-                data: const IconThemeData(color: Colors.white),
+                data: IconThemeData(color: fg),
                 child: Center(child: leading!),
               ),
             ),
           Positioned(
-            right: 4,
+            right: 12,
             top: topInset,
             height: barHeight,
-            child: IconTheme(
-              data: const IconThemeData(color: Colors.white),
-              child: Row(children: actions),
-            ),
+            child: Row(children: actions),
           ),
         ],
       ),
@@ -250,63 +203,4 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
       old.topInset != topInset ||
       old.actions != actions ||
       old.leading != leading;
-}
-
-class _Glow extends StatelessWidget {
-  final double size;
-  final Color color;
-
-  const _Glow({required this.size, required this.color});
-
-  @override
-  Widget build(BuildContext context) => Container(
-    width: size,
-    height: size,
-    decoration: BoxDecoration(
-      shape: BoxShape.circle,
-      gradient: RadialGradient(colors: [color, color.withValues(alpha: 0)]),
-    ),
-  );
-}
-
-class _Rings extends StatelessWidget {
-  final double size;
-  final Color color;
-
-  const _Rings({required this.size, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    Widget ring(double f, double a) => Container(
-      width: size * f,
-      height: size * f,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: color.withValues(alpha: a), width: 1.4),
-      ),
-    );
-    return SizedBox(
-      width: size,
-      height: size,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          ring(1.0, 0.25),
-          ring(0.78, 0.4),
-          // A notch on the outer ring, so the turning can be seen.
-          Align(
-            alignment: Alignment.topCenter,
-            child: Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.9),
-                shape: BoxShape.circle,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }

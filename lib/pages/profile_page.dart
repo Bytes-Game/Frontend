@@ -496,7 +496,7 @@ class _ProfilePageState extends State<ProfilePage>
     final topInset =
         widget.isEmbedded ? 0.0 : MediaQuery.paddingOf(context).top;
     final record = _shownRecord;
-    ({IconData icon, String label}) tab(IconData icon, String label,
+    ({IconData? icon, String label}) tab(IconData icon, String label,
         [String? countKey]) {
       final n = countKey == null ? 0 : (record.counts[countKey] ?? 0);
       return (icon: icon, label: n > 0 ? '$label $n' : label);
@@ -608,7 +608,7 @@ class _ProfilePageState extends State<ProfilePage>
             pinned: true,
             delegate: _PinnedTabBarDelegate(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: ArenaPillTabs(
                   controller: _tabs,
                   scrollable: true,
@@ -623,7 +623,7 @@ class _ProfilePageState extends State<ProfilePage>
                   ],
                 ),
               ),
-              height: 56,
+              height: 52,
               backgroundColor: Theme.of(context).scaffoldBackgroundColor,
             ),
           ),
@@ -668,8 +668,7 @@ class _ProfilePageState extends State<ProfilePage>
       child: IconBubble(
         icon: icon,
         tooltip: tooltip,
-        size: 38,
-        onImage: true,
+        size: 36,
         onTap: onTap,
       ),
     );
@@ -951,9 +950,8 @@ class _ProfileHeader extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(vertical: AppTheme.space12),
             decoration: BoxDecoration(
-              color: cs.onSurface.withValues(alpha: 0.04),
-              borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-              border: Border.all(color: cs.onSurface.withValues(alpha: 0.06)),
+              color: cs.onSurface.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(AppTheme.radiusMd),
             ),
             child: IntrinsicHeight(
               child: Row(
@@ -1007,24 +1005,18 @@ class _ProfileHeader extends StatelessWidget {
                   onTap: onEditProfile,
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 7),
-                    decoration: BoxDecoration(
-                      borderRadius:
-                          BorderRadius.circular(AppTheme.radiusFull),
-                      border: Border.all(
-                        color: AppTheme.primary.withValues(alpha: 0.4),
-                      ),
-                    ),
+                        horizontal: 12, vertical: 6),
                     child: const Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        GradientIcon(Icons.add_rounded, size: 16),
+                        Icon(Icons.add_rounded, size: 17, color: kAccent),
                         SizedBox(width: 4),
                         Text(
                           'Add a bio',
                           style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: kAccent,
                           ),
                         ),
                       ],
@@ -1127,36 +1119,35 @@ class _OtherActionRow extends StatelessWidget {
                     key: const ValueKey('following'),
                     onTap: onFollowToggle,
                     child: Container(
-                      height: 46,
+                      height: 44,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
+                        color: quietFill(context),
                         borderRadius:
-                            BorderRadius.circular(AppTheme.radiusFull),
-                        border: Border.all(
-                          color: cs.onSurface.withValues(alpha: 0.2),
-                        ),
+                            BorderRadius.circular(AppTheme.radiusMd),
                       ),
-                      child: const Row(
+                      child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.check_rounded, size: 18),
-                          SizedBox(width: 6),
+                          Icon(Icons.check_rounded,
+                              size: 18, color: cs.onSurface),
+                          const SizedBox(width: 6),
                           Text(
                             'Following',
                             style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 15,
+                              color: cs.onSurface,
                             ),
                           ),
                         ],
                       ),
                     ),
                   )
-                : GradientButton(
+                : PrimaryButton(
                     key: const ValueKey('follow'),
                     label: 'Follow',
-                    icon: Icons.person_add_alt_1_rounded,
-                    height: 46,
+                    height: 44,
                     onPressed: onFollowToggle,
                   ),
           ),
@@ -1165,14 +1156,14 @@ class _OtherActionRow extends StatelessWidget {
         IconBubble(
           icon: Icons.chat_bubble_rounded,
           tooltip: 'Message',
-          size: 46,
+          size: 44,
           onTap: onMessage,
         ),
         const SizedBox(width: AppTheme.space8),
         IconBubble(
           icon: Icons.bolt_rounded,
           tooltip: 'Challenge to a battle',
-          size: 46,
+          size: 44,
           onTap: onChallenge,
         ),
       ],
@@ -1204,7 +1195,13 @@ class _PinnedTabBarDelegate extends SliverPersistentHeaderDelegate {
 
   @override
   Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
-    return Material(color: backgroundColor, child: child);
+    // Fills exactly the height it promised. A child that came out shorter
+    // (slimmer tabs, a different font) would otherwise leave the sliver
+    // claiming space it does not paint, which Flutter rejects outright.
+    return Material(
+      color: backgroundColor,
+      child: SizedBox.expand(child: Center(child: child)),
+    );
   }
 
   @override
@@ -1244,19 +1241,7 @@ class _EmptyTab extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Container(
-                    width: 80,
-                    height: 80,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: AppTheme.primary.withValues(alpha: 0.10),
-                      border: Border.all(
-                        color: AppTheme.primary.withValues(alpha: 0.25),
-                      ),
-                    ),
-                    alignment: Alignment.center,
-                    child: GradientIcon(icon, size: 36),
-                  ),
+                  Icon(icon, size: 48, color: quietText(context)),
                   const SizedBox(height: AppTheme.space16),
                   Text(
                     title,
@@ -1653,21 +1638,21 @@ class _SettingsSheet extends StatelessWidget {
     Color? iconColor,
     Color? textColor,
   }) {
-    final tint = iconColor ?? AppTheme.primary;
     return ListTile(
-      // Each setting's icon sits in a small tinted square, so the list
-      // reads as a set of places to go rather than a wall of text.
-      leading: Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          color: tint.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+      // Each setting's icon sits in a small grey square, so the list reads
+      // as a set of places to go rather than a wall of text.
+      leading: Builder(
+        builder: (context) => Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: (iconColor ?? Theme.of(context).colorScheme.onSurface)
+                .withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+          ),
+          alignment: Alignment.center,
+          child: Icon(icon, size: 18, color: iconColor),
         ),
-        alignment: Alignment.center,
-        child: iconColor == null
-            ? GradientIcon(icon, size: 19)
-            : Icon(icon, size: 19, color: iconColor),
       ),
       title: Row(
         children: [

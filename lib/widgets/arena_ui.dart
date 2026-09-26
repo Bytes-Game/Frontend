@@ -7,12 +7,26 @@ import 'package:myapp/config/app_theme.dart';
 /// looks like one thing: the same search bar, the same avatars, the same
 /// round icon buttons, the same section titles and empty states.
 ///
+/// The look is deliberately quiet, in the way Apple's own apps are: black
+/// and white, grey for anything secondary, and ONE accent colour — blue —
+/// for the thing on a screen you are meant to press. No gradients, no
+/// glows. Colour that is everywhere stops meaning anything; kept to one
+/// place, it tells you where to look.
+///
 /// Everything takes its colours from the theme, so it works in both light
-/// and dark, and from AppTheme's purple-to-pink brand gradient for the
-/// parts that should stand out.
+/// and dark.
 
-/// The brand gradient's two colours, for anything painted with it.
-const List<Color> kBrandColors = [AppTheme.primary, AppTheme.accentPink];
+/// The one accent colour: buttons, links, your own chat bubbles.
+const Color kAccent = AppTheme.primary;
+
+/// Grey for things that sit on the page without being the point of it:
+/// the fill of a search bar, an icon button, a chip.
+Color quietFill(BuildContext context) =>
+    Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.08);
+
+/// Grey for secondary words: handles, times, captions.
+Color quietText(BuildContext context) =>
+    Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
 
 /// A slightly shrinking press, so a tap is felt before anything opens.
 class Pressable extends StatefulWidget {
@@ -20,7 +34,7 @@ class Pressable extends StatefulWidget {
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
 
-  /// How far it shrinks while held. 0.96 is just enough to notice.
+  /// How far it shrinks while held. 0.97 is just enough to notice.
   final double pressedScale;
 
   const Pressable({
@@ -28,7 +42,7 @@ class Pressable extends StatefulWidget {
     required this.child,
     this.onTap,
     this.onLongPress,
-    this.pressedScale = 0.96,
+    this.pressedScale = 0.97,
   });
 
   @override
@@ -58,54 +72,30 @@ class _PressableState extends State<Pressable> {
               HapticFeedback.mediumImpact();
               widget.onLongPress!();
             },
-      child: AnimatedScale(
-        scale: _down ? widget.pressedScale : 1,
+      child: AnimatedOpacity(
+        opacity: _down ? 0.7 : 1,
         duration: const Duration(milliseconds: 110),
-        curve: Curves.easeOut,
-        child: widget.child,
+        child: AnimatedScale(
+          scale: _down ? widget.pressedScale : 1,
+          duration: const Duration(milliseconds: 110),
+          curve: Curves.easeOut,
+          child: widget.child,
+        ),
       ),
     );
   }
 }
 
-/// An icon painted with a gradient instead of one flat colour.
-class GradientIcon extends StatelessWidget {
-  final IconData icon;
-  final double size;
-  final List<Color> colors;
-
-  const GradientIcon(
-    this.icon, {
-    super.key,
-    this.size = 22,
-    this.colors = kBrandColors,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ShaderMask(
-      blendMode: BlendMode.srcIn,
-      shaderCallback: (rect) => LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: colors,
-      ).createShader(rect),
-      child: Icon(icon, size: size, color: Colors.white),
-    );
-  }
-}
-
-/// A person's picture: their initial on a gradient, inside a ring.
+/// A person's picture: their initial on a soft grey disc, the way a
+/// contact without a photo looks on an iPhone.
 ///
-/// The ring says something rather than decorating: the brand gradient when
-/// there is something new from them, their league's colours on a profile or
-/// in search, a plain hairline otherwise. A green dot means they are online.
+/// [ring] draws a thin ring in one colour when it says something: their
+/// league in search, something unread from them in messages. A green dot
+/// means they are online.
 class ArenaAvatar extends StatelessWidget {
   final String name;
   final double size;
-
-  /// Colours for the ring. Null draws a thin neutral ring.
-  final List<Color>? ring;
+  final Color? ring;
   final bool online;
 
   const ArenaAvatar({
@@ -118,19 +108,17 @@ class ArenaAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final bg = Theme.of(context).scaffoldBackgroundColor;
     final initial = name.isEmpty ? '?' : name[0].toUpperCase();
-    final ringWidth = size >= 48 ? 2.5 : 2.0;
-    final fill = _fillFor(name);
+    final ringWidth = size >= 48 ? 2.0 : 1.5;
 
     final face = Container(
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         shape: BoxShape.circle,
         gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: fill,
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFFA5ABB8), Color(0xFF858994)],
         ),
       ),
       alignment: Alignment.center,
@@ -138,8 +126,8 @@ class ArenaAvatar extends StatelessWidget {
         initial,
         style: TextStyle(
           color: Colors.white,
-          fontWeight: FontWeight.w800,
-          fontSize: size * 0.4,
+          fontWeight: FontWeight.w600,
+          fontSize: size * 0.42,
           height: 1,
         ),
       ),
@@ -152,44 +140,37 @@ class ArenaAvatar extends StatelessWidget {
         clipBehavior: Clip.none,
         children: [
           Positioned.fill(
-            child: Container(
-              padding: EdgeInsets.all(ringWidth),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: ring == null
-                    ? null
-                    : LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: ring!,
+            child: ring == null
+                ? face
+                : Container(
+                    padding: EdgeInsets.all(ringWidth),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: ring,
+                    ),
+                    // A gap in the page's own colour, so the ring reads as a
+                    // ring and not as a fatter picture.
+                    child: Container(
+                      padding: EdgeInsets.all(ringWidth),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: bg,
                       ),
-                border: ring == null
-                    ? Border.all(
-                        color: cs.onSurface.withValues(alpha: 0.12),
-                        width: 1,
-                      )
-                    : null,
-              ),
-              // A gap between ring and face, in the page's own colour, so
-              // the ring reads as a ring and not as a fatter avatar.
-              child: Container(
-                padding: EdgeInsets.all(ring == null ? 0 : ringWidth * 0.8),
-                decoration: BoxDecoration(shape: BoxShape.circle, color: bg),
-                child: face,
-              ),
-            ),
+                      child: face,
+                    ),
+                  ),
           ),
           if (online)
             Positioned(
               right: size * 0.02,
               bottom: size * 0.02,
               child: Container(
-                width: size * 0.28,
-                height: size * 0.28,
+                width: size * 0.26,
+                height: size * 0.26,
                 decoration: BoxDecoration(
                   color: AppTheme.success,
                   shape: BoxShape.circle,
-                  border: Border.all(color: bg, width: size * 0.05 + 1),
+                  border: Border.all(color: bg, width: size * 0.045 + 1),
                 ),
               ),
             ),
@@ -197,30 +178,10 @@ class ArenaAvatar extends StatelessWidget {
       ),
     );
   }
-
-  /// Each name gets one of a few fills, so a list of people is not a
-  /// column of identical purple circles, and the same person always gets
-  /// the same colour.
-  static List<Color> _fillFor(String name) {
-    const fills = [
-      [Color(0xFF8B5CF6), Color(0xFFEC4899)],
-      [Color(0xFF06B6D4), Color(0xFF8B5CF6)],
-      [Color(0xFFF59E0B), Color(0xFFEC4899)],
-      [Color(0xFF10B981), Color(0xFF06B6D4)],
-      [Color(0xFF3B82F6), Color(0xFF8B5CF6)],
-      [Color(0xFFEF4444), Color(0xFFF59E0B)],
-    ];
-    var h = 0;
-    for (final c in name.codeUnits) {
-      h = (h * 31 + c) & 0x7fffffff;
-    }
-    return fills[h % fills.length];
-  }
 }
 
-/// A round icon button. Soft and see-through by default; filled with the
-/// brand gradient when [filled] — kept for the one action on a screen that
-/// matters most.
+/// A round icon button. Quiet grey by default; filled with the accent when
+/// [filled] — kept for the one action on a screen that matters most.
 class IconBubble extends StatelessWidget {
   final IconData icon;
   final VoidCallback? onTap;
@@ -228,8 +189,8 @@ class IconBubble extends StatelessWidget {
   final double size;
   final bool filled;
 
-  /// For use over a picture or a coloured header, where the theme's own
-  /// surface colours would disappear.
+  /// For use over a picture or a dark header, where the page's own greys
+  /// would disappear.
   final bool onImage;
 
   const IconBubble({
@@ -246,34 +207,17 @@ class IconBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final Color fg = filled || onImage ? Colors.white : cs.onSurface;
+    final Color bg = filled
+        ? kAccent
+        : onImage
+        ? Colors.black.withValues(alpha: 0.35)
+        : quietFill(context);
     final bubble = Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: filled
-            ? const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: kBrandColors,
-              )
-            : null,
-        color: filled
-            ? null
-            : onImage
-            ? Colors.black.withValues(alpha: 0.28)
-            : cs.onSurface.withValues(alpha: 0.07),
-        border: filled
-            ? null
-            : Border.all(
-                color: onImage
-                    ? Colors.white.withValues(alpha: 0.18)
-                    : cs.onSurface.withValues(alpha: 0.06),
-              ),
-        boxShadow: filled ? AppTheme.glowPrimary(intensity: 0.3) : null,
-      ),
+      decoration: BoxDecoration(shape: BoxShape.circle, color: bg),
       alignment: Alignment.center,
-      child: Icon(icon, size: size * 0.5, color: fg),
+      child: Icon(icon, size: size * 0.48, color: fg),
     );
     final button = Pressable(onTap: onTap, child: bubble);
     if (tooltip == null) return button;
@@ -281,9 +225,9 @@ class IconBubble extends StatelessWidget {
   }
 }
 
-/// The app's search bar: a rounded pill that lights up in the brand colours
-/// while you are typing in it, with a clear button that appears only when
-/// there is something to clear.
+/// The app's search bar, shaped like the one in Apple's apps: a rounded
+/// grey field, a magnifier, and a clear button only when there is
+/// something to clear.
 class ArenaSearchField extends StatefulWidget {
   final TextEditingController controller;
   final FocusNode? focusNode;
@@ -309,21 +253,15 @@ class ArenaSearchField extends StatefulWidget {
 }
 
 class _ArenaSearchFieldState extends State<ArenaSearchField> {
-  FocusNode? _ownFocus;
-  FocusNode get _focus => widget.focusNode ?? (_ownFocus ??= FocusNode());
-
   @override
   void initState() {
     super.initState();
-    _focus.addListener(_rebuild);
     widget.controller.addListener(_rebuild);
   }
 
   @override
   void dispose() {
-    _focus.removeListener(_rebuild);
     widget.controller.removeListener(_rebuild);
-    _ownFocus?.dispose();
     super.dispose();
   }
 
@@ -334,114 +272,66 @@ class _ArenaSearchFieldState extends State<ArenaSearchField> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final focused = _focus.hasFocus;
     final hasText = widget.controller.text.isNotEmpty;
 
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 180),
-      height: 48,
-      padding: const EdgeInsets.all(1.5),
+    return Container(
+      height: 40,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppTheme.radiusFull),
-        // The border is the gradient: a padded box painted with it, and the
-        // field on top in the surface colour.
-        gradient: LinearGradient(
-          colors: focused
-              ? kBrandColors
-              : [
-                  cs.onSurface.withValues(alpha: 0.08),
-                  cs.onSurface.withValues(alpha: 0.08),
-                ],
-        ),
-        boxShadow: focused ? AppTheme.glowPrimary(intensity: 0.22) : null,
+        color: quietFill(context),
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
       ),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Color.alphaBlend(
-            cs.onSurface.withValues(alpha: 0.05),
-            Theme.of(context).scaffoldBackgroundColor,
-          ),
-          borderRadius: BorderRadius.circular(AppTheme.radiusFull),
-        ),
-        child: Row(
-          children: [
-            const SizedBox(width: 14),
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 180),
-              child: focused
-                  ? const GradientIcon(
-                      Icons.search_rounded,
-                      key: ValueKey('on'),
-                      size: 22,
-                    )
-                  : Icon(
-                      Icons.search_rounded,
-                      key: const ValueKey('off'),
-                      size: 22,
-                      color: cs.onSurface.withValues(alpha: 0.5),
-                    ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: TextField(
-                controller: widget.controller,
-                focusNode: _focus,
-                onChanged: widget.onChanged,
-                onSubmitted: widget.onSubmitted,
-                textInputAction: TextInputAction.search,
-                cursorColor: AppTheme.primary,
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500,
-                  color: cs.onSurface,
-                ),
-                decoration: InputDecoration(
-                  hintText: widget.hint,
-                  hintStyle: TextStyle(
-                    fontSize: 15,
-                    color: cs.onSurface.withValues(alpha: 0.45),
-                  ),
-                  filled: false,
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  isCollapsed: true,
-                ),
+      child: Row(
+        children: [
+          const SizedBox(width: 10),
+          Icon(Icons.search_rounded, size: 20, color: quietText(context)),
+          const SizedBox(width: 6),
+          Expanded(
+            child: TextField(
+              controller: widget.controller,
+              focusNode: widget.focusNode,
+              onChanged: widget.onChanged,
+              onSubmitted: widget.onSubmitted,
+              textInputAction: TextInputAction.search,
+              cursorColor: kAccent,
+              style: TextStyle(fontSize: 16, color: cs.onSurface),
+              decoration: InputDecoration(
+                hintText: widget.hint,
+                hintStyle: TextStyle(fontSize: 16, color: quietText(context)),
+                filled: false,
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                isCollapsed: true,
               ),
             ),
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 150),
-              transitionBuilder: (c, a) => ScaleTransition(scale: a, child: c),
-              child: hasText
-                  ? IconButton(
-                      key: const ValueKey('clear'),
-                      tooltip: 'Clear',
-                      visualDensity: VisualDensity.compact,
-                      icon: Icon(
-                        Icons.cancel_rounded,
-                        size: 20,
-                        color: cs.onSurface.withValues(alpha: 0.45),
-                      ),
-                      onPressed: () {
-                        widget.controller.clear();
-                        widget.onChanged?.call('');
-                        widget.onCleared?.call();
-                      },
-                    )
-                  : const SizedBox(width: 14, key: ValueKey('none')),
-            ),
-          ],
-        ),
+          ),
+          if (hasText)
+            IconButton(
+              tooltip: 'Clear',
+              visualDensity: VisualDensity.compact,
+              icon: Icon(
+                Icons.cancel_rounded,
+                size: 18,
+                color: quietText(context),
+              ),
+              onPressed: () {
+                widget.controller.clear();
+                widget.onChanged?.call('');
+                widget.onCleared?.call();
+              },
+            )
+          else
+            const SizedBox(width: 10),
+        ],
       ),
     );
   }
 }
 
-/// A section's title: a small gradient icon, the words, and an optional
-/// action on the right ("See all").
+/// A section's title, with an optional action on the right ("See all") in
+/// the accent colour, the way a link looks.
 class SectionTitle extends StatelessWidget {
   final String title;
-  final IconData? icon;
   final String? action;
   final VoidCallback? onAction;
   final EdgeInsetsGeometry padding;
@@ -449,30 +339,24 @@ class SectionTitle extends StatelessWidget {
   const SectionTitle({
     super.key,
     required this.title,
-    this.icon,
     this.action,
     this.onAction,
-    this.padding = const EdgeInsets.fromLTRB(16, 18, 8, 8),
+    this.padding = const EdgeInsets.fromLTRB(16, 20, 8, 8),
   });
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     return Padding(
       padding: padding,
       child: Row(
         children: [
-          if (icon != null) ...[
-            GradientIcon(icon!, size: 18),
-            const SizedBox(width: 8),
-          ],
           Expanded(
             child: Text(
               title,
               style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.2,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.3,
               ),
             ),
           ),
@@ -480,15 +364,18 @@ class SectionTitle extends StatelessWidget {
             TextButton(
               onPressed: onAction,
               style: TextButton.styleFrom(
-                foregroundColor: cs.onSurface.withValues(alpha: 0.7),
+                foregroundColor: kAccent,
                 visualDensity: VisualDensity.compact,
               ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(action!),
-                  const Icon(Icons.chevron_right_rounded, size: 18),
-                ],
+              // Size and weight on the Text, not the button: a button's
+              // own text style replaces the app's font rather than adding
+              // to it.
+              child: Text(
+                action!,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ),
         ],
@@ -497,14 +384,14 @@ class SectionTitle extends StatelessWidget {
   }
 }
 
-/// A button filled with the brand gradient.
-class GradientButton extends StatelessWidget {
+/// The main button on a screen: solid accent, white words.
+class PrimaryButton extends StatelessWidget {
   final String label;
   final IconData? icon;
   final VoidCallback? onPressed;
   final double height;
 
-  const GradientButton({
+  const PrimaryButton({
     super.key,
     required this.label,
     this.icon,
@@ -520,9 +407,8 @@ class GradientButton extends StatelessWidget {
         height: height,
         padding: const EdgeInsets.symmetric(horizontal: 20),
         decoration: BoxDecoration(
-          gradient: const LinearGradient(colors: kBrandColors),
-          borderRadius: BorderRadius.circular(AppTheme.radiusFull),
-          boxShadow: AppTheme.glowPrimary(intensity: 0.3),
+          color: kAccent,
+          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
         ),
         alignment: Alignment.center,
         child: Row(
@@ -536,8 +422,8 @@ class GradientButton extends StatelessWidget {
               label,
               style: const TextStyle(
                 color: Colors.white,
-                fontWeight: FontWeight.w700,
-                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                fontSize: 15,
               ),
             ),
           ],
@@ -547,8 +433,8 @@ class GradientButton extends StatelessWidget {
   }
 }
 
-/// What a screen shows when there is nothing in it yet: a gradient icon in
-/// a soft glow, one line saying what is missing, one saying what to do.
+/// What a screen shows when there is nothing in it yet: a large grey
+/// icon, one line saying what is missing, one saying what to do.
 class ArenaEmptyState extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -569,36 +455,24 @@ class ArenaEmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     return Center(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32),
+        padding: const EdgeInsets.symmetric(horizontal: 36),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 88,
-              height: 88,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: RadialGradient(
-                  colors: [
-                    AppTheme.primary.withValues(alpha: 0.22),
-                    AppTheme.accentPink.withValues(alpha: 0.04),
-                  ],
-                ),
-                border: Border.all(
-                  color: AppTheme.primary.withValues(alpha: 0.25),
-                ),
-              ),
-              alignment: Alignment.center,
-              child: GradientIcon(icon, size: 40),
+            Icon(
+              icon,
+              size: 52,
+              color: Theme.of(
+                context,
+              ).colorScheme.onSurface.withValues(alpha: 0.3),
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 14),
             Text(
               title,
               textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
             if (subtitle != null) ...[
               const SizedBox(height: 6),
@@ -606,15 +480,15 @@ class ArenaEmptyState extends StatelessWidget {
                 subtitle!,
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 13.5,
+                  fontSize: 14,
                   height: 1.4,
-                  color: cs.onSurface.withValues(alpha: 0.6),
+                  color: quietText(context),
                 ),
               ),
             ],
             if (actionLabel != null && onAction != null) ...[
-              const SizedBox(height: 18),
-              GradientButton(
+              const SizedBox(height: 20),
+              PrimaryButton(
                 label: actionLabel!,
                 icon: actionIcon,
                 onPressed: onAction,
@@ -627,14 +501,16 @@ class ArenaEmptyState extends StatelessWidget {
   }
 }
 
-/// Tabs drawn as a segmented track: the chosen one fills with the brand
-/// gradient and slides between the others.
+/// Tabs drawn as a segmented control, like the one in Apple's apps: a grey
+/// track, and the chosen tab raised on a lighter piece that slides.
 ///
 /// [scrollable] for a row that may not fit the screen (a profile with seven
 /// tabs); otherwise the tabs share the width equally.
 class ArenaPillTabs extends StatelessWidget {
   final TabController controller;
-  final List<({IconData icon, String label})> tabs;
+
+  /// Each tab's words, and an optional icon before them.
+  final List<({IconData? icon, String label})> tabs;
   final bool scrollable;
 
   const ArenaPillTabs({
@@ -647,12 +523,13 @@ class ArenaPillTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Container(
-      height: 44,
-      padding: const EdgeInsets.all(4),
+      height: 36,
+      padding: const EdgeInsets.all(2),
       decoration: BoxDecoration(
-        color: cs.onSurface.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+        color: quietFill(context),
+        borderRadius: BorderRadius.circular(9),
       ),
       child: TabBar(
         controller: controller,
@@ -662,23 +539,32 @@ class ArenaPillTabs extends StatelessWidget {
         labelPadding: EdgeInsets.zero,
         dividerColor: Colors.transparent,
         indicatorSize: TabBarIndicatorSize.tab,
-        splashBorderRadius: BorderRadius.circular(AppTheme.radiusFull),
+        splashFactory: NoSplash.splashFactory,
+        overlayColor: WidgetStateProperty.all(Colors.transparent),
         indicator: BoxDecoration(
-          gradient: const LinearGradient(colors: kBrandColors),
-          borderRadius: BorderRadius.circular(AppTheme.radiusFull),
-          boxShadow: AppTheme.glowPrimary(intensity: 0.25),
+          color: dark ? const Color(0xFF636366) : Colors.white,
+          borderRadius: BorderRadius.circular(7),
+          boxShadow: dark
+              ? null
+              : [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.12),
+                    blurRadius: 4,
+                    offset: const Offset(0, 1),
+                  ),
+                ],
         ),
-        labelColor: Colors.white,
-        unselectedLabelColor: cs.onSurface.withValues(alpha: 0.65),
-        labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+        labelColor: cs.onSurface,
+        unselectedLabelColor: cs.onSurface.withValues(alpha: 0.75),
+        labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
         unselectedLabelStyle: const TextStyle(
           fontSize: 13,
-          fontWeight: FontWeight.w600,
+          fontWeight: FontWeight.w500,
         ),
         tabs: [
           for (final t in tabs)
             Tab(
-              height: 36,
+              height: 32,
               child: Padding(
                 padding: EdgeInsets.symmetric(horizontal: scrollable ? 14 : 6),
                 // Scales down rather than overflowing on a narrow phone.
@@ -687,8 +573,10 @@ class ArenaPillTabs extends StatelessWidget {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(t.icon, size: 16),
-                      const SizedBox(width: 6),
+                      if (t.icon != null) ...[
+                        Icon(t.icon, size: 15),
+                        const SizedBox(width: 5),
+                      ],
                       Text(t.label),
                     ],
                   ),
@@ -701,31 +589,30 @@ class ArenaPillTabs extends StatelessWidget {
   }
 }
 
-/// A small rounded label with an icon — for a league, a count, a status.
+/// A small rounded label — a league, a record, a status. Grey unless it is
+/// given a [color] that means something.
 class InfoChip extends StatelessWidget {
   final String label;
   final IconData? icon;
-  final Color color;
+  final Color? color;
 
-  const InfoChip({
-    super.key,
-    required this.label,
-    this.icon,
-    required this.color,
-  });
+  const InfoChip({super.key, required this.label, this.icon, this.color});
 
   @override
   Widget build(BuildContext context) {
+    final c = color;
     // Bright colours (gold, silver) vanish on a light page, so the words
     // take a darker shade of the same colour there.
-    final ink = Theme.of(context).brightness == Brightness.light
-        ? Color.lerp(color, Colors.black, 0.4)!
-        : color;
+    final Color ink = c == null
+        ? quietText(context)
+        : Theme.of(context).brightness == Brightness.light
+        ? Color.lerp(c, Colors.black, 0.4)!
+        : c;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+        color: c == null ? quietFill(context) : c.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -737,8 +624,8 @@ class InfoChip extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
               color: ink,
             ),
           ),
