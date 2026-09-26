@@ -80,11 +80,16 @@ class EventTracker {
 
   /// Track content view with watch duration.
   /// This is the #1 signal — completion rate tells us more than any like.
+  ///
+  /// [metadata] on a battle says how long each side was on screen — see
+  /// BattleFaceClock — which is how the battle's views are split between
+  /// the two people in it.
   void trackView({
     required String contentId,
     required String contentType,
     required int watchDurationMs,
     required int totalDurationMs,
+    Map<String, dynamic>? metadata,
   }) {
     _track(
       contentId: contentId,
@@ -92,6 +97,7 @@ class EventTracker {
       eventType: 'view',
       watchDurationMs: watchDurationMs,
       totalDurationMs: totalDurationMs,
+      metadata: metadata,
     );
   }
 
@@ -111,8 +117,17 @@ class EventTracker {
   }
 
   /// Track share action — highest intent signal.
-  void trackShare({required String contentId, required String contentType}) {
-    _track(contentId: contentId, contentType: contentType, eventType: 'share');
+  void trackShare({
+    required String contentId,
+    required String contentType,
+    Map<String, dynamic>? metadata,
+  }) {
+    _track(
+      contentId: contentId,
+      contentType: contentType,
+      eventType: 'share',
+      metadata: metadata,
+    );
   }
 
   /// Track save/bookmark.
@@ -160,6 +175,7 @@ class EventTracker {
     required String contentType,
     int watchDurationMs = 0,
     int totalDurationMs = 0,
+    Map<String, dynamic>? metadata,
   }) {
     _track(
       contentId: contentId,
@@ -167,6 +183,7 @@ class EventTracker {
       eventType: 'rewatch',
       watchDurationMs: watchDurationMs,
       totalDurationMs: totalDurationMs,
+      metadata: metadata,
     );
   }
 
@@ -250,6 +267,7 @@ class EventTracker {
     required String contentId,
     required String contentType,
     required int totalDurationMs,
+    Map<String, dynamic>? metadata,
   }) {
     _track(
       contentId: contentId,
@@ -257,6 +275,7 @@ class EventTracker {
       eventType: 'complete',
       watchDurationMs: totalDurationMs,
       totalDurationMs: totalDurationMs,
+      metadata: metadata,
     );
   }
 

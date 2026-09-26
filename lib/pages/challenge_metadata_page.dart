@@ -62,6 +62,10 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
 
   String _visibility = 'arena';
 
+  /// How many days the battle runs once somebody answers. The server keeps
+  /// it between 7 and 30.
+  String _battleDays = '7';
+
   /// What the creator says the video is about. Null means they did not say.
   ///
   /// It used to start on 'other', and that made the whole field useless.
@@ -251,6 +255,7 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
       // creator's subject tags ever were.
       tags: _tags,
       emotionTags: const [],
+      battleDays: int.parse(_battleDays),
     );
 
     // Prepared path: the upload has (usually) been running since this
@@ -333,6 +338,28 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
                   ('friends', 'Friends only'),
                 ],
                 onChanged: (v) => setState(() => _visibility = v),
+              ),
+
+              const SizedBox(height: 24),
+              _section('Battle length'),
+              _segmented(
+                cs: cs,
+                value: _battleDays,
+                options: const [
+                  ('7', '1 week'),
+                  ('14', '2 weeks'),
+                  ('30', '30 days'),
+                ],
+                onChanged: (v) => setState(() => _battleDays = v),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Voting starts when someone accepts. You can make it longer '
+                'later, never shorter.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: cs.onSurface.withValues(alpha: 0.6),
+                ),
               ),
 
               const SizedBox(height: 24),

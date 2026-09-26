@@ -147,23 +147,31 @@ class _FeedActionBarState extends State<FeedActionBar> {
 
   void _onVote(String responseId, String username) async {
     final dp = Provider.of<DataProvider>(context, listen: false);
+    final before = (_voted, _votedFor);
     setState(() {
       _voted = true;
       _votedFor = username;
     });
-    await ApiService.voteChallenge(
+    final res = await ApiService.voteChallenge(
       challengeId: widget.challenge.id,
       responseId: responseId,
       voterId: dp.user!.id,
     );
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Voted for $username!'),
-          duration: const Duration(seconds: 1),
-        ),
-      );
+    if (!mounted) return;
+    // This used to say "Voted for …!" whatever the server answered, so a
+    // vote that was never saved looked exactly like one that was.
+    if (!res.ok) {
+      setState(() {
+        _voted = before.$1;
+        _votedFor = before.$2;
+      });
     }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(res.ok ? 'Voted for $username!' : res.message),
+        duration: Duration(seconds: res.ok ? 1 : 3),
+      ),
+    );
   }
 
   @override

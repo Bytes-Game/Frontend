@@ -61,6 +61,9 @@ class ChallengeModel {
   final String topResponseThumbnailUrl;
   final String topResponseUsername;
   final String topResponseLeague;
+
+  /// The answer's own likes. See _ReelItem.opponentLikes.
+  final int topResponseLikes;
   /// Multi-bitrate variants for the opponent video (see [videoVariants]).
   /// Empty when the response was uploaded before the multi-bitrate feature
   /// shipped — readers should fall back to [topResponseVideoUrl].
@@ -103,6 +106,7 @@ class ChallengeModel {
   this.topResponseThumbnailUrl = '',
   this.topResponseUsername = '',
   this.topResponseLeague = '',
+  this.topResponseLikes = 0,
   this.topResponseVideoVariants = const {},
   this.topResponseHlsManifestUrl = '',
   });
@@ -159,6 +163,7 @@ class ChallengeModel {
       topResponseThumbnailUrl: json['topResponseThumbnailUrl'] ?? '',
       topResponseUsername: json['topResponseUsername'] ?? '',
       topResponseLeague: json['topResponseLeague'] ?? '',
+      topResponseLikes: json['topResponseLikes'] as int? ?? 0,
       topResponseVideoVariants:
           (json['topResponseVideoVariants'] as Map<String, dynamic>?)
                   ?.map((k, v) => MapEntry(k, v?.toString() ?? '')) ??

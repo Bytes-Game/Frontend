@@ -12,6 +12,7 @@ import 'package:myapp/pages/challenge_detail_page.dart';
 import 'package:myapp/pages/profile_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/battle_face_clock.dart';
 import 'package:myapp/services/connection_prewarm_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/feed_paging.dart';
@@ -868,10 +869,13 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     if (_currentIndex < 0 || _currentIndex >= _items.length) return;
     final item = _items[_currentIndex];
     final state = _playerStates[_currentIndex];
-    final watched = DateTime.now()
-        .difference(_currentItemStart!)
-        .inMilliseconds;
+    final now = DateTime.now();
+    final watched = now.difference(_currentItemStart!).inMilliseconds;
     final totalMs = state?.controller.value.duration.inMilliseconds ?? 0;
+    // On a battle: how long each side was on screen. Read once, here, even
+    // for a skip — reading it also starts the next view's count clean.
+    final details =
+        item is _ReelItem ? item.viewDetails(_currentItemStart!, now) : null;
 
     // Impression with true dwell — one per reel exit, INCLUDING quick
     // skips. The backend diverts these into its Redis impression
@@ -903,6 +907,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
           contentType: item.type,
           watchDurationMs: watched,
           totalDurationMs: totalMs,
+          metadata: details,
         );
       } else {
         EventTracker.instance.trackView(
@@ -910,6 +915,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
           contentType: item.type,
           watchDurationMs: watched,
           totalDurationMs: totalMs,
+          metadata: details,
         );
       }
       // Also fire a watch_event so challenges.views grows in lockstep
@@ -1370,6 +1376,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
           contentId: item.id,
           contentType: item.type,
           totalDurationMs: dur.inMilliseconds,
+          metadata: item.sideDetails,
         );
       }
 
@@ -1385,6 +1392,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
             contentId: item.id,
             contentType: item.type,
             totalDurationMs: dur.inMilliseconds,
+            metadata: item.sideDetails,
           );
         }
         _loopCount++;
@@ -1687,6 +1695,13 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       _toast('Sign in to like');
       return;
     }
+    // A battle likes whichever side is on screen. Every like used to go to
+    // the challenge — the creator — so an answer could never be liked, and
+    // likes, the first tiebreak after votes, always favoured the creator.
+    if (item.isBattle && item.faces.showingOpponent) {
+      _likeAnswer(item);
+      return;
+    }
     EventTracker.instance.trackLike(contentId: item.id, contentType: item.type);
     // Optimistic — flip the icon and bump the count immediately so the
     // tap feels instant on slow networks.
@@ -1711,6 +1726,35 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     }
   }
 
+  /// Like, or un-like, the answer on a battle reel. Same optimistic shape as
+  /// [_onLike], against the answer's own like endpoint.
+  Future<void> _likeAnswer(_ReelItem item) async {
+    final rid = item.opponentResponseId;
+    if (rid.isEmpty) return;
+    EventTracker.instance.trackLike(contentId: rid, contentType: 'response');
+    final wasLiked = item.opponentLiked;
+    setState(() {
+      item.opponentLiked = !wasLiked;
+      item.opponentLikes =
+          (item.opponentLikes + (wasLiked ? -1 : 1)).clamp(0, 1 << 31);
+    });
+    final result = await ApiService.likeResponse(responseId: rid);
+    if (!mounted) return;
+    setState(() {
+      if (result == null) {
+        // Put it back: a heart that stays red after a failed like tells
+        // the viewer it counted when it did not.
+        item.opponentLiked = wasLiked;
+        item.opponentLikes =
+            (item.opponentLikes + (wasLiked ? 1 : -1)).clamp(0, 1 << 31);
+        return;
+      }
+      item.opponentLiked = result['liked'] == true;
+      final serverLikes = result['likes'];
+      if (serverLikes is int) item.opponentLikes = serverLikes;
+    });
+  }
+
   /// Open the share sheet for the reel at [index]. Uses the same
   /// [ChallengeShareSheet] the FeedActionBar shows, so the in-app
   /// chat-share + copy-link UX is identical from either surface.
@@ -1722,6 +1766,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     EventTracker.instance.trackShare(
       contentId: item.id,
       contentType: item.type,
+      metadata: item.sideDetails,
     );
     // The share sheet expects a full ChallengeModel — we synthesize one
     // from the lighter _ReelItem since that's all the feed payload
@@ -1796,14 +1841,16 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
           voterId: userId,
         );
         if (!mounted) return;
-        if (res == null) {
+        if (!res.ok) {
           // Roll back the optimistic flip on a failed vote so the
-          // user can retry instead of believing their vote landed.
+          // user can retry instead of believing their vote landed —
+          // and say why, when the server said: "This battle has
+          // ended." is not something a retry fixes.
           setState(() {
             item.hasVoted = false;
             item.votedFor = '';
           });
-          _toast('Vote failed. Try again.');
+          _toast(res.message);
         } else {
           _toast('Voted for $username!');
         }
@@ -2289,6 +2336,35 @@ class _ReelItem implements _FeedEntry {
   int comments;
   bool isLiked;
 
+  /// The answer's own likes, and whether we have liked it. On a battle the
+  /// heart likes whichever side is on screen — the creator's challenge or
+  /// the answer — and shows that side's count. Before this every like went
+  /// to the creator, so an answer could never have any.
+  int opponentLikes;
+  bool opponentLiked = false;
+
+  /// Which side of a battle is on screen, and for how long. The card turns
+  /// it on every flip; views, completions and shares read it so the server
+  /// can count them for the side that was actually watched.
+  final BattleFaceClock faces = BattleFaceClock();
+
+  /// The heart's state and count for whichever side is on screen.
+  bool get heartOn => faces.showingOpponent ? opponentLiked : isLiked;
+  int get heartCount => faces.showingOpponent ? opponentLikes : likes;
+
+  /// Details a view of this reel carries: for a battle, how long each side
+  /// was watched between [since] and [now]. Null for a plain short.
+  Map<String, dynamic>? viewDetails(DateTime since, DateTime now) => isBattle
+      ? faces.viewDetails(
+          responseId: opponentResponseId, since: since, now: now)
+      : null;
+
+  /// Details a completion or share on this reel carries: for a battle, the
+  /// side on screen. Null for a plain short.
+  Map<String, dynamic>? get sideDetails => isBattle
+      ? faces.sideDetails(responseId: opponentResponseId)
+      : null;
+
   /// Local optimistic save state. Backend-truth is the response of
   /// ApiService.toggleSaveChallenge; we surface this immediately so the
   /// bookmark icon flips on tap without waiting for the round trip.
@@ -2342,6 +2418,7 @@ class _ReelItem implements _FeedEntry {
     required this.views,
     required this.comments,
     required this.isLiked,
+    this.opponentLikes = 0,
     this.isRepeat = false,
   });
 
@@ -2456,6 +2533,7 @@ class _ReelItem implements _FeedEntry {
         opponentThumbnailUrl: (c['topResponseThumbnailUrl'] as String?) ?? '',
         opponentUsername: (c['topResponseUsername'] as String?) ?? '',
         opponentLeague: (c['topResponseLeague'] as String?) ?? '',
+        opponentLikes: c['topResponseLikes'] as int? ?? 0,
         likes: c['likes'] as int? ?? 0,
         views: c['views'] as int? ?? 0,
         // commentCount lands on the wire alongside likes/views — populated
@@ -2522,6 +2600,7 @@ class _ReelItem implements _FeedEntry {
       opponentThumbnailUrl: c.topResponseThumbnailUrl,
       opponentUsername: c.topResponseUsername,
       opponentLeague: c.topResponseLeague,
+      opponentLikes: c.topResponseLikes,
       likes: c.likes,
       views: c.views,
       comments: c.commentCount,
@@ -3201,6 +3280,9 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   /// and battle_switch events. Cube geometry is driven separately by
   /// [_cubeCtl] — callers pair this with a snap or a settle animation.
   void _commitSide(bool show, {bool track = true}) {
+    // Before anything else, so the time up to this instant counts for the
+    // side that was showing. See BattleFaceClock.
+    widget.item.faces.turn(opponent: show);
     setState(() {
       _showingOpponent = show;
       _isPaused = false; // resume on swap so the new side autoplays
@@ -3797,9 +3879,9 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                 const SizedBox(height: 18),
               ],
               _Action(
-                icon: item.isLiked ? Icons.favorite : Icons.favorite_border,
-                color: item.isLiked ? Colors.red : Colors.white,
-                label: _compact(item.likes),
+                icon: item.heartOn ? Icons.favorite : Icons.favorite_border,
+                color: item.heartOn ? Colors.red : Colors.white,
+                label: _compact(item.heartCount),
                 onTap: widget.onLike,
               ),
               const SizedBox(height: 18),
