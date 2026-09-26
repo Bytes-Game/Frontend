@@ -1,26 +1,31 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
 import 'package:myapp/pages/chat_conversation_page.dart';
+import 'package:myapp/widgets/arena_ui.dart';
+import 'package:myapp/widgets/league_badge.dart';
 import 'package:myapp/widgets/shimmer_loading.dart';
 
-/// Instagram's DM blue — used for the unread dot, "Requests" link and
-/// primary actions so the whole messaging surface reads as one system.
-const Color kDmBlue = Color(0xFF3797EF);
-
-/// Chat inbox — Instagram Direct layout, point for point:
-///   * Header: your own username (bold, chevron-down) left, compose
-///     (pencil-in-square) right. No centered "Messages" AppBar.
-///   * Rounded grey search field that live-filters conversations.
-///   * "Messages" section title with the blue "Requests" link at right.
-///   * Rows: 56px avatar (green active dot), name, "preview · 2h" second
-///     line; unread rows go bold with a blue dot; a camera glyph sits at
-///     the far right of every row, exactly like IG.
+/// The inbox.
+///
+/// From the top:
+///   * "Messages", and a new-message button in the brand gradient.
+///   * The app's search bar, filtering your chats as you type.
+///   * "Active now": the people you talk to who are online right now, as a
+///     row of pictures — tap one to open the chat. Only there when someone
+///     is online, so it never takes space to say nothing.
+///   * Your chats. A chat with something unread gets a gradient ring round
+///     the picture, a bold name and a count; the time sits top right.
+///
+/// Every icon here does something. The old row had a camera on every line
+/// and a "Requests" link, and neither did anything but say "not yet".
 class ChatListPage extends StatefulWidget {
   const ChatListPage({super.key});
 
@@ -90,8 +95,7 @@ class _ChatListPageState extends State<ChatListPage>
     });
   }
 
-  /// Search filters the loaded conversations client-side — matches IG,
-  /// which surfaces existing threads instantly as you type.
+  /// Search filters the loaded conversations as you type.
   List<Map<String, dynamic>> get _filtered {
     if (_query.isEmpty) return _conversations;
     final q = _query.toLowerCase();
@@ -100,6 +104,11 @@ class _ChatListPageState extends State<ChatListPage>
             (c['username'] as String? ?? '').toLowerCase().contains(q))
         .toList();
   }
+
+  /// The people you talk to who are online right now.
+  List<Map<String, dynamic>> get _activeNow => _conversations
+      .where((c) => _onlineStatus[c['username'] ?? ''] == true)
+      .toList();
 
   void _openChat(String userId, String username) {
     EventTracker.instance.trackChatOpen(
@@ -126,70 +135,13 @@ class _ChatListPageState extends State<ChatListPage>
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (ctx) => DraggableScrollableSheet(
-        initialChildSize: 0.7,
-        minChildSize: 0.4,
-        maxChildSize: 0.9,
-        expand: false,
-        builder: (_, scrollCtrl) => Column(
-          children: [
-            const SizedBox(height: 12),
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Theme.of(ctx).colorScheme.outline,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text('New message',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.bold)),
-            const Divider(),
-            Expanded(
-              child: ListView.builder(
-                controller: scrollCtrl,
-                itemCount: users.length,
-                itemBuilder: (_, i) {
-                  final u = users[i];
-                  return ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor:
-                          Theme.of(context).colorScheme.primaryContainer,
-                      child: Text(
-                        u.username.isNotEmpty
-                            ? u.username[0].toUpperCase()
-                            : '?',
-                        style: TextStyle(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onPrimaryContainer,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    title: Text(u.username,
-                        style: const TextStyle(fontWeight: FontWeight.w600)),
-                    subtitle: Text(u.league,
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurface
-                                .withValues(alpha: 0.5))),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _openChat(u.id, u.username);
-                    },
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
+      showDragHandle: true,
+      builder: (ctx) => _NewChatSheet(
+        users: users,
+        onPick: (u) {
+          Navigator.pop(ctx);
+          _openChat(u.id, u.username);
+        },
       ),
     );
   }
@@ -197,118 +149,46 @@ class _ChatListPageState extends State<ChatListPage>
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final myUsername =
-        Provider.of<DataProvider>(context, listen: false).user?.username ??
-            '';
+    final active = _activeNow;
+    final showActive = active.isNotEmpty && _query.isEmpty;
 
     return Scaffold(
       body: SafeArea(
         child: Column(
           children: [
-            // ── Header: own username + chevron left, compose right ──
+            // ── Header: title left, new message right ──
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 8, 4),
+              padding: const EdgeInsets.fromLTRB(20, 10, 16, 6),
               child: Row(
                 children: [
-                  Flexible(
+                  const Expanded(
                     child: Text(
-                      myUsername,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 2),
-                  const Icon(Icons.keyboard_arrow_down_rounded, size: 24),
-                  const Spacer(),
-                  IconButton(
-                    icon: const Icon(Icons.edit_square, size: 24),
-                    tooltip: 'New message',
-                    onPressed: _showNewChatPicker,
-                  ),
-                ],
-              ),
-            ),
-
-            // ── Search bar — rounded grey field, magnifier + "Search" ──
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
-              child: Container(
-                height: 38,
-                decoration: BoxDecoration(
-                  color: cs.surfaceContainerHighest.withValues(alpha: 0.7),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  children: [
-                    const SizedBox(width: 10),
-                    Icon(Icons.search,
-                        size: 20, color: cs.onSurface.withValues(alpha: 0.5)),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: TextField(
-                        controller: _searchCtrl,
-                        onChanged: (v) => setState(() => _query = v.trim()),
-                        decoration: InputDecoration(
-                          hintText: 'Search',
-                          hintStyle: TextStyle(
-                            fontSize: 15,
-                            color: cs.onSurface.withValues(alpha: 0.5),
-                          ),
-                          border: InputBorder.none,
-                          isCollapsed: true,
-                        ),
-                        style: const TextStyle(fontSize: 15),
-                      ),
-                    ),
-                    if (_query.isNotEmpty)
-                      GestureDetector(
-                        onTap: () {
-                          _searchCtrl.clear();
-                          setState(() => _query = '');
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.all(8),
-                          child: Icon(Icons.cancel,
-                              size: 16,
-                              color: cs.onSurface.withValues(alpha: 0.4)),
-                        ),
-                      ),
-                    const SizedBox(width: 4),
-                  ],
-                ),
-              ),
-            ),
-
-            // ── Section row: "Messages" + blue "Requests" ──
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 2, 16, 6),
-              child: Row(
-                children: [
-                  const Text('Messages',
+                      'Messages',
                       style: TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.w700)),
-                  const Spacer(),
-                  GestureDetector(
-                    onTap: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('No message requests'),
-                          duration: Duration(seconds: 1),
-                          behavior: SnackBarBehavior.floating,
-                        ),
-                      );
-                    },
-                    child: const Text('Requests',
-                        style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: kDmBlue)),
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                  ),
+                  IconBubble(
+                    icon: Icons.edit_rounded,
+                    tooltip: 'New message',
+                    filled: true,
+                    size: 42,
+                    onTap: _showNewChatPicker,
                   ),
                 ],
+              ),
+            ),
+
+            // ── Search ──
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
+              child: ArenaSearchField(
+                controller: _searchCtrl,
+                hint: 'Search chats',
+                onChanged: (v) => setState(() => _query = v.trim()),
               ),
             ),
 
@@ -317,22 +197,78 @@ class _ChatListPageState extends State<ChatListPage>
               child: _loading
                   ? const ChatListSkeleton()
                   : _conversations.isEmpty
-                      ? _EmptyInbox(onCompose: _showNewChatPicker)
+                      ? ArenaEmptyState(
+                          icon: Icons.forum_rounded,
+                          title: 'Message your friends',
+                          subtitle: 'Send private messages or share your '
+                              'favourite battles.',
+                          actionLabel: 'Start a chat',
+                          actionIcon: Icons.edit_rounded,
+                          onAction: _showNewChatPicker,
+                        )
                       : RefreshIndicator(
                           onRefresh: _load,
-                          child: ListView.builder(
-                            padding: EdgeInsets.zero,
-                            itemCount: _filtered.length,
-                            itemBuilder: (_, i) => _ConversationTile(
-                              conversation: _filtered[i],
-                              isOnline: _onlineStatus[
-                                      _filtered[i]['username'] ?? ''] ??
-                                  false,
-                              onTap: () => _openChat(
-                                _filtered[i]['userId'] ?? '',
-                                _filtered[i]['username'] ?? '',
+                          child: ListView(
+                            padding: const EdgeInsets.only(bottom: 16),
+                            children: [
+                              if (showActive) ...[
+                                const SectionTitle(
+                                  title: 'Active now',
+                                  icon: Icons.bolt_rounded,
+                                  padding: EdgeInsets.fromLTRB(20, 14, 16, 8),
+                                ),
+                                SizedBox(
+                                  height: 86,
+                                  child: ListView.separated(
+                                    scrollDirection: Axis.horizontal,
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 16),
+                                    itemCount: active.length,
+                                    separatorBuilder: (_, _) =>
+                                        const SizedBox(width: 14),
+                                    itemBuilder: (_, i) {
+                                      final c = active[i];
+                                      final name =
+                                          c['username'] as String? ?? '';
+                                      return _ActivePerson(
+                                        name: name,
+                                        onTap: () => _openChat(
+                                            c['userId'] ?? '', name),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ],
+                              SectionTitle(
+                                title: _query.isEmpty ? 'Chats' : 'Results',
+                                icon: Icons.chat_bubble_rounded,
+                                padding:
+                                    const EdgeInsets.fromLTRB(20, 14, 16, 4),
                               ),
-                            ),
+                              if (_filtered.isEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.all(32),
+                                  child: Text(
+                                    'No chats match "$_query"',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color:
+                                          cs.onSurface.withValues(alpha: 0.5),
+                                    ),
+                                  ),
+                                ),
+                              for (final c in _filtered)
+                                _ConversationTile(
+                                  conversation: c,
+                                  isOnline:
+                                      _onlineStatus[c['username'] ?? ''] ??
+                                          false,
+                                  onTap: () => _openChat(
+                                    c['userId'] ?? '',
+                                    c['username'] ?? '',
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
             ),
@@ -343,58 +279,43 @@ class _ChatListPageState extends State<ChatListPage>
   }
 }
 
-/// IG-style empty inbox: icon in a thin circle, headline, sub-line and a
-/// blue "Send message" affordance that opens the people picker.
-class _EmptyInbox extends StatelessWidget {
-  final VoidCallback onCompose;
-  const _EmptyInbox({required this.onCompose});
+/// One person in the "Active now" row.
+class _ActivePerson extends StatelessWidget {
+  final String name;
+  final VoidCallback onTap;
+
+  const _ActivePerson({required this.name, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 96,
-            height: 96,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                  color: cs.onSurface.withValues(alpha: 0.8), width: 2),
+    return Pressable(
+      onTap: onTap,
+      child: SizedBox(
+        width: 62,
+        child: Column(
+          children: [
+            ArenaAvatar(
+              name: name,
+              size: 58,
+              ring: kBrandColors,
+              online: true,
             ),
-            child: Icon(Icons.send_outlined,
-                size: 44, color: cs.onSurface.withValues(alpha: 0.8)),
-          ),
-          const SizedBox(height: 20),
-          const Text('Message your friends',
-              style:
-                  TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          Text(
-            'Send private messages or share your favorite battles',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-                fontSize: 14, color: cs.onSurface.withValues(alpha: 0.5)),
-          ),
-          const SizedBox(height: 16),
-          GestureDetector(
-            onTap: onCompose,
-            child: const Text('Send message',
-                style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: kDmBlue)),
-          ),
-        ],
+            const SizedBox(height: 6),
+            Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-/// One inbox row, IG Direct layout: 56px avatar with the green activity
-/// dot, name over "preview · time", blue unread dot, camera glyph.
+/// One chat: picture, name and time on top, the last message and how many
+/// are unread underneath.
 class _ConversationTile extends StatelessWidget {
   final Map<String, dynamic> conversation;
   final bool isOnline;
@@ -413,100 +334,105 @@ class _ConversationTile extends StatelessWidget {
     final lastMsg = (conversation['lastMessage'] ?? '') as String;
     final unread = (conversation['unreadCount'] ?? 0) as int;
     final time = _relativeTime(conversation['lastTime'] ?? '');
-    final preview = time.isEmpty ? lastMsg : '$lastMsg · $time';
+    final hasUnread = unread > 0;
 
-    return InkWell(
+    return Pressable(
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      pressedScale: 0.98,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+          color: hasUnread
+              ? AppTheme.primary.withValues(alpha: 0.07)
+              : Colors.transparent,
+        ),
         child: Row(
           children: [
-            // Avatar + activity dot.
-            Stack(
-              children: [
-                CircleAvatar(
-                  radius: 28,
-                  backgroundColor: cs.primaryContainer,
-                  child: Text(
-                    username.isNotEmpty ? username[0].toUpperCase() : '?',
-                    style: TextStyle(
-                      color: cs.onPrimaryContainer,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 20,
-                    ),
-                  ),
-                ),
-                if (isOnline)
-                  Positioned(
-                    right: 2,
-                    bottom: 2,
-                    child: Container(
-                      width: 14,
-                      height: 14,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1CD14F),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: Theme.of(context).scaffoldBackgroundColor,
-                          width: 2.5,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
+            ArenaAvatar(
+              name: username,
+              size: 54,
+              ring: hasUnread ? kBrandColors : null,
+              online: isOnline,
             ),
             const SizedBox(width: 12),
-
-            // Name + preview·time. Unread turns both bold, exactly like IG.
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    username,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight:
-                          unread > 0 ? FontWeight.w700 : FontWeight.w500,
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          username,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 15.5,
+                            fontWeight:
+                                hasUnread ? FontWeight.w800 : FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      if (time.isNotEmpty)
+                        Text(
+                          time,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight:
+                                hasUnread ? FontWeight.w700 : FontWeight.w500,
+                            color: hasUnread
+                                ? AppTheme.accentPink
+                                : cs.onSurface.withValues(alpha: 0.45),
+                          ),
+                        ),
+                    ],
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    preview,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight:
-                          unread > 0 ? FontWeight.w600 : FontWeight.w400,
-                      color: unread > 0
-                          ? cs.onSurface
-                          : cs.onSurface.withValues(alpha: 0.5),
-                    ),
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          lastMsg.isEmpty ? 'Say hi' : lastMsg,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13.5,
+                            fontWeight:
+                                hasUnread ? FontWeight.w600 : FontWeight.w400,
+                            color: hasUnread
+                                ? cs.onSurface
+                                : cs.onSurface.withValues(alpha: 0.55),
+                          ),
+                        ),
+                      ),
+                      if (hasUnread)
+                        Container(
+                          margin: const EdgeInsets.only(left: 8),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 2),
+                          constraints: const BoxConstraints(minWidth: 20),
+                          decoration: BoxDecoration(
+                            gradient:
+                                const LinearGradient(colors: kBrandColors),
+                            borderRadius:
+                                BorderRadius.circular(AppTheme.radiusFull),
+                          ),
+                          child: Text(
+                            unread > 99 ? '99+' : '$unread',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ],
               ),
-            ),
-
-            // Blue unread dot (IG uses a dot, not a count badge).
-            if (unread > 0)
-              Container(
-                margin: const EdgeInsets.only(left: 8),
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(
-                  color: kDmBlue,
-                  shape: BoxShape.circle,
-                ),
-              ),
-
-            // Camera glyph at the far right of every row.
-            Padding(
-              padding: const EdgeInsets.only(left: 14),
-              child: Icon(Icons.camera_alt_outlined,
-                  size: 24, color: cs.onSurface.withValues(alpha: 0.4)),
             ),
           ],
         ),
@@ -514,7 +440,7 @@ class _ConversationTile extends StatelessWidget {
     );
   }
 
-  /// IG's compact relative time: now / 5m / 3h / 2d / 4w.
+  /// Compact relative time: now / 5m / 3h / 2d / 4w.
   String _relativeTime(String iso) {
     final dt = DateTime.tryParse(iso);
     if (dt == null) return '';
@@ -524,5 +450,107 @@ class _ConversationTile extends StatelessWidget {
     if (diff.inHours < 24) return '${diff.inHours}h';
     if (diff.inDays < 7) return '${diff.inDays}d';
     return '${(diff.inDays / 7).floor()}w';
+  }
+}
+
+/// Pick somebody to message: a search bar over everyone, each with their
+/// league on show.
+class _NewChatSheet extends StatefulWidget {
+  final List<UserModel> users;
+  final ValueChanged<UserModel> onPick;
+
+  const _NewChatSheet({required this.users, required this.onPick});
+
+  @override
+  State<_NewChatSheet> createState() => _NewChatSheetState();
+}
+
+class _NewChatSheetState extends State<_NewChatSheet> {
+  final _ctrl = TextEditingController();
+  String _q = '';
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final shown = _q.isEmpty
+        ? widget.users
+        : widget.users
+            .where((u) => u.username.toLowerCase().contains(_q.toLowerCase()))
+            .toList();
+    return DraggableScrollableSheet(
+      initialChildSize: 0.75,
+      minChildSize: 0.4,
+      maxChildSize: 0.92,
+      expand: false,
+      builder: (_, scrollCtrl) => Column(
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
+            child: Row(
+              children: [
+                GradientIcon(Icons.edit_rounded, size: 20),
+                SizedBox(width: 8),
+                Text(
+                  'New message',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: ArenaSearchField(
+              controller: _ctrl,
+              hint: 'Search people',
+              onChanged: (v) => setState(() => _q = v.trim()),
+            ),
+          ),
+          Expanded(
+            child: shown.isEmpty
+                ? Center(
+                    child: Text(
+                      'Nobody by that name',
+                      style:
+                          TextStyle(color: cs.onSurface.withValues(alpha: 0.5)),
+                    ),
+                  )
+                : ListView.builder(
+                    controller: scrollCtrl,
+                    itemCount: shown.length,
+                    itemBuilder: (_, i) {
+                      final u = shown[i];
+                      final league = LeagueBadge.gradientFor(u.league);
+                      return ListTile(
+                        contentPadding:
+                            const EdgeInsets.symmetric(horizontal: 20),
+                        leading:
+                            ArenaAvatar(name: u.username, size: 44, ring: league),
+                        title: Text(
+                          u.username,
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        subtitle: Align(
+                          alignment: Alignment.centerLeft,
+                          child: InfoChip(
+                            label: u.league,
+                            icon: Icons.shield_rounded,
+                            color: league.first,
+                          ),
+                        ),
+                        trailing: const GradientIcon(Icons.send_rounded, size: 20),
+                        onTap: () => widget.onPick(u),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
   }
 }

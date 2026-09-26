@@ -7,25 +7,26 @@ import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
-import 'package:myapp/pages/chat_list_page.dart' show kDmBlue;
+import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/widgets/arena_ui.dart';
+import 'package:myapp/widgets/league_badge.dart';
 
-/// Instagram-DM-style conversation thread, point for point:
-///   * Header: back chevron, avatar + name with "Active now / Active 2h
-///     ago" subtitle, audio + video call icons on the right.
-///   * Bubbles: 22px-rounded, IG blue for outgoing, grey for incoming;
-///     consecutive messages from one sender group together (inner corners
-///     tighten to 4px) and the incoming group shows one mini avatar at
-///     its tail. No timestamps or ticks inside bubbles — IG has neither.
-///   * Time: small centered grey captions between message runs separated
-///     by 30+ minutes ("14:32", "Yesterday 09:10", …).
-///   * Seen sign: a small grey "Seen" (or Delivered / Sent) caption under
-///     your last message when it's the newest in the thread — exactly how
-///     IG communicates read state.
-///   * Composer: one rounded pill — blue camera circle inside-left, the
-///     "Message…" field, mic / photo / sticker glyphs that swap to a blue
-///     "Send" the moment you type.
-/// Long-press keeps the full action sheet (reply, copy, forward, edit,
-/// delete for me, unsend).
+/// One conversation.
+///
+///   * Header: their picture (green dot when online), name, and "Active now"
+///     or when they were last here; call buttons on the right.
+///   * Your messages are filled with the brand gradient, theirs sit on a
+///     soft surface. A run of messages from one person groups together,
+///     with the corners between them tightened, and their picture once at
+///     the end of the run.
+///   * A time caption appears where 30 minutes or more pass between two
+///     messages.
+///   * Under your newest message: Seen, Delivered or Sent, with ticks.
+///   * Swipe a message sideways to reply to it. Hold it for everything
+///     else: reply, copy, forward, edit (for 15 minutes), delete, unsend.
+///   * An empty chat offers a few one-tap openers, sent as real messages.
+///   * The composer: photo on the left, the text field, and a gradient send
+///     button that appears the moment there is something to send.
 class ChatConversationPage extends StatefulWidget {
   final String otherUserId;
   final String otherUsername;
@@ -157,10 +158,12 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     });
   }
 
-  Future<void> _sendMessage() async {
-    final text = _msgCtrl.text.trim();
+  /// Sends what is in the composer, or [preset] — one of the openers an
+  /// empty chat offers — without touching the composer.
+  Future<void> _sendMessage([String? preset]) async {
+    final text = (preset ?? _msgCtrl.text).trim();
     if (text.isEmpty) return;
-    _msgCtrl.clear();
+    if (preset == null) _msgCtrl.clear();
 
     // Handle edit mode
     if (_editingMsgId != null) {
@@ -264,84 +267,127 @@ class _ChatConversationPageState extends State<ChatConversationPage>
 
     showModalBottomSheet(
       context: context,
-      builder: (ctx) => SafeArea(
-        child: Wrap(
-          children: [
-            // Reply
-            ListTile(
-              leading: const Icon(Icons.reply),
-              title: const Text('Reply'),
-              onTap: () {
-                Navigator.pop(ctx);
-                setState(() => _replyingTo = msg);
-              },
-            ),
-            // Copy
-            ListTile(
-              leading: const Icon(Icons.copy),
-              title: const Text('Copy'),
-              onTap: () {
-                Clipboard.setData(
-                    ClipboardData(text: msg['message'] ?? ''));
-                Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text('Copied'),
-                      duration: Duration(seconds: 1)),
-                );
-              },
-            ),
-            // Forward
-            ListTile(
-              leading: const Icon(Icons.forward),
-              title: const Text('Forward'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _showForwardPicker(msg);
-              },
-            ),
-            // Edit (own messages within 15 min only)
-            if (canEdit)
-              ListTile(
-                leading: const Icon(Icons.edit),
-                title: const Text('Edit'),
-                subtitle: const Text('Available for 15 minutes after sending',
-                    style: TextStyle(fontSize: 11)),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  setState(() {
-                    _editingMsgId = msg['id'];
-                    _msgCtrl.text = msg['message'] ?? '';
-                  });
-                },
+      showDragHandle: true,
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        Widget action(IconData icon, String label, VoidCallback onTap) {
+          return Expanded(
+            child: Pressable(
+              onTap: onTap,
+              child: Column(
+                children: [
+                  Container(
+                    width: 52,
+                    height: 52,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppTheme.primary.withValues(alpha: 0.12),
+                      border: Border.all(
+                        color: AppTheme.primary.withValues(alpha: 0.25),
+                      ),
+                    ),
+                    alignment: Alignment.center,
+                    child: GradientIcon(icon, size: 22),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    label,
+                    style: const TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                ],
               ),
-            // Delete for me (anyone can remove from their view)
-            ListTile(
-              leading: Icon(Icons.delete_outline,
-                  color: Theme.of(ctx)
-                      .colorScheme
-                      .onSurface
-                      .withValues(alpha: 0.7)),
-              title: const Text('Delete for me'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _deleteForMe(msg);
-              },
             ),
-            // Unsend (own messages only — deletes for everyone)
-            if (isMe)
-              ListTile(
-                leading: const Icon(Icons.delete_forever, color: Colors.red),
-                title: const Text('Unsend',
-                    style: TextStyle(color: Colors.red)),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _deleteMessage(msg);
-                },
-              ),
-          ],
-        ),
-      ),
+          );
+        }
+
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // The message being acted on, so it is clear which one.
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: cs.onSurface.withValues(alpha: 0.05),
+                    borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+                  ),
+                  child: Text(
+                    msg['message'] ?? '',
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: cs.onSurface.withValues(alpha: 0.75)),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    action(Icons.reply_rounded, 'Reply', () {
+                      Navigator.pop(ctx);
+                      setState(() => _replyingTo = msg);
+                    }),
+                    action(Icons.copy_rounded, 'Copy', () {
+                      Clipboard.setData(
+                          ClipboardData(text: msg['message'] ?? ''));
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('Copied'),
+                            duration: Duration(seconds: 1)),
+                      );
+                    }),
+                    action(Icons.forward_rounded, 'Forward', () {
+                      Navigator.pop(ctx);
+                      _showForwardPicker(msg);
+                    }),
+                    // Edit: own messages, within 15 minutes of sending.
+                    if (canEdit)
+                      action(Icons.edit_rounded, 'Edit', () {
+                        Navigator.pop(ctx);
+                        setState(() {
+                          _editingMsgId = msg['id'];
+                          _msgCtrl.text = msg['message'] ?? '';
+                        });
+                      }),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                const Divider(height: 1),
+                // Delete for me: anyone can remove a message from their view.
+                ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                  leading: Icon(Icons.delete_outline_rounded,
+                      color: cs.onSurface.withValues(alpha: 0.7)),
+                  title: const Text('Delete for me'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _deleteForMe(msg);
+                  },
+                ),
+                // Unsend: own messages only — deletes for everyone.
+                if (isMe)
+                  ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                    leading: const Icon(Icons.delete_forever_rounded,
+                        color: AppTheme.error),
+                    title: const Text('Unsend',
+                        style: TextStyle(color: AppTheme.error)),
+                    subtitle: const Text('Removes it for both of you'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _deleteMessage(msg);
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -369,15 +415,24 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      showDragHandle: true,
       builder: (ctx) => DraggableScrollableSheet(
         initialChildSize: 0.6,
         expand: false,
         builder: (_, scrollCtrl) => Column(
           children: [
-            const SizedBox(height: 12),
-            const Text('Forward to',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-            const Divider(),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Row(
+                children: [
+                  GradientIcon(Icons.forward_rounded, size: 20),
+                  SizedBox(width: 8),
+                  Text('Forward to',
+                      style: TextStyle(
+                          fontWeight: FontWeight.w800, fontSize: 18)),
+                ],
+              ),
+            ),
             Expanded(
               child: ListView.builder(
                 controller: scrollCtrl,
@@ -385,10 +440,16 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                 itemBuilder: (_, i) {
                   final u = users[i];
                   return ListTile(
-                    leading: CircleAvatar(
-                      child: Text(u.username[0].toUpperCase()),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+                    leading: ArenaAvatar(
+                      name: u.username,
+                      size: 42,
+                      ring: LeagueBadge.gradientFor(u.league),
                     ),
-                    title: Text(u.username),
+                    title: Text(u.username,
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                    trailing:
+                        const GradientIcon(Icons.send_rounded, size: 20),
                     onTap: () async {
                       Navigator.pop(ctx);
                       await ApiService.forwardChatMessage(
@@ -414,7 +475,7 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     );
   }
 
-  /// IG-style activity subtitle: "Active now", "Active 35m ago",
+  /// Activity subtitle: "Active now", "Active 35m ago",
   /// "Active 2h ago", "Active 3d ago" — empty when unknown.
   String _activityLabel() {
     if (_otherOnline) return 'Active now';
@@ -429,7 +490,7 @@ class _ChatConversationPageState extends State<ChatConversationPage>
   }
 
   /// A centered time caption is inserted when 30+ minutes pass between
-  /// consecutive messages (IG's rule), not merely on day change.
+  /// consecutive messages, not merely on day change.
   bool _needsTimeHeader(Map<String, dynamic>? prev, Map<String, dynamic> cur) {
     if (prev == null) return true;
     final a = DateTime.tryParse(prev['createdAt'] ?? '');
@@ -447,41 +508,14 @@ class _ChatConversationPageState extends State<ChatConversationPage>
       appBar: AppBar(
         leading: const BackButton(),
         titleSpacing: 0,
+        centerTitle: false,
         title: Row(
           children: [
-            Stack(
-              children: [
-                CircleAvatar(
-                  radius: 18,
-                  backgroundColor: cs.primaryContainer,
-                  child: Text(
-                    widget.otherUsername.isNotEmpty
-                        ? widget.otherUsername[0].toUpperCase()
-                        : '?',
-                    style: TextStyle(
-                        color: cs.onPrimaryContainer,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16),
-                  ),
-                ),
-                if (_otherOnline)
-                  Positioned(
-                    right: 0,
-                    bottom: 0,
-                    child: Container(
-                      width: 12,
-                      height: 12,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1CD14F),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                            color:
-                                Theme.of(context).scaffoldBackgroundColor,
-                            width: 2),
-                      ),
-                    ),
-                  ),
-              ],
+            ArenaAvatar(
+              name: widget.otherUsername,
+              size: 40,
+              ring: _otherOnline ? kBrandColors : null,
+              online: _otherOnline,
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -492,13 +526,16 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.w600)),
+                          fontSize: 16, fontWeight: FontWeight.w700)),
                   if (activity.isNotEmpty)
                     Text(
                       activity,
                       style: TextStyle(
                         fontSize: 12,
-                        color: cs.onSurface.withValues(alpha: 0.5),
+                        fontWeight: FontWeight.w500,
+                        color: _otherOnline
+                            ? AppTheme.success
+                            : cs.onSurface.withValues(alpha: 0.5),
                       ),
                     ),
                 ],
@@ -507,15 +544,20 @@ class _ChatConversationPageState extends State<ChatConversationPage>
           ],
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.phone_outlined),
-            onPressed: () => _comingSoon('Audio calling'),
+          IconBubble(
+            icon: Icons.call_rounded,
+            tooltip: 'Audio call',
+            size: 38,
+            onTap: () => _comingSoon('Audio calling'),
           ),
-          IconButton(
-            icon: const Icon(Icons.videocam_outlined),
-            onPressed: () => _comingSoon('Video calling'),
+          const SizedBox(width: 8),
+          IconBubble(
+            icon: Icons.videocam_rounded,
+            tooltip: 'Video call',
+            size: 38,
+            onTap: () => _comingSoon('Video calling'),
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: 12),
         ],
       ),
       body: Column(
@@ -525,12 +567,9 @@ class _ChatConversationPageState extends State<ChatConversationPage>
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _messages.isEmpty
-                    ? Center(
-                        child: Text(
-                          'Say hello to ${widget.otherUsername}!',
-                          style: TextStyle(
-                              color: cs.onSurface.withValues(alpha: 0.5)),
-                        ),
+                    ? _EmptyThread(
+                        name: widget.otherUsername,
+                        onPick: _sendMessage,
                       )
                     : ListView.builder(
                         controller: _scrollCtrl,
@@ -544,7 +583,7 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                               i == 0 ? null : _messages[i - 1], msg);
                           // Grouping: consecutive bubbles from one sender
                           // (with no time caption splitting them) tighten
-                          // their facing corners, like IG.
+                          // their facing corners.
                           final prevSame = i > 0 &&
                               !showHeader &&
                               _messages[i - 1]['senderId'] ==
@@ -567,10 +606,12 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                                 groupedWithNext: nextSame,
                                 // The seen sign lives under your last
                                 // message only while it's the newest
-                                // thing in the thread — IG behaviour.
+                                // thing in the thread.
                                 showStatus: isMe && isNewest,
                                 onLongPress: () =>
                                     _showMessageActions(msg),
+                                onReply: () =>
+                                    setState(() => _replyingTo = msg),
                               ),
                             ],
                           );
@@ -578,113 +619,66 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                       ),
           ),
 
-          // Reply preview
+          // Replying to…
           if (_replyingTo != null)
-            Container(
-              padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
-              color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _replyingTo!['senderId'] == _myId
-                              ? 'Replying to yourself'
-                              : 'Replying to ${widget.otherUsername}',
-                          style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 12,
-                              color:
-                                  cs.onSurface.withValues(alpha: 0.7)),
-                        ),
-                        Text(
-                          _replyingTo!['message'] ?? '',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontSize: 13,
-                              color:
-                                  cs.onSurface.withValues(alpha: 0.5)),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close, size: 18),
-                    onPressed: () => setState(() => _replyingTo = null),
-                  ),
-                ],
-              ),
+            _ComposerBanner(
+              icon: Icons.reply_rounded,
+              title: _replyingTo!['senderId'] == _myId
+                  ? 'Replying to yourself'
+                  : 'Replying to ${widget.otherUsername}',
+              body: _replyingTo!['message'] ?? '',
+              onClose: () => setState(() => _replyingTo = null),
             ),
 
-          // Edit indicator
+          // Editing…
           if (_editingMsgId != null)
-            Container(
-              padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
-              color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
-              child: Row(
-                children: [
-                  Icon(Icons.edit,
-                      size: 16,
-                      color: cs.onSurface.withValues(alpha: 0.7)),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text('Editing message',
-                        style: TextStyle(
-                            color: cs.onSurface.withValues(alpha: 0.7),
-                            fontSize: 13)),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close, size: 18),
-                    onPressed: () => setState(() {
-                      _editingMsgId = null;
-                      _msgCtrl.clear();
-                    }),
-                  ),
-                ],
-              ),
+            _ComposerBanner(
+              icon: Icons.edit_rounded,
+              title: 'Editing message',
+              onClose: () => setState(() {
+                _editingMsgId = null;
+                _msgCtrl.clear();
+              }),
             ),
 
-          // ── Composer: single rounded pill, IG layout ──
+          // ── Composer ──
           SafeArea(
             top: false,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
-              child: Container(
-                constraints: const BoxConstraints(minHeight: 44),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-                decoration: BoxDecoration(
-                  color: cs.surfaceContainerHighest.withValues(alpha: 0.7),
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                child: Row(
-                  children: [
-                    // Blue camera circle, inside-left of the pill.
-                    GestureDetector(
-                      onTap: () => _comingSoon('Photo messaging'),
-                      child: Container(
-                        width: 34,
-                        height: 34,
-                        decoration: const BoxDecoration(
-                          color: kDmBlue,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.camera_alt,
-                            size: 19, color: Colors.white),
+              padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  IconBubble(
+                    icon: Icons.add_photo_alternate_rounded,
+                    tooltip: 'Photo',
+                    size: 44,
+                    onTap: () => _comingSoon('Photo messaging'),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Container(
+                      constraints: const BoxConstraints(minHeight: 44),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 11),
+                      decoration: BoxDecoration(
+                        color: cs.onSurface.withValues(alpha: 0.06),
+                        borderRadius:
+                            BorderRadius.circular(AppTheme.radiusXxl),
+                        border: Border.all(
+                            color: cs.onSurface.withValues(alpha: 0.08)),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
                       child: TextField(
                         controller: _msgCtrl,
                         minLines: 1,
-                        maxLines: 4,
+                        maxLines: 5,
+                        cursorColor: AppTheme.primary,
                         decoration: const InputDecoration(
-                          hintText: 'Message...',
+                          hintText: 'Message…',
+                          filled: false,
                           border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
                           isCollapsed: true,
                         ),
                         style: const TextStyle(fontSize: 15),
@@ -692,53 +686,42 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                         onSubmitted: (_) => _sendMessage(),
                       ),
                     ),
-                    // Right cluster: mic/photo/sticker glyphs at rest,
-                    // blue Send while there's text (Save while editing).
-                    ValueListenableBuilder<TextEditingValue>(
-                      valueListenable: _msgCtrl,
-                      builder: (_, value, _) {
-                        final hasText = value.text.trim().isNotEmpty;
-                        if (hasText || _editingMsgId != null) {
-                          return TextButton(
-                            onPressed: _sendMessage,
-                            style: TextButton.styleFrom(
-                              minimumSize: Size.zero,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 6),
-                              tapTargetSize:
-                                  MaterialTapTargetSize.shrinkWrap,
-                            ),
-                            child: Text(
-                              _editingMsgId != null ? 'Save' : 'Send',
-                              style: const TextStyle(
-                                color: kDmBlue,
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
+                  ),
+                  const SizedBox(width: 8),
+                  // Send appears the moment there is something to send
+                  // (Save while editing); until then, the microphone.
+                  ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: _msgCtrl,
+                    builder: (_, value, _) {
+                      final ready = value.text.trim().isNotEmpty ||
+                          _editingMsgId != null;
+                      return AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 160),
+                        transitionBuilder: (c, a) =>
+                            ScaleTransition(scale: a, child: c),
+                        child: ready
+                            ? IconBubble(
+                                key: const ValueKey('send'),
+                                icon: _editingMsgId != null
+                                    ? Icons.check_rounded
+                                    : Icons.send_rounded,
+                                tooltip:
+                                    _editingMsgId != null ? 'Save' : 'Send',
+                                filled: true,
+                                size: 44,
+                                onTap: _sendMessage,
+                              )
+                            : IconBubble(
+                                key: const ValueKey('mic'),
+                                icon: Icons.mic_rounded,
+                                tooltip: 'Voice message',
+                                size: 44,
+                                onTap: () => _comingSoon('Voice messaging'),
                               ),
-                            ),
-                          );
-                        }
-                        return Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _ComposerGlyph(
-                              icon: Icons.mic_none_rounded,
-                              onTap: () => _comingSoon('Voice messaging'),
-                            ),
-                            _ComposerGlyph(
-                              icon: Icons.image_outlined,
-                              onTap: () => _comingSoon('Photo messaging'),
-                            ),
-                            _ComposerGlyph(
-                              icon: Icons.emoji_emotions_outlined,
-                              onTap: () => _comingSoon('Stickers'),
-                            ),
-                          ],
-                        );
-                      },
-                    ),
-                  ],
-                ),
+                      );
+                    },
+                  ),
+                ],
               ),
             ),
           ),
@@ -748,46 +731,181 @@ class _ChatConversationPageState extends State<ChatConversationPage>
   }
 }
 
-/// One icon in the composer's right cluster.
-class _ComposerGlyph extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-  const _ComposerGlyph({required this.icon, required this.onTap});
+/// What an empty chat shows: who it is with, and a few openers that send
+/// as real messages with one tap.
+class _EmptyThread extends StatelessWidget {
+  final String name;
+  final ValueChanged<String> onPick;
+
+  const _EmptyThread({required this.name, required this.onPick});
+
+  static const openers = [
+    '👋 Hey!',
+    '⚔️ Up for a battle?',
+    '🔥 Loved your video',
+  ];
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6),
-        child: Icon(icon,
-            size: 24, color: Theme.of(context).colorScheme.onSurface),
+    final cs = Theme.of(context).colorScheme;
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ArenaAvatar(name: name, size: 88, ring: kBrandColors),
+            const SizedBox(height: 14),
+            Text(
+              name,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Say hello to $name',
+              style: TextStyle(color: cs.onSurface.withValues(alpha: 0.55)),
+            ),
+            const SizedBox(height: 20),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final o in openers)
+                  Pressable(
+                    onTap: () => onPick(o),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 9),
+                      decoration: BoxDecoration(
+                        borderRadius:
+                            BorderRadius.circular(AppTheme.radiusFull),
+                        color: AppTheme.primary.withValues(alpha: 0.10),
+                        border: Border.all(
+                          color: AppTheme.primary.withValues(alpha: 0.30),
+                        ),
+                      ),
+                      child: Text(
+                        o,
+                        style: const TextStyle(
+                            fontSize: 13.5, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-/// Centered small grey time caption between message runs — IG shows
-/// "14:32" today, "Yesterday 09:10", the weekday within a week, then
-/// full dates.
+/// The strip above the composer while replying or editing: a gradient bar
+/// down the side, what is happening, and a close button.
+class _ComposerBanner extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String? body;
+  final VoidCallback onClose;
+
+  const _ComposerBanner({
+    required this.icon,
+    required this.title,
+    this.body,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+      padding: const EdgeInsets.fromLTRB(0, 6, 4, 6),
+      decoration: BoxDecoration(
+        color: cs.onSurface.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 3,
+            height: body == null ? 20 : 34,
+            margin: const EdgeInsets.only(left: 8, right: 10),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: kBrandColors,
+              ),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          GradientIcon(icon, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12.5,
+                    color: cs.onSurface.withValues(alpha: 0.8),
+                  ),
+                ),
+                if (body != null && body!.isNotEmpty)
+                  Text(
+                    body!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: cs.onSurface.withValues(alpha: 0.55),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close_rounded, size: 18),
+            tooltip: 'Cancel',
+            visualDensity: VisualDensity.compact,
+            onPressed: onClose,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Centered small time caption between message runs: "14:32" today,
+/// "Yesterday 09:10", the weekday within a week, then full dates.
 class _TimeHeader extends StatelessWidget {
   final String date;
   const _TimeHeader({required this.date});
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 14),
+      padding: const EdgeInsets.symmetric(vertical: 12),
       child: Center(
-        child: Text(
-          _label(date),
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-            color: Theme.of(context)
-                .colorScheme
-                .onSurface
-                .withValues(alpha: 0.45),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+          decoration: BoxDecoration(
+            color: cs.onSurface.withValues(alpha: 0.06),
+            borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+          ),
+          child: Text(
+            _label(date),
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+              color: cs.onSurface.withValues(alpha: 0.5),
+            ),
           ),
         ),
       ),
@@ -819,11 +937,14 @@ class _TimeHeader extends StatelessWidget {
   }
 }
 
-/// One IG-style bubble: 22px corners (tightened to 4px on the grouped
-/// side), IG blue for outgoing / grey for incoming, mini avatar at the
-/// tail of an incoming group, reply quote + "Edited" captions above, and
-/// the Seen / Delivered / Sent caption below when [showStatus].
-class _MessageBubble extends StatelessWidget {
+/// One message: the brand gradient for yours, a soft surface for theirs,
+/// corners tightened on the side facing a grouped neighbour, their picture
+/// once at the end of their run, a quoted reply and "Edited" above, and
+/// Seen / Delivered / Sent below when [showStatus].
+///
+/// Drag it sideways to reply: a reply arrow fades in as it moves, and past
+/// the line it snaps back and the reply opens.
+class _MessageBubble extends StatefulWidget {
   final Map<String, dynamic> message;
   final bool isMe;
   final String otherUsername;
@@ -831,6 +952,7 @@ class _MessageBubble extends StatelessWidget {
   final bool groupedWithNext;
   final bool showStatus;
   final VoidCallback onLongPress;
+  final VoidCallback onReply;
 
   const _MessageBubble({
     required this.message,
@@ -840,29 +962,64 @@ class _MessageBubble extends StatelessWidget {
     required this.groupedWithNext,
     required this.showStatus,
     required this.onLongPress,
+    required this.onReply,
   });
 
   @override
+  State<_MessageBubble> createState() => _MessageBubbleState();
+}
+
+class _MessageBubbleState extends State<_MessageBubble> {
+  /// How far the bubble has been dragged, 0 to [_max].
+  double _drag = 0;
+  bool _armed = false;
+
+  static const double _max = 72;
+  static const double _trigger = 52;
+
+  void _onDragUpdate(DragUpdateDetails d) {
+    final next = (_drag + d.delta.dx.abs()).clamp(0.0, _max);
+    final armed = next >= _trigger;
+    if (armed && !_armed) HapticFeedback.selectionClick();
+    setState(() {
+      _drag = next;
+      _armed = armed;
+    });
+  }
+
+  void _onDragEnd([DragEndDetails? _]) {
+    if (_armed) widget.onReply();
+    setState(() {
+      _drag = 0;
+      _armed = false;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final message = widget.message;
+    final isMe = widget.isMe;
     final cs = Theme.of(context).colorScheme;
     final dark = Theme.of(context).brightness == Brightness.dark;
     final isDeleted = message['isDeleted'] == true;
     final isEdited = message['isEdited'] == true;
     final replyText = message['replyToText'] as String? ?? '';
 
-    final incomingGrey =
-        dark ? const Color(0xFF262626) : const Color(0xFFEFEFEF);
-
-    // 22px outer corners; the corners facing a grouped neighbour tighten
-    // to 4px on the sender's side (left for incoming, right for outgoing).
-    const r = Radius.circular(22);
-    const rs = Radius.circular(4);
+    // 20px outer corners; the corners facing a grouped neighbour tighten
+    // to 6px on the sender's side (left for incoming, right for outgoing).
+    const r = Radius.circular(20);
+    const rs = Radius.circular(6);
     final radius = BorderRadius.only(
-      topLeft: !isMe && groupedWithPrev ? rs : r,
-      bottomLeft: !isMe && groupedWithNext ? rs : r,
-      topRight: isMe && groupedWithPrev ? rs : r,
-      bottomRight: isMe && groupedWithNext ? rs : r,
+      topLeft: !isMe && widget.groupedWithPrev ? rs : r,
+      bottomLeft: !isMe && widget.groupedWithNext ? rs : r,
+      topRight: isMe && widget.groupedWithPrev ? rs : r,
+      bottomRight: isMe && widget.groupedWithNext ? rs : r,
     );
+
+    final incoming = dark
+        ? Color.alphaBlend(
+            Colors.white.withValues(alpha: 0.08), AppTheme.bgDark)
+        : const Color(0xFFF0EEF7);
 
     final bubble = Container(
       constraints: BoxConstraints(
@@ -872,12 +1029,27 @@ class _MessageBubble extends StatelessWidget {
       decoration: isDeleted
           ? BoxDecoration(
               borderRadius: radius,
-              border: Border.all(
-                  color: cs.onSurface.withValues(alpha: 0.3)),
+              border: Border.all(color: cs.onSurface.withValues(alpha: 0.3)),
             )
           : BoxDecoration(
-              color: isMe ? kDmBlue : incomingGrey,
+              gradient: isMe
+                  ? const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: kBrandColors,
+                    )
+                  : null,
+              color: isMe ? null : incoming,
               borderRadius: radius,
+              boxShadow: isMe
+                  ? [
+                      BoxShadow(
+                        color: AppTheme.primary.withValues(alpha: 0.22),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ]
+                  : null,
             ),
       child: Text(
         message['message'] ?? '',
@@ -894,29 +1066,37 @@ class _MessageBubble extends StatelessWidget {
       ),
     );
 
-    // Mini avatar sits only at the tail bubble of an incoming group.
+    // Their picture sits only at the last bubble of their run.
     final Widget leading = !isMe
-        ? (groupedWithNext
-            ? const SizedBox(width: 24)
-            : CircleAvatar(
-                radius: 12,
-                backgroundColor: cs.primaryContainer,
-                child: Text(
-                  otherUsername.isNotEmpty
-                      ? otherUsername[0].toUpperCase()
-                      : '?',
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: cs.onPrimaryContainer),
-                ),
-              ))
+        ? (widget.groupedWithNext
+            ? const SizedBox(width: 26)
+            : ArenaAvatar(name: widget.otherUsername, size: 26))
         : const SizedBox.shrink();
+
+    // Swipe towards the middle of the screen: right for theirs, left for
+    // yours, which is the way a finger naturally pulls each.
+    final dx = isMe ? -_drag : _drag;
+    final replyHint = Opacity(
+      opacity: (_drag / _trigger).clamp(0.0, 1.0),
+      child: AnimatedScale(
+        scale: _armed ? 1.15 : 0.9,
+        duration: const Duration(milliseconds: 120),
+        child: Container(
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: AppTheme.primary.withValues(alpha: _armed ? 0.9 : 0.25),
+          ),
+          child: const Icon(Icons.reply_rounded, size: 18, color: Colors.white),
+        ),
+      ),
+    );
 
     return Padding(
       padding: EdgeInsets.only(
-        top: groupedWithPrev ? 1.5 : 6,
-        bottom: groupedWithNext ? 1.5 : 6,
+        top: widget.groupedWithPrev ? 1.5 : 6,
+        bottom: widget.groupedWithNext ? 1.5 : 6,
       ),
       child: Column(
         crossAxisAlignment:
@@ -926,29 +1106,39 @@ class _MessageBubble extends StatelessWidget {
           if (replyText.isNotEmpty && !isDeleted) ...[
             Padding(
               padding: EdgeInsets.only(
-                  left: isMe ? 0 : 32, right: isMe ? 6 : 0, bottom: 2),
-              child: Text(
-                isMe
-                    ? 'You replied'
-                    : '$otherUsername replied',
-                style: TextStyle(
-                    fontSize: 11,
-                    color: cs.onSurface.withValues(alpha: 0.45)),
+                  left: isMe ? 0 : 34, right: isMe ? 6 : 0, bottom: 2),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.reply_rounded,
+                      size: 12, color: cs.onSurface.withValues(alpha: 0.45)),
+                  const SizedBox(width: 3),
+                  Text(
+                    isMe ? 'You replied' : '${widget.otherUsername} replied',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: cs.onSurface.withValues(alpha: 0.45)),
+                  ),
+                ],
               ),
             ),
             Padding(
-              padding: EdgeInsets.only(
-                  left: isMe ? 0 : 32, bottom: 2),
+              padding: EdgeInsets.only(left: isMe ? 0 : 34, bottom: 2),
               child: Container(
                 constraints: BoxConstraints(
                   maxWidth: MediaQuery.of(context).size.width * 0.6,
                 ),
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 7),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                 decoration: BoxDecoration(
-                  color: cs.surfaceContainerHighest
-                      .withValues(alpha: dark ? 0.5 : 1),
-                  borderRadius: BorderRadius.circular(18),
+                  color: cs.onSurface.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border(
+                    left: BorderSide(
+                      color: AppTheme.primary.withValues(alpha: 0.6),
+                      width: 3,
+                    ),
+                  ),
                 ),
                 child: Text(
                   replyText,
@@ -956,7 +1146,7 @@ class _MessageBubble extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                       fontSize: 13,
-                      color: cs.onSurface.withValues(alpha: 0.55)),
+                      color: cs.onSurface.withValues(alpha: 0.6)),
                 ),
               ),
             ),
@@ -964,7 +1154,7 @@ class _MessageBubble extends StatelessWidget {
           if (isEdited && !isDeleted)
             Padding(
               padding: EdgeInsets.only(
-                  left: isMe ? 0 : 32, right: isMe ? 6 : 0, bottom: 2),
+                  left: isMe ? 0 : 34, right: isMe ? 6 : 0, bottom: 2),
               child: Text(
                 'Edited',
                 style: TextStyle(
@@ -973,30 +1163,61 @@ class _MessageBubble extends StatelessWidget {
               ),
             ),
 
-          // The bubble row (mini avatar + bubble for incoming).
+          // The bubble row (their picture + bubble for incoming), with the
+          // reply arrow waiting behind it for a swipe.
           GestureDetector(
-            onLongPress: isDeleted ? null : onLongPress,
-            child: Row(
-              mainAxisAlignment:
-                  isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
-              crossAxisAlignment: CrossAxisAlignment.end,
+            onLongPress: isDeleted ? null : widget.onLongPress,
+            onHorizontalDragUpdate: isDeleted ? null : _onDragUpdate,
+            onHorizontalDragEnd: isDeleted ? null : _onDragEnd,
+            onHorizontalDragCancel: isDeleted ? null : _onDragEnd,
+            child: Stack(
+              alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
               children: [
-                if (!isMe) ...[leading, const SizedBox(width: 8)],
-                Flexible(child: bubble),
+                if (_drag > 0)
+                  Positioned(
+                    left: isMe ? null : 2,
+                    right: isMe ? 2 : null,
+                    child: replyHint,
+                  ),
+                Transform.translate(
+                  offset: Offset(dx, 0),
+                  child: Row(
+                    mainAxisAlignment:
+                        isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      if (!isMe) ...[leading, const SizedBox(width: 8)],
+                      Flexible(child: bubble),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
 
-          // The seen sign — small grey caption under your newest message.
-          if (showStatus && !isDeleted)
+          // The seen sign under your newest message.
+          if (widget.showStatus && !isDeleted)
             Padding(
               padding: const EdgeInsets.only(top: 4, right: 6),
-              child: Text(
-                _statusLabel(),
-                style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                    color: cs.onSurface.withValues(alpha: 0.45)),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _statusIcon(),
+                    size: 14,
+                    color: message['isRead'] == true
+                        ? AppTheme.accentCyan
+                        : cs.onSurface.withValues(alpha: 0.45),
+                  ),
+                  const SizedBox(width: 3),
+                  Text(
+                    _statusLabel(),
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: cs.onSurface.withValues(alpha: 0.45)),
+                  ),
+                ],
               ),
             ),
         ],
@@ -1005,8 +1226,16 @@ class _MessageBubble extends StatelessWidget {
   }
 
   String _statusLabel() {
-    if (message['isRead'] == true) return 'Seen';
-    if ((message['status'] ?? '') == 'delivered') return 'Delivered';
+    final m = widget.message;
+    if (m['isRead'] == true) return 'Seen';
+    if ((m['status'] ?? '') == 'delivered') return 'Delivered';
     return 'Sent';
+  }
+
+  IconData _statusIcon() {
+    final m = widget.message;
+    if (m['isRead'] == true) return Icons.done_all_rounded;
+    if ((m['status'] ?? '') == 'delivered') return Icons.done_all_rounded;
+    return Icons.check_rounded;
   }
 }

@@ -7,6 +7,7 @@ import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/widgets/user_tile.dart';
 import 'package:myapp/pages/profile_page.dart';
+import 'package:myapp/widgets/arena_ui.dart';
 
 /// Shows who follows a given user.
 ///
@@ -62,7 +63,10 @@ class _FollowersPageState extends State<FollowersPage>
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _followers.isEmpty
-              ? const Center(child: Text('No followers yet'))
+              ? const ArenaEmptyState(
+                  icon: Icons.people_outline_rounded,
+                  title: 'No followers yet',
+                )
               : ListView.builder(
                   itemCount: _followers.length,
                   itemBuilder: (_, i) {

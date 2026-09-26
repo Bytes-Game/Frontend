@@ -28,6 +28,11 @@ class BattleRecordPanel extends StatelessWidget {
     final tt = Theme.of(context).textTheme;
     final step = LeagueStep.of(record.rating, decided: record.decided);
     final colors = LeagueBadge.gradientFor(record.league);
+    // The lighter league colour vanishes on a light background (silver on
+    // near-white), so words in the league's colour take the darker one there.
+    final ink = Theme.of(context).brightness == Brightness.light
+        ? colors.last
+        : colors.first;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -46,9 +51,9 @@ class BattleRecordPanel extends StatelessWidget {
         border: Border.all(color: colors.first.withValues(alpha: 0.45)),
         boxShadow: [
           BoxShadow(
-            color: colors.last.withValues(alpha: 0.18),
-            blurRadius: 24,
-            offset: const Offset(0, 10),
+            color: colors.last.withValues(alpha: 0.12),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
@@ -68,7 +73,7 @@ class BattleRecordPanel extends StatelessWidget {
                       style: tt.labelLarge?.copyWith(
                         letterSpacing: 2.4,
                         fontWeight: FontWeight.w800,
-                        color: colors.first,
+                        color: ink,
                       ),
                     ),
                     // Scales down rather than overflowing on a narrow

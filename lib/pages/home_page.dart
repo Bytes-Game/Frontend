@@ -4,6 +4,7 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/pages/notifications_page.dart';
+import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/smart_reels_feed.dart';
 
 /// Full-screen TikTok-style home: video plays edge-to-edge, top filters
@@ -206,7 +207,7 @@ class _TopTabStripState extends State<_TopTabStrip> {
                   height: 3,
                   width: active ? 22 : 0,
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    gradient: const LinearGradient(colors: kBrandColors),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -238,8 +239,9 @@ class _TopActionIcons extends StatelessWidget {
         return Stack(
           clipBehavior: Clip.none,
           children: [
+            // A bell: a heart here read as "likes", not "what's new".
             _OverlayIconButton(
-              icon: Icons.favorite_border_rounded,
+              icon: Icons.notifications_none_rounded,
               tooltip: 'Notifications',
               onTap: onNotificationsTap,
             ),
@@ -250,7 +252,7 @@ class _TopActionIcons extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                   decoration: BoxDecoration(
-                    color: Colors.redAccent,
+                    gradient: const LinearGradient(colors: kBrandColors),
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(color: Colors.black54, width: 1),
                   ),

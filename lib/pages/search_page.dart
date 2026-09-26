@@ -16,6 +16,9 @@ import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/pages/search_reels_viewer_page.dart';
 import 'package:myapp/pages/profile_page.dart';
 import 'package:myapp/widgets/shimmer_loading.dart';
+import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/widgets/arena_ui.dart';
+import 'package:myapp/widgets/league_badge.dart';
 
 /// Search page — TikTok / Instagram style with four tabs:
 ///   * Top      — interleaved best of accounts + battles + shorts
@@ -291,103 +294,90 @@ class _SearchPageState extends State<SearchPage>
   }
 
   Widget _buildScaffold(ColorScheme cs, bool showTabs) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Search'),
-        centerTitle: true,
-        bottom: PreferredSize(
-          // Collapse the bottom area to just the search bar when no tabs
-          // are visible. Saves ~46pt of vertical space pre-search.
-          preferredSize: Size.fromHeight(showTabs ? 100 : 56),
-          child: Column(
-            children: [
-              // Search bar
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: TextField(
-                  controller: _searchCtrl,
-                  focusNode: _focusNode,
-                  decoration: InputDecoration(
-                    hintText: 'Search challenges, users...',
-                    prefixIcon: const Icon(Icons.search),
-                    filled: true,
-                    fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.5),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none,
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(vertical: 0),
-                    suffixIcon: _searchCtrl.text.isNotEmpty
-                        ? IconButton(
-                            icon: const Icon(Icons.clear),
-                            onPressed: () {
-                              _searchCtrl.clear();
-                              _onSearchChanged('');
-                            },
-                          )
-                        : null,
-                  ),
-                  onChanged: _onSearchChanged,
-                  textInputAction: TextInputAction.search,
-                  onSubmitted: _search,
-                ),
-              ),
-              // Tabs — only after a search has been issued.
-              if (showTabs)
-                TabBar(
-                  controller: _tabCtrl,
-                  isScrollable: true,
-                  tabAlignment: TabAlignment.center,
-                  indicatorColor: cs.primary,
-                  labelColor: cs.primary,
-                  unselectedLabelColor: cs.onSurfaceVariant,
-                  tabs: const [
-                    Tab(text: 'Top'),
-                    Tab(text: 'Accounts'),
-                    Tab(text: 'Battles'),
-                    Tab(text: 'Shorts'),
-                  ],
-                ),
-            ],
+    final Widget body;
+    if (_loading) {
+      body = showTabs
+          ? TabBarView(
+              controller: _tabCtrl,
+              children: const [
+                ChatListSkeleton(count: 5),
+                ChatListSkeleton(count: 5),
+                SearchGridSkeleton(),
+                SearchGridSkeleton(),
+              ],
+            )
+          : const SearchGridSkeleton();
+    } else if (showTabs) {
+      body = TabBarView(
+        controller: _tabCtrl,
+        children: [
+          _buildTopTab(cs),
+          _buildAccountsTab(cs),
+          _buildChallengeGridTab(
+            items: _battles,
+            emptyLabel: 'No battles found',
+            emptyIcon: Icons.bolt_rounded,
+            resultType: 'battle',
           ),
+          _buildChallengeGridTab(
+            items: _shorts,
+            emptyLabel: 'No shorts found',
+            emptyIcon: Icons.play_circle_outline_rounded,
+            resultType: 'short',
+          ),
+        ],
+      );
+    } else {
+      body = _buildEmptyStateGrid(cs);
+    }
+
+    // No title bar: the page is its search. The bar sits at the very top,
+    // and the result tabs slide in under it only once there are results to
+    // sort — before that, the space goes to the videos.
+    return Scaffold(
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+              child: ArenaSearchField(
+                controller: _searchCtrl,
+                focusNode: _focusNode,
+                hint: 'Search people, battles, shorts',
+                onChanged: _onSearchChanged,
+                onSubmitted: _search,
+              ),
+            ),
+            AnimatedSize(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+              alignment: Alignment.topCenter,
+              child: showTabs
+                  ? Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                      child: ArenaPillTabs(
+                        controller: _tabCtrl,
+                        tabs: const [
+                          (icon: Icons.auto_awesome_rounded, label: 'Top'),
+                          (icon: Icons.person_rounded, label: 'Accounts'),
+                          (icon: Icons.bolt_rounded, label: 'Battles'),
+                          (icon: Icons.play_circle_rounded, label: 'Shorts'),
+                        ],
+                      ),
+                    )
+                  : const SizedBox(width: double.infinity),
+            ),
+            Expanded(child: body),
+          ],
         ),
       ),
-      body: _loading
-          ? (showTabs
-              ? TabBarView(
-                  controller: _tabCtrl,
-                  children: const [
-                    ChatListSkeleton(count: 5),
-                    ChatListSkeleton(count: 5),
-                    SearchGridSkeleton(),
-                    SearchGridSkeleton(),
-                  ],
-                )
-              : const SearchGridSkeleton())
-          : (showTabs
-              ? TabBarView(
-                  controller: _tabCtrl,
-                  children: [
-                    _buildTopTab(cs),
-                    _buildAccountsTab(cs),
-                    _buildChallengeGridTab(
-                      items: _battles,
-                      emptyLabel: 'No battles found',
-                      resultType: 'battle',
-                    ),
-                    _buildChallengeGridTab(
-                      items: _shorts,
-                      emptyLabel: 'No shorts found',
-                      resultType: 'short',
-                    ),
-                  ],
-                )
-              : _buildEmptyStateGrid(cs)),
     );
   }
 
-  /// Pre-search body: just the Explore-algorithm video grid. No tabs, no
-  /// section headers — Instagram-style "type to filter, scroll to discover".
+  /// Pre-search body: what people are searching for, then a grid of videos
+  /// to discover. One scroll for all of it, so the grid is not a box inside
+  /// the page.
   Widget _buildEmptyStateGrid(ColorScheme cs) {
     if (_exploreChallenges.isEmpty) {
       // Even with nothing loaded, the user should still be able to pull to
@@ -398,11 +388,15 @@ class _SearchPageState extends State<SearchPage>
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           children: [
+            if (_recentSearches.isNotEmpty || _trendingSearches.isNotEmpty)
+              _suggestionRows(),
             SizedBox(
-              height: MediaQuery.of(context).size.height * 0.6,
-              child: _emptyState(
-                icon: Icons.search,
-                label: 'Search anything — accounts, battles, shorts',
+              height: MediaQuery.of(context).size.height * 0.5,
+              child: const ArenaEmptyState(
+                icon: Icons.travel_explore_rounded,
+                title: 'Find people and battles',
+                subtitle: 'Search by name, subject or tag.\n'
+                    'Pull down to load videos to discover.',
               ),
             ),
           ],
@@ -416,64 +410,94 @@ class _SearchPageState extends State<SearchPage>
         slivers: [
           if (_recentSearches.isNotEmpty || _trendingSearches.isNotEmpty)
             SliverToBoxAdapter(child: _suggestionRows()),
-          SliverFillRemaining(
-            hasScrollBody: true,
-            child: _challengeGrid(_exploreChallenges, 'explore'),
+          const SliverToBoxAdapter(
+            child: SectionTitle(
+              title: 'Discover',
+              icon: Icons.explore_rounded,
+            ),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+            sliver: SliverGrid(
+              gridDelegate: _gridDelegate,
+              delegate: SliverChildBuilderDelegate(
+                (context, i) => _PreviewableTile(
+                  challenge: _exploreChallenges[i],
+                  coordinator: _previewCoord,
+                  onTap: () =>
+                      _onChallengeTap(_exploreChallenges[i], i, 'explore'),
+                ),
+                childCount: _exploreChallenges.length,
+              ),
+            ),
           ),
         ],
       ),
     );
   }
 
-  /// Recent (yours) + Trending (everyone's) query chips above the
-  /// empty-state grid. Tapping one runs the search immediately — the
-  /// classic TikTok/IG search entry pattern.
+  static const _gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
+    crossAxisCount: 3,
+    mainAxisSpacing: 6,
+    crossAxisSpacing: 6,
+    childAspectRatio: 0.66,
+  );
+
+  /// Recent (yours) and Trending (everyone's) searches as rows of chips
+  /// that scroll sideways. Tapping one runs it — the classic search entry.
   Widget _suggestionRows() {
-    Widget chipRow(String label, IconData icon, List<String> queries) {
+    Widget chipRow(String label, IconData icon, IconData chipIcon,
+        List<String> queries) {
       if (queries.isEmpty) return const SizedBox.shrink();
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Icon(icon, size: 16,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant),
+      final shown = queries.take(10).toList();
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SectionTitle(
+            title: label,
+            icon: icon,
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          ),
+          SizedBox(
+            height: 36,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              itemCount: shown.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              itemBuilder: (_, i) {
+                final q = shown[i];
+                return _QueryChip(
+                  label: q,
+                  icon: chipIcon,
+                  onTap: () {
+                    EventTracker.instance.trackTap(
+                      target: 'search_suggestion_${label.toLowerCase()}',
+                      pageName: pageName,
+                      params: {'query': q},
+                    );
+                    _searchCtrl.text = q;
+                    _search(q);
+                  },
+                );
+              },
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Wrap(
-                spacing: 6,
-                children: queries.take(6).map((q) {
-                  return ActionChip(
-                    label: Text(q, style: const TextStyle(fontSize: 12)),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () {
-                      EventTracker.instance.trackTap(
-                        target: 'search_suggestion_${label.toLowerCase()}',
-                        pageName: pageName,
-                        params: {'query': q},
-                      );
-                      _searchCtrl.text = q;
-                      _search(q);
-                    },
-                  );
-                }).toList(),
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       );
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        chipRow('Recent', Icons.history, _recentSearches),
-        chipRow('Trending', Icons.trending_up, _trendingSearches),
-        const SizedBox(height: 8),
-      ],
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          chipRow('Recent', Icons.history_rounded, Icons.history_rounded,
+              _recentSearches),
+          chipRow('Trending', Icons.local_fire_department_rounded,
+              Icons.trending_up_rounded, _trendingSearches),
+        ],
+      ),
     );
   }
 
@@ -505,23 +529,38 @@ class _SearchPageState extends State<SearchPage>
     } else {
       message = 'No exact matches for "$_lastQuery" — trending now:';
     }
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+        gradient: LinearGradient(
+          colors: [
+            AppTheme.primary.withValues(alpha: 0.14),
+            AppTheme.accentPink.withValues(alpha: 0.06),
+          ],
+        ),
+        border: Border.all(color: AppTheme.primary.withValues(alpha: 0.25)),
+      ),
       child: Row(
         children: [
-          Icon(
-              aboutSubjects
-                  ? Icons.lightbulb_outline
-                  : recent
-                      ? Icons.schedule
-                      : Icons.trending_up,
-              size: 18,
-              color: cs.primary),
-          const SizedBox(width: 8),
+          GradientIcon(
+            aboutSubjects
+                ? Icons.lightbulb_rounded
+                : recent
+                    ? Icons.schedule_rounded
+                    : Icons.trending_up_rounded,
+            size: 20,
+          ),
+          const SizedBox(width: 10),
           Expanded(
             child: Text(
               message,
-              style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: cs.onSurface.withValues(alpha: 0.8),
+              ),
             ),
           ),
         ],
@@ -535,25 +574,28 @@ class _SearchPageState extends State<SearchPage>
   /// videos, so they are things this app actually has — never a suggestion
   /// that leads to an empty page.
   Widget _relatedSearchChips() {
-    final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Related',
-              style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: cs.onSurfaceVariant)),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 6,
-            children: _relatedSearches.take(5).map((q) {
-              return ActionChip(
-                label: Text(q, style: const TextStyle(fontSize: 12)),
-                visualDensity: VisualDensity.compact,
-                onPressed: () {
+    final shown = _relatedSearches.take(8).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SectionTitle(
+          title: 'Related',
+          icon: Icons.hub_rounded,
+          padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
+        ),
+        SizedBox(
+          height: 36,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: shown.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            itemBuilder: (_, i) {
+              final q = shown[i];
+              return _QueryChip(
+                label: q,
+                icon: Icons.north_east_rounded,
+                onTap: () {
                   EventTracker.instance.trackTap(
                     target: 'search_related_subject',
                     pageName: pageName,
@@ -563,17 +605,17 @@ class _SearchPageState extends State<SearchPage>
                   _search(q);
                 },
               );
-            }).toList(),
+            },
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
   Widget _buildTopTab(ColorScheme cs) {
     final accountsHead = _accounts.take(3).toList();
-    final battlesHead = _battles.take(4).toList();
-    final shortsHead = _shorts.take(4).toList();
+    final battlesHead = _battles.take(6).toList();
+    final shortsHead = _shorts.take(6).toList();
 
     if (accountsHead.isEmpty && battlesHead.isEmpty && shortsHead.isEmpty) {
       return RefreshIndicator(
@@ -590,10 +632,12 @@ class _SearchPageState extends State<SearchPage>
             if (_relatedSearches.isNotEmpty) _relatedSearchChips(),
             SizedBox(
               height: MediaQuery.of(context).size.height *
-                  (_relatedSearches.isEmpty ? 0.6 : 0.45),
-              child: _emptyState(
-                icon: Icons.search_off,
-                label: 'No results for "$_lastQuery"',
+                  (_relatedSearches.isEmpty ? 0.55 : 0.42),
+              child: ArenaEmptyState(
+                icon: Icons.search_off_rounded,
+                title: 'No results for "$_lastQuery"',
+                subtitle: 'Try a shorter word, or a subject instead of a '
+                    'title.',
               ),
             ),
           ],
@@ -606,10 +650,35 @@ class _SearchPageState extends State<SearchPage>
     // topic-shaped queries lead with content.
     final accountsSection = <Widget>[
       if (accountsHead.isNotEmpty) ...[
-        _sectionHeader('Accounts', onSeeAll: () => _tabCtrl.animateTo(1)),
+        SectionTitle(
+          title: 'Accounts',
+          icon: Icons.people_alt_rounded,
+          action: 'See all',
+          onAction: () => _tabCtrl.animateTo(1),
+        ),
         ...accountsHead.asMap().entries.map((e) => _accountTile(e.value, e.key)),
       ],
     ];
+
+    Widget videoRow(List<ChallengeModel> items, String resultType) {
+      return SizedBox(
+        height: 190,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          itemCount: items.length,
+          separatorBuilder: (_, _) => const SizedBox(width: 8),
+          itemBuilder: (_, i) => SizedBox(
+            width: 124,
+            child: _PreviewableTile(
+              challenge: items[i],
+              coordinator: _previewCoord,
+              onTap: () => _onChallengeTap(items[i], i, resultType),
+            ),
+          ),
+        ),
+      );
+    }
 
     return RefreshIndicator(
       // Pull-to-refresh re-runs the active query so the user can shake
@@ -618,88 +687,39 @@ class _SearchPageState extends State<SearchPage>
         if (_lastQuery.isNotEmpty) await _search(_lastQuery);
       },
       child: ListView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.only(bottom: 16),
-      children: [
-        // Nothing matched exactly. Say WHICH kind of fallback this is —
-        // videos genuinely about something near the query are not the same
-        // as "here is what is popular", and calling both "trending" tells
-        // the user the wrong thing about what they are looking at.
-        if (_related) _rescueBanner(),
-        // Subjects that go with the query. Tapping one searches it.
-        if (_relatedSearches.isNotEmpty) _relatedSearchChips(),
-        // Content-intent queries (intent = "category:x") lead with content;
-        // everything else keeps Accounts first.
-        if (!_intent.startsWith('category:')) ...accountsSection,
-        if (battlesHead.isNotEmpty) ...[
-          _sectionHeader('Battles', onSeeAll: () => _tabCtrl.animateTo(2)),
-          SizedBox(
-            height: 160,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              itemCount: battlesHead.length,
-              itemBuilder: (_, i) => Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: SizedBox(
-                  width: 110,
-                  child: _PreviewableTile(
-                    challenge: battlesHead[i],
-                    coordinator: _previewCoord,
-                    onTap: () => _onChallengeTap(battlesHead[i], i, 'battle'),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-        if (shortsHead.isNotEmpty) ...[
-          _sectionHeader('Shorts', onSeeAll: () => _tabCtrl.animateTo(3)),
-          SizedBox(
-            height: 160,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              itemCount: shortsHead.length,
-              itemBuilder: (_, i) => Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: SizedBox(
-                  width: 110,
-                  child: _PreviewableTile(
-                    challenge: shortsHead[i],
-                    coordinator: _previewCoord,
-                    onTap: () => _onChallengeTap(shortsHead[i], i, 'short'),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-        // Content-intent ordering: accounts trail the content sections.
-        if (_intent.startsWith('category:')) ...accountsSection,
-      ],
-      ),
-    );
-  }
-
-  Widget _sectionHeader(String label, {VoidCallback? onSeeAll}) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.only(bottom: 24),
         children: [
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
+          // Nothing matched exactly. Say WHICH kind of fallback this is —
+          // videos genuinely about something near the query are not the same
+          // as "here is what is popular", and calling both "trending" tells
+          // the user the wrong thing about what they are looking at.
+          if (_related) _rescueBanner(),
+          // Subjects that go with the query. Tapping one searches it.
+          if (_relatedSearches.isNotEmpty) _relatedSearchChips(),
+          // Content-intent queries (intent = "category:x") lead with content;
+          // everything else keeps Accounts first.
+          if (!_intent.startsWith('category:')) ...accountsSection,
+          if (battlesHead.isNotEmpty) ...[
+            SectionTitle(
+              title: 'Battles',
+              icon: Icons.bolt_rounded,
+              action: 'See all',
+              onAction: () => _tabCtrl.animateTo(2),
             ),
-          ),
-          if (onSeeAll != null)
-            TextButton(
-              onPressed: onSeeAll,
-              child: const Text('See all'),
+            videoRow(battlesHead, 'battle'),
+          ],
+          if (shortsHead.isNotEmpty) ...[
+            SectionTitle(
+              title: 'Shorts',
+              icon: Icons.play_circle_rounded,
+              action: 'See all',
+              onAction: () => _tabCtrl.animateTo(3),
             ),
+            videoRow(shortsHead, 'short'),
+          ],
+          // Content-intent ordering: accounts trail the content sections.
+          if (_intent.startsWith('category:')) ...accountsSection,
         ],
       ),
     );
@@ -710,6 +730,7 @@ class _SearchPageState extends State<SearchPage>
   Widget _buildChallengeGridTab({
     required List<ChallengeModel> items,
     required String emptyLabel,
+    required IconData emptyIcon,
     required String resultType,
   }) {
     Future<void> onRefresh() async {
@@ -724,8 +745,12 @@ class _SearchPageState extends State<SearchPage>
           physics: const AlwaysScrollableScrollPhysics(),
           children: [
             SizedBox(
-              height: MediaQuery.of(context).size.height * 0.6,
-              child: _emptyState(icon: Icons.search_off, label: emptyLabel),
+              height: MediaQuery.of(context).size.height * 0.55,
+              child: ArenaEmptyState(
+                icon: emptyIcon,
+                title: emptyLabel,
+                subtitle: 'Pull down to search again.',
+              ),
             ),
           ],
         ),
@@ -748,13 +773,8 @@ class _SearchPageState extends State<SearchPage>
       // contents fit on a single screen. Without it, a short result list
       // makes the pull-to-refresh silently drop.
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.all(2),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        mainAxisSpacing: 2,
-        crossAxisSpacing: 2,
-        childAspectRatio: 0.75,
-      ),
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 24),
+      gridDelegate: _gridDelegate,
       itemCount: items.length,
       itemBuilder: (context, i) => _PreviewableTile(
         challenge: items[i],
@@ -807,57 +827,92 @@ class _SearchPageState extends State<SearchPage>
     );
   }
 
+  /// One person in the results: their picture ringed in their league's
+  /// colours, name and handle, and their league and record as two chips.
+  /// Hold for the 3D card; tap for the profile.
   Widget _accountTile(UserModel user, int position) {
     final cs = Theme.of(context).colorScheme;
-    return ListTile(
-      onLongPress: () => _peekProfile(user, position),
-      leading: CircleAvatar(
-        backgroundColor: cs.primaryContainer,
-        child: Text(
-          user.username.isNotEmpty ? user.username[0].toUpperCase() : '?',
-          style: TextStyle(
-            color: cs.onPrimaryContainer,
-            fontWeight: FontWeight.bold,
+    final leagueColors = LeagueBadge.gradientFor(user.league);
+    final hasName = user.fullName.isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Pressable(
+        onLongPress: () => _peekProfile(user, position),
+        onTap: () {
+          EventTracker.instance.trackSearchResultTap(
+            query: _lastQuery,
+            resultId: user.id,
+            resultType: 'user',
+            position: position,
+          );
+          _lastQueryHadResultTap = true;
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => ProfilePage(user: user, isEmbedded: false),
+            ),
+          );
+        },
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(10, 10, 6, 10),
+          decoration: BoxDecoration(
+            color: cs.onSurface.withValues(alpha: 0.04),
+            borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+            border: Border.all(color: cs.onSurface.withValues(alpha: 0.06)),
+          ),
+          child: Row(
+            children: [
+              ArenaAvatar(name: user.username, size: 50, ring: leagueColors),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      hasName ? user.fullName : user.username,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (hasName)
+                      Text(
+                        '@${user.username}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: cs.onSurface.withValues(alpha: 0.55),
+                        ),
+                      ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: [
+                        InfoChip(
+                          label: user.league,
+                          icon: Icons.shield_rounded,
+                          color: leagueColors.first,
+                        ),
+                        InfoChip(
+                          label: '${user.wins}W · ${user.losses}L',
+                          icon: Icons.emoji_events_rounded,
+                          color: AppTheme.warning,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right_rounded,
+                color: cs.onSurface.withValues(alpha: 0.35),
+              ),
+            ],
           ),
         ),
-      ),
-      title: Text(user.username,
-          style: const TextStyle(fontWeight: FontWeight.w600)),
-      subtitle: Text(user.league,
-          style: TextStyle(
-              fontSize: 12,
-              color: Theme.of(context).colorScheme.onSurfaceVariant)),
-      trailing: Text('${user.wins}W ${user.losses}L',
-          style: TextStyle(
-              fontSize: 12,
-              color: Theme.of(context).colorScheme.onSurfaceVariant)),
-      onTap: () {
-        EventTracker.instance.trackSearchResultTap(
-          query: _lastQuery,
-          resultId: user.id,
-          resultType: 'user',
-          position: position,
-        );
-        _lastQueryHadResultTap = true;
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => ProfilePage(user: user, isEmbedded: false),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _emptyState({required IconData icon, required String label}) {
-    final cs = Theme.of(context).colorScheme;
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 48, color: cs.onSurfaceVariant),
-          const SizedBox(height: 12),
-          Text(label, style: TextStyle(color: cs.onSurfaceVariant)),
-        ],
       ),
     );
   }
@@ -873,31 +928,96 @@ class _SearchPageState extends State<SearchPage>
             physics: const AlwaysScrollableScrollPhysics(),
             children: [
               SizedBox(
-                height: MediaQuery.of(context).size.height * 0.6,
+                height: MediaQuery.of(context).size.height * 0.55,
                 child: inner,
               ),
             ],
           ),
         );
     if (!_hasSearched) {
-      return wrapEmpty(_emptyState(
-        icon: Icons.person_search,
-        label: 'Search for users',
+      return wrapEmpty(const ArenaEmptyState(
+        icon: Icons.person_search_rounded,
+        title: 'Search for people',
       ));
     }
     if (_accounts.isEmpty) {
-      return wrapEmpty(_emptyState(
-        icon: Icons.search_off,
-        label: 'No accounts found',
+      return wrapEmpty(const ArenaEmptyState(
+        icon: Icons.person_off_rounded,
+        title: 'No accounts found',
+        subtitle: 'Check the spelling, or try part of the name.',
       ));
     }
     return RefreshIndicator(
       onRefresh: onRefresh,
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.only(top: 8),
-        itemCount: _accounts.length,
-        itemBuilder: (_, i) => _accountTile(_accounts[i], i),
+        padding: const EdgeInsets.only(top: 4, bottom: 24),
+        // One line at the top saying what holding does, since nothing else
+        // on the row can show it.
+        itemCount: _accounts.length + 1,
+        itemBuilder: (_, i) {
+          if (i == 0) {
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(18, 4, 18, 6),
+              child: Row(
+                children: [
+                  Icon(Icons.touch_app_rounded,
+                      size: 14, color: cs.onSurface.withValues(alpha: 0.45)),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Hold a name to see their battle card',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: cs.onSurface.withValues(alpha: 0.5),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+          return _accountTile(_accounts[i - 1], i - 1);
+        },
+      ),
+    );
+  }
+}
+
+/// A past or trending search, as a chip that runs it when tapped.
+class _QueryChip extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const _QueryChip({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Pressable(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: cs.onSurface.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+          border: Border.all(color: cs.onSurface.withValues(alpha: 0.08)),
+        ),
+        alignment: Alignment.center,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: cs.onSurface.withValues(alpha: 0.55)),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1092,6 +1212,41 @@ class _PreviewCoordinator extends ChangeNotifier {
       if (a[i] != b[i]) return false;
     }
     return true;
+  }
+
+  /// A tile is being thrown away. Forget it WITHOUT choosing a replacement
+  /// on the spot.
+  ///
+  /// ════════════════════════════════════════════════════════════════════════
+  /// LEAVING SEARCH USED TO OPEN A VIDEO FOR EVERY TILE ON THE WAY OUT
+  /// ════════════════════════════════════════════════════════════════════════
+  ///
+  /// A closing tile used to report itself as invisible, and that report
+  /// does what any report does: picks the most visible tile left and starts
+  /// its preview. But a tile only closes on its own when it has scrolled far
+  /// out of view; the common case is the whole page closing, and then the
+  /// "most visible tile left" is simply the next one in line to be closed.
+  /// Each closing tile handed the preview to its neighbour, which opened a
+  /// video decoder, and was closed a moment later — a string of decoders
+  /// opened for nothing on every visit to another tab.
+  ///
+  /// It also broke a rule of the framework: those neighbours rebuilt while
+  /// the tree was being torn down, which debug builds stop with an error.
+  ///
+  /// Nothing needs choosing here anyway. A tile that closes while the page
+  /// stays open has scrolled far out of view, and it reported itself
+  /// invisible on the way — which already handed its turn on. And when
+  /// results are replaced, the new tiles report the moment they are laid
+  /// out, and the choice is made from them.
+  void forget(String tileId) {
+    _fractions.remove(tileId);
+    _urls.remove(tileId);
+    _consumedThisCycle.remove(tileId);
+    if (_pendingActive == tileId) _pendingActive = null;
+    if (_activeId != tileId) return;
+    _advanceTimer?.cancel();
+    _advanceTimer = null;
+    _activeId = null;
   }
 
   /// Called by a tile when its video ends. If it's still active, advance.
@@ -1320,7 +1475,7 @@ class _PreviewableTileState extends State<_PreviewableTile> {
   @override
   void dispose() {
     widget.coordinator.removeListener(_onCoordinatorChanged);
-    widget.coordinator.report(_id, 0);
+    widget.coordinator.forget(_id);
     // Same job as going inactive: give the decoder back. One copy of that
     // code, so the two paths cannot drift apart.
     _releasePlayer();
@@ -1588,144 +1743,169 @@ class _PreviewableTileState extends State<_PreviewableTile> {
         if (!mounted) return;
         widget.coordinator.report(_id, info.visibleFraction, url: _originUrl());
       },
-      child: GestureDetector(
+      child: Pressable(
         onTap: widget.onTap,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            // Thumbnail (always present — instant tile content while video
-            // buffers, and the only thing visible for non-active tiles).
-            if (hasThumbnail)
-              Image.network(
-                ch.thumbnailUrl!,
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => _gradientBg(context),
-              )
-            else
-              _gradientBg(context),
+        pressedScale: 0.97,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // Thumbnail (always present — instant tile content while video
+              // buffers, and the only thing visible for non-active tiles).
+              if (hasThumbnail)
+                Image.network(
+                  ch.thumbnailUrl!,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => _gradientBg(context),
+                )
+              else
+                _gradientBg(context),
 
-            // Live preview overlays the thumbnail when active. We bind
-            // to the controller's value via ValueListenableBuilder so
-            // the rebuild fires automatically the moment isInitialized
-            // flips — no listener-and-flag dance. Positioned.fill +
-            // ClipRect keep the painted texture strictly inside the
-            // tile's bounds — without ClipRect, FittedBox(cover) on a
-            // small grid cell with a large source video lets the
-            // texture bleed into adjacent tiles (RenderFittedBox does
-            // NOT clip its scaled child by default).
-            if (_isActive && _controller != null)
-              Positioned.fill(
-                child: ClipRect(
-                  child: ValueListenableBuilder<VideoPlayerValue>(
-                    valueListenable: _controller!,
-                    builder: (context, value, _) {
-                      if (!value.isInitialized) return const SizedBox.shrink();
-                      return FittedBox(
-                        fit: BoxFit.cover,
-                        child: SizedBox(
-                          width: value.size.width,
-                          height: value.size.height,
-                          child: VideoPlayer(_controller!),
-                        ),
-                      );
-                    },
+              // Live preview overlays the thumbnail when active. We bind
+              // to the controller's value via ValueListenableBuilder so
+              // the rebuild fires automatically the moment isInitialized
+              // flips — no listener-and-flag dance. Positioned.fill +
+              // ClipRect keep the painted texture strictly inside the
+              // tile's bounds — without ClipRect, FittedBox(cover) on a
+              // small grid cell with a large source video lets the
+              // texture bleed into adjacent tiles (RenderFittedBox does
+              // NOT clip its scaled child by default).
+              if (_isActive && _controller != null)
+                Positioned.fill(
+                  child: ClipRect(
+                    child: ValueListenableBuilder<VideoPlayerValue>(
+                      valueListenable: _controller!,
+                      builder: (context, value, _) {
+                        if (!value.isInitialized) return const SizedBox.shrink();
+                        return FittedBox(
+                          fit: BoxFit.cover,
+                          child: SizedBox(
+                            width: value.size.width,
+                            height: value.size.height,
+                            child: VideoPlayer(_controller!),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+
+              // Scrim top and bottom, so the labels read on any picture.
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0.35),
+                      Colors.transparent,
+                      Colors.transparent,
+                      Colors.black.withValues(alpha: 0.75),
+                    ],
+                    stops: const [0.0, 0.22, 0.5, 1.0],
                   ),
                 ),
               ),
 
-            // Gradient scrim for text legibility.
-            Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.transparent,
-                    Colors.black.withValues(alpha: 0.7),
-                  ],
-                  stops: const [0.4, 1.0],
-                ),
-              ),
-            ),
-
-            if (isBattle)
+              // Who made it, top left.
               Positioned(
                 top: 6,
-                right: 6,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Colors.red.withValues(alpha: 0.9),
-                    borderRadius: BorderRadius.circular(4),
+                left: 6,
+                right: isBattle ? 40 : 6,
+                child: Row(
+                  children: [
+                    ArenaAvatar(name: ch.creatorUsername, size: 18),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(
+                        ch.creatorUsername,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          shadows: [Shadow(blurRadius: 4)],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // A battle: two people on it, not one.
+              if (isBattle)
+                Positioned(
+                  top: 6,
+                  right: 6,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [AppTheme.accentPink, AppTheme.primary],
+                      ),
+                      borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.bolt_rounded, color: Colors.white, size: 11),
+                        Text('VS',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 9,
+                                fontWeight: FontWeight.w900)),
+                      ],
+                    ),
                   ),
-                  child: const Text('VS',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 9,
-                          fontWeight: FontWeight.w800)),
                 ),
-              ),
 
-            // Muted-while-previewing badge — gives users a visual cue this
-            // is a silent preview, matching Instagram explore convention.
-            // Placed bottom-right so it doesn't fight the VS badge for the
-            // top-right corner.
-            if (_isActive)
-              const Positioned(
-                bottom: 6,
-                right: 6,
-                child: _MutedBadge(),
-              ),
-
-            Positioned(
-              bottom: 6,
-              left: 6,
-              child: Row(
-                children: [
-                  const Icon(Icons.play_arrow,
-                      color: Colors.white, size: 14),
-                  const SizedBox(width: 2),
-                  Text(_formatCount(ch.views),
+              // Title and views, bottom.
+              Positioned(
+                left: 8,
+                right: 8,
+                bottom: 7,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      ch.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600)),
-                ],
-              ),
-            ),
-
-            Positioned(
-              bottom: 22,
-              left: 6,
-              right: 6,
-              child: Text(ch.title,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis),
-            ),
-
-            Positioned(
-              top: 6,
-              left: 6,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.black45,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(ch.creatorUsername,
-                    style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w500)),
+                        fontSize: 11.5,
+                        height: 1.2,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        const Icon(Icons.play_arrow_rounded,
+                            color: Colors.white, size: 14),
+                        const SizedBox(width: 1),
+                        Text(
+                          _formatCount(ch.views),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const Spacer(),
+                        // Muted-while-previewing cue, as in any explore grid.
+                        if (_isActive) const _MutedBadge(),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

@@ -30,7 +30,7 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
     required this.user,
     required this.record,
     this.topInset = 0,
-    this.openHeight = 300,
+    this.openHeight = 270,
     this.leading,
     this.actions = const [],
   });
@@ -49,9 +49,18 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
 
   @override
   Widget build(BuildContext context, double shrinkOffset, bool overlaps) {
+    // The width this header is actually given, not the screen's: the two
+    // match on a phone held upright, but not in a split screen, a tablet
+    // side panel or a test — and the avatar is centred on this number.
+    return LayoutBuilder(
+      builder: (context, box) =>
+          _build(context, shrinkOffset, box.maxWidth),
+    );
+  }
+
+  Widget _build(BuildContext context, double shrinkOffset, double width) {
     final t = closedFraction(shrinkOffset);
     final move = Curves.easeInOut.transform(t);
-    final width = MediaQuery.sizeOf(context).width;
     final colors = LeagueBadge.gradientFor(record.league);
     final dark = [
       Color.lerp(colors.first, Colors.black, 0.45)!,

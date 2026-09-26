@@ -1,5 +1,7 @@
-import'package:flutter/material.dart';
+import 'package:flutter/material.dart';
+import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/models/user_model.dart';
+import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/league_badge.dart';
 
 /// Reusable list-tile for displaying a user wherever needed
@@ -23,51 +25,84 @@ class UserTile extends StatelessWidget{
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final league = LeagueBadge.gradientFor(user.league);
 
-    return ListTile(
+    return Pressable(
       onTap: onTap,
-      leading: CircleAvatar(
-        backgroundColor: cs.primaryContainer,
-        child: Text(
-          user.username[0].toUpperCase(),
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            color: cs.onPrimaryContainer,
-          ),
+      pressedScale: 0.98,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Row(
+          children: [
+            ArenaAvatar(name: user.username, size: 48, ring: league),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    user.username,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: [
+                      InfoChip(
+                        label: user.league,
+                        icon: Icons.shield_rounded,
+                        color: league.first,
+                      ),
+                      InfoChip(
+                        label: '${user.wins}W · ${user.losses}L',
+                        icon: Icons.emoji_events_rounded,
+                        color: AppTheme.warning,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            if (showFollowButton) ...[
+              const SizedBox(width: 8),
+              isFollowing
+                  ? Pressable(
+                      onTap: onFollowToggle,
+                      child: Container(
+                        height: 34,
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          borderRadius:
+                              BorderRadius.circular(AppTheme.radiusFull),
+                          border: Border.all(
+                            color: cs.onSurface.withValues(alpha: 0.2),
+                          ),
+                        ),
+                        child: const Text(
+                          'Following',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    )
+                  : GradientButton(
+                      label: 'Follow',
+                      height: 34,
+                      onPressed: onFollowToggle,
+                    ),
+            ],
+          ],
         ),
       ),
-      title: Row(
-        children: [
-          Flexible(
-            child: Text(
-              user.username,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-          ),
-          const SizedBox(width: 8),
-          LeagueBadge(league: user.league, small: true),
-        ],
-      ),
-      subtitle: Text(
-        'W:${user.wins}  L:${user.losses}  •  ${user.followersCount} followers',
-      ),
-      trailing: showFollowButton
-          ? FilledButton.tonal(
-              onPressed: onFollowToggle,
-              style: FilledButton.styleFrom(
-                backgroundColor: isFollowing
-                    ? cs.surfaceContainerHighest
-                    : cs.primaryContainer,
-                foregroundColor: isFollowing
-                    ? cs.onSurface.withValues(alpha: 0.7)
-                    : cs.onPrimaryContainer,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                minimumSize: const Size(0, 36),
-              ),
-              child: Text(isFollowing ? 'Following' : 'Follow'),
-            )
-          : null,
     );
   }
 }

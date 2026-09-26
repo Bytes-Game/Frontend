@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/video_player_service.dart';
@@ -110,7 +112,6 @@ class _MainShellState extends State<MainShell> {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     return Scaffold(
       // Whole shell sits on a black backdrop so the nav bar reads as part
       // of the dark TikTok-style chrome rather than a stark light strip.
@@ -123,7 +124,7 @@ class _MainShellState extends State<MainShell> {
         data: NavigationBarThemeData(
           backgroundColor: Colors.black,
           surfaceTintColor: Colors.transparent,
-          indicatorColor: Colors.white.withValues(alpha: 0.18),
+          indicatorColor: AppTheme.primary.withValues(alpha: 0.18),
           height: 64,
           labelTextStyle: WidgetStateProperty.resolveWith((states) {
             final active = states.contains(WidgetState.selected);
@@ -144,15 +145,17 @@ class _MainShellState extends State<MainShell> {
         child: NavigationBar(
           selectedIndex: _currentIndex,
           onDestinationSelected: _onDestination,
-          destinations: [
-            const NavigationDestination(
+          // The chosen tab's icon fills and takes the brand gradient, so
+          // where you are reads at a glance on the black bar.
+          destinations: const [
+            NavigationDestination(
               icon: Icon(Icons.home_outlined),
-              selectedIcon: Icon(Icons.home_rounded),
+              selectedIcon: GradientIcon(Icons.home_rounded, size: 26),
               label: 'Home',
             ),
-            const NavigationDestination(
+            NavigationDestination(
               icon: Icon(Icons.chat_bubble_outline_rounded),
-              selectedIcon: Icon(Icons.chat_bubble_rounded),
+              selectedIcon: GradientIcon(Icons.chat_bubble_rounded, size: 26),
               label: 'Messages',
             ),
             // Center create action. Custom pill so it reads as a primary
@@ -160,18 +163,18 @@ class _MainShellState extends State<MainShell> {
             // there's no "selected" state to render — pressing it always
             // launches the create sheet, never marks itself active.
             NavigationDestination(
-              icon: _CreatePill(color: cs.primary),
-              selectedIcon: _CreatePill(color: cs.primary),
+              icon: _CreatePill(),
+              selectedIcon: _CreatePill(),
               label: 'Create',
             ),
-            const NavigationDestination(
-              icon: Icon(Icons.search_outlined),
-              selectedIcon: Icon(Icons.search_rounded),
+            NavigationDestination(
+              icon: Icon(Icons.search_rounded),
+              selectedIcon: GradientIcon(Icons.search_rounded, size: 26),
               label: 'Search',
             ),
-            const NavigationDestination(
+            NavigationDestination(
               icon: Icon(Icons.person_outline_rounded),
-              selectedIcon: Icon(Icons.person_rounded),
+              selectedIcon: GradientIcon(Icons.person_rounded, size: 26),
               label: 'Profile',
             ),
           ],
@@ -181,27 +184,27 @@ class _MainShellState extends State<MainShell> {
   }
 }
 
-/// Filled "+" pill used as the center nav slot. Sized to fit inside the
-/// 64-px NavigationBar with a touch of breathing room so it visually
-/// dominates without breaking the bar's proportions.
+/// The "+" in the middle of the bar, filled with the brand gradient and
+/// glowing slightly, so it reads as the one thing to do rather than
+/// another place to go.
 class _CreatePill extends StatelessWidget {
-  final Color color;
-  const _CreatePill({required this.color});
+  const _CreatePill();
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 44,
-      height: 28,
+      width: 46,
+      height: 30,
       decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(8),
+        gradient: const LinearGradient(colors: kBrandColors),
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+        boxShadow: AppTheme.glowPink(intensity: 0.35),
       ),
       alignment: Alignment.center,
       child: const Icon(
         Icons.add_rounded,
         color: Colors.white,
-        size: 22,
+        size: 24,
       ),
     );
   }

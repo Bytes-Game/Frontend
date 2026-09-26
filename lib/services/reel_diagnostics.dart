@@ -365,6 +365,10 @@ class ReelDiagnostics {
   @visibleForTesting
   int get debugPreviewPeak => _previewPeak;
 
+  /// How many previews have been opened in all, live or since released.
+  @visibleForTesting
+  int get debugPreviewOpened => _previewOpened;
+
   /// A reel's opening slice was fetched and handed to the proxy.
   void recordPrefixWarmed() {
     if (!_visible) return;
