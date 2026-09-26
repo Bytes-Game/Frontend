@@ -26,6 +26,7 @@
 
 import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:myapp/services/network_quality_service.dart';
@@ -108,11 +109,73 @@ void main() {
   });
 
   group('not being blind on every launch', () {
-    test('last run\'s reading opens this one', () {
-      nq.restoreRememberedBps(12000000); // a fast link, measured before
-      expect(nq.measuredBps, 12000000);
-      expect(nq.pickVariantUrl(Map.of(variants)), contains('720p'),
-          reason: 'the app re-paid the whole cold start on every launch');
+    test('a slow reading from last run still makes the opening gentler', () {
+      // The half of remembering that pays: a phone that was on a bad link
+      // last time opens gently instead of guessing.
+      nq.restoreRememberedBps(1000000);
+      expect(nq.measuredBps, 1000000);
+      expect(nq.pickedInTheDark, isTrue);
+    });
+
+    test('a fast reading from last run does not make the opening bolder', () {
+      // The half that hurt. A device log opened on a remembered 61 Mbps,
+      // put the heaviest file on most of the first page and warmed ten
+      // deep — and the link was 10 Mbps. First frames took three and five
+      // seconds and 76% of videos started from the network. The session
+      // before, opening on a remembered 4.1, had 95% ready.
+      //
+      // This used to assert the opposite — "last run's reading opens this
+      // one", 12 Mbps remembered meant 720p on the first page — to stop the
+      // app starting blind every launch. Since then a guess made before
+      // this run has measured is revisited once it has (see
+      // pickedInTheDark), so a careful opening costs a few soft videos; a
+      // bold one costs the stall.
+      nq.restoreRememberedBps(61100000);
+      expect(nq.measuredBps, NetworkQualityService.rememberedCeilingBps);
+      expect(nq.pickVariantUrl(Map.of(variants)), variants['480p'],
+          reason: 'no bolder than a phone that remembers nothing');
+    });
+
+    test('the ceiling is exactly what the careful opening needs', () {
+      // Worked out from the picker's own numbers, so it cannot drift from
+      // what "careful" means there.
+      final cap = NetworkQualityService.rememberedCeilingBps;
+      nq.restoreRememberedBps(cap * 10);
+      expect(nq.affordableLabel, isNotNull);
+      final needed = NetworkQualityService
+          .bitrateNeededFor[NetworkQualityService.unmeasuredMaxLabel]!;
+      expect(NetworkQualityService.bitrateNeededFor[nq.affordableLabel]!,
+          lessThanOrEqualTo(needed),
+          reason: 'a capped memory may not afford anything heavier than '
+              'the careful opening');
+    });
+
+    test('once this run has measured, a fast link is believed', () {
+      nq.restoreRememberedBps(61100000);
+      for (var i = 0; i < 3; i++) {
+        nq.recordThroughput(8 * 1024 * 1024, const Duration(seconds: 1));
+      }
+      expect(nq.measuredBps,
+          greaterThan(NetworkQualityService.rememberedCeilingBps),
+          reason: 'the cap is for the dark only; capping measurements '
+              'would make the app permanently cautious');
+    });
+
+    test('the log says what kind of connection, and whose number it is', () {
+      nq.debugApplyConnectivity([ConnectivityResult.mobile]);
+      nq.restoreRememberedBps(61100000);
+      var line = NetworkQualityService.variantPicksSummary();
+      expect(line, contains('net=mobile'));
+      expect(line, contains('(remembered 61.1Mbps, capped)'));
+
+      for (var i = 0; i < 3; i++) {
+        nq.recordThroughput(8 * 1024 * 1024, const Duration(seconds: 1));
+      }
+      line = NetworkQualityService.variantPicksSummary();
+      expect(line, isNot(contains('remembered')),
+          reason: 'a live measurement must not be labelled a guess');
+      nq.debugApplyConnectivity([ConnectivityResult.wifi]);
+      expect(NetworkQualityService.variantPicksSummary(), contains('net=wifi'));
     });
 
     test('this run\'s own readings beat it', () {
@@ -140,9 +203,9 @@ void main() {
     });
 
     test('nonsense does not wipe a good value already restored', () {
-      nq.restoreRememberedBps(5000000);
+      nq.restoreRememberedBps(2000000);
       nq.restoreRememberedBps(0);
-      expect(nq.measuredBps, 5000000,
+      expect(nq.measuredBps, 2000000,
           reason: 'one unreadable write and the app is blind again');
     });
   });

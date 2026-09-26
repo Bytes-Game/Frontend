@@ -13,6 +13,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -125,6 +126,10 @@ void main() {
   });
 
   test('watched videos count, and the oldest go first', () async {
+    final said = <String>[];
+    final realPrint = debugPrint;
+    debugPrint = (String? m, {int? wrapWidth}) => said.add(m ?? '');
+    addTearDown(() => debugPrint = realPrint);
     final now = DateTime.now();
     final a = await warmOne('https://cdn/a.mp4');
     final b = await warmOne('https://cdn/b.mp4');
@@ -156,6 +161,12 @@ void main() {
       await eventually(() => !a.existsSync()),
       isTrue,
       reason: 'the least recently watched reel should be deleted',
+    );
+    expect(
+      said.any((l) => l.contains('cache sweep: removed 1 (1 saved openings')),
+      isTrue,
+      reason: 'a deleted opening is a video that no longer starts '
+          'instantly; the log has to say so. Said: $said',
     );
     expect(
       b.existsSync() && d.existsSync() && e.existsSync(),

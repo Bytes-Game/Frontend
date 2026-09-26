@@ -70,8 +70,9 @@ void main() {
 
     test('last run\'s number does not count as knowing', () {
       net.restoreRememberedBps(4200000);
-      expect(net.measuredBps, 4200000,
-          reason: 'it is still the best opening guess there is');
+      expect(net.measuredBps, NetworkQualityService.rememberedCeilingBps,
+          reason: 'still the opening guess, but no bolder than a phone that '
+              'remembers nothing — 4.2 is above that, so it is capped');
       expect(net.pickedInTheDark, isTrue,
           reason: 'a figure from a previous run, possibly a different '
               'network, was being treated as this run\'s evidence');
