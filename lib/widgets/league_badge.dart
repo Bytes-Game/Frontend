@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:myapp/config/app_theme.dart';
+
 /// Coloured league badge with gradient background.
 /// Used in profile pages, user tiles, and post cards.
 class LeagueBadge extends StatelessWidget {
@@ -52,4 +54,28 @@ class LeagueBadge extends StatelessWidget {
 
   /// The league's two colours, for surfaces tinted by it.
   static List<Color> gradientFor(String league) => _gradient(league);
+}
+
+/// The one colour a profile is washed in: its league's, refined.
+///
+/// These are not the medal colours of the emblems. They are the same hues,
+/// pulled back to what a well-made website uses behind a headline — steel
+/// rather than grey for Silver, a warm amber rather than yellow for Gold —
+/// so a profile has colour without looking like a game. Unranked uses the
+/// app's own blue.
+Color leagueWash(String league) {
+  switch (league.toLowerCase()) {
+    case 'bronze':
+      return const Color(0xFFC77B3B);
+    case 'silver':
+      return const Color(0xFF7D8FB3);
+    case 'gold':
+      return const Color(0xFFD4A017);
+    case 'platinum':
+      return const Color(0xFF3FA7B5);
+    case 'diamond':
+      return const Color(0xFF6E7BFF);
+    default:
+      return AppTheme.primary;
+  }
 }

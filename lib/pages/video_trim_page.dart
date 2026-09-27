@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/pages/challenge_metadata_page.dart';
 import 'package:myapp/services/clip_length.dart';
 import 'package:myapp/services/event_tracker.dart';
@@ -311,193 +312,297 @@ class _VideoTrimPageState extends State<VideoTrimPage>
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Scaffold(
-      // App bar follows the system theme — the previous forced
-      // Colors.black header looked out of place when the surrounding
-      // app was in light mode. The video viewport below stays black
-      // because video letterboxing always looks best on pure black.
-      appBar: AppBar(
-        elevation: 0,
-        title: const Text('Trim clip'),
+    // Dark whatever the phone's theme: a video is best judged on black, and
+    // this screen is about the video.
+    return Theme(
+      data: ThemeData.dark(useMaterial3: true).copyWith(
+        colorScheme: const ColorScheme.dark(
+          primary: AppTheme.primary,
+          surface: Colors.black,
+        ),
       ),
-      body: SafeArea(
-        child: _initError != null
-            ? Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text(
-                    _initError!,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: cs.onSurface.withValues(alpha: 0.7),
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(
+          child: _initError != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      _initError!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white70),
                     ),
                   ),
-                ),
-              )
-            : (_controller == null || _range == null)
-                ? const Center(child: CircularProgressIndicator())
-                : _buildBody(cs),
+                )
+              : (_controller == null || _range == null)
+                  ? const Center(child: CircularProgressIndicator())
+                  : _buildBody(),
+        ),
       ),
     );
   }
 
-  Widget _buildBody(ColorScheme cs) {
+  Widget _buildBody() {
     final controller = _controller!;
     final r = _range!;
     final spanMs = (r.end - r.start).round();
     final totalMs = _total.inMilliseconds.clamp(1, 1 << 30);
+    final showLengths = ClipLength.worthShowing(
+        totalMs: totalMs, cap: VideoProcessorService.maxReelDuration);
 
     return Column(
       children: [
-        // Video viewport sits on a black backdrop so letterbox bars
-        // disappear into the page. AspectRatio + VideoPlayer gives
-        // BoxFit.contain semantics — the video paints at its true
-        // ratio and the black backdrop fills any unused space.
+        // ── Top bar: back, what this is, how long the clip is ──
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 4, 16, 4),
+          child: Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
+                color: Colors.white,
+                tooltip: 'Back',
+                onPressed: () => Navigator.of(context).maybePop(),
+              ),
+              const Expanded(
+                child: Text(
+                  'Trim your clip',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              // The length, large enough to read at a glance while the
+              // handles move.
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 150),
+                child: Container(
+                  key: ValueKey(spanMs ~/ 100),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '${(spanMs / 1000).toStringAsFixed(1)}s',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // ── The clip, as a card you can tilt ──
         Expanded(
-          child: ColoredBox(
-            color: Colors.black,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(28, 8, 28, 12),
             child: Center(
-              child: AspectRatio(
-                aspectRatio: controller.value.aspectRatio,
-                child: VideoPlayer(controller),
+              child: _TiltCard(
+                onTap: () {
+                  setState(() {
+                    if (controller.value.isPlaying) {
+                      controller.pause();
+                    } else {
+                      controller.play();
+                    }
+                  });
+                },
+                child: AspectRatio(
+                  aspectRatio: controller.value.aspectRatio,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      VideoPlayer(controller),
+                      // Paused: a play mark in the middle.
+                      ValueListenableBuilder<VideoPlayerValue>(
+                        valueListenable: controller,
+                        builder: (_, v, _) => AnimatedOpacity(
+                          opacity: v.isPlaying ? 0 : 1,
+                          duration: const Duration(milliseconds: 150),
+                          child: Center(
+                            child: Container(
+                              width: 64,
+                              height: 64,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.black.withValues(alpha: 0.45),
+                              ),
+                              child: const Icon(
+                                Icons.play_arrow_rounded,
+                                color: Colors.white,
+                                size: 40,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      // Where the playhead is inside the chosen piece.
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        height: 3,
+                        child: ValueListenableBuilder<VideoPlayerValue>(
+                          valueListenable: controller,
+                          builder: (_, v, _) {
+                            final f = spanMs <= 0
+                                ? 0.0
+                                : ((v.position.inMilliseconds - r.start) /
+                                        spanMs)
+                                    .clamp(0.0, 1.0);
+                            return FractionallySizedBox(
+                              alignment: Alignment.centerLeft,
+                              widthFactor: f,
+                              child: const ColoredBox(color: Colors.white),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
         ),
-        Container(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-          // Bottom controls follow the theme so the slider, copy,
-          // and Continue button stay readable in light mode.
-          color: cs.surface,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+
+        // ── The strip: pick the piece to post ──
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 40,
+              rangeTrackShape: const RoundedRectRangeSliderTrackShape(),
+              rangeThumbShape: const _HandleThumb(),
+              activeTrackColor: AppTheme.primary.withValues(alpha: 0.35),
+              inactiveTrackColor: Colors.white.withValues(alpha: 0.10),
+              overlayShape: SliderComponentShape.noOverlay,
+              thumbColor: Colors.white,
+            ),
+            child: RangeSlider(
+              values: r,
+              min: 0,
+              max: totalMs.toDouble(),
+              onChanged: _trimming ? null : _onSliderChanged,
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 2, 24, 0),
+          child: Row(
             children: [
-              Row(
+              Text(_fmt(r.start.toInt()), style: _timeStyle),
+              const Spacer(),
+              Text(
+                'of ${_fmt(totalMs)}',
+                style: _timeStyle.copyWith(color: Colors.white38),
+              ),
+              const Spacer(),
+              Text(_fmt(r.end.toInt()), style: _timeStyle),
+            ],
+          ),
+        ),
+
+        // ── How long, as pills ──
+        // Hidden outright when the whole video fits inside the shortest
+        // option: every pill would mean the same thing, and a row that all
+        // does nothing reads as broken.
+        if (showLengths)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
                 children: [
-                  Text(
-                    _fmt(r.start.toInt()),
-                    style: TextStyle(
-                      color: cs.onSurface.withValues(alpha: 0.7),
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      'Selected: ${(spanMs / 1000).toStringAsFixed(1)}s',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: cs.onSurface,
-                        fontWeight: FontWeight.w700,
+                  for (final option in _lengthOptions)
+                    if (ClipLength.isUseful(option,
+                        totalMs: totalMs,
+                        cap: VideoProcessorService.maxReelDuration))
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: _LengthPill(
+                          label: ClipLength.label(option),
+                          selected: _limitMs == option.inMilliseconds,
+                          onTap: _trimming ? null : () => _setLimit(option),
+                        ),
                       ),
-                    ),
-                  ),
-                  Text(
-                    _fmt(r.end.toInt()),
-                    style: TextStyle(
-                      color: cs.onSurface.withValues(alpha: 0.7),
-                    ),
-                  ),
                 ],
               ),
-              SliderTheme(
-                data: SliderTheme.of(context).copyWith(
-                  trackHeight: 4,
-                  rangeThumbShape: const RoundRangeSliderThumbShape(
-                    enabledThumbRadius: 10,
-                  ),
-                  activeTrackColor: cs.primary,
-                  inactiveTrackColor: cs.outlineVariant,
-                ),
-                child: RangeSlider(
-                  values: r,
-                  min: 0,
-                  max: totalMs.toDouble(),
-                  onChanged: _trimming ? null : _onSliderChanged,
-                ),
-              ),
-              const SizedBox(height: 16),
-              // Hidden outright when the whole video fits inside the
-              // shortest option: every button would mean the same thing,
-              // and a row that all does nothing reads as broken.
-              if (ClipLength.worthShowing(
-                  totalMs: totalMs,
-                  cap: VideoProcessorService.maxReelDuration)) ...[
-                Text(
-                  'Clip length',
-                  style: TextStyle(
-                    color: cs.onSurface.withValues(alpha: 0.7),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final option in _lengthOptions)
-                      if (ClipLength.isUseful(option,
-                          totalMs: totalMs,
-                          cap: VideoProcessorService.maxReelDuration))
-                        ChoiceChip(
-                          label: Text(ClipLength.label(option)),
-                          selected: _limitMs == option.inMilliseconds,
-                          onSelected: _trimming
-                              ? null
-                              : (_) => _setLimit(option),
-                        ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-              ],
-              Text(
-                totalMs > _limitMs
-                    ? 'Your video is ${_fmt(totalMs)} long. Drag the handles '
-                        'to pick which ${ClipLength.label(Duration(milliseconds: _limitMs))} to post.'
-                    : 'Your whole video fits. Drag the handles to trim it '
-                        'further if you want.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: cs.onSurface.withValues(alpha: 0.6),
-                  fontSize: 12,
+            ),
+          ),
+
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+          child: Text(
+            totalMs > _limitMs
+                ? 'Drag the handles to choose which '
+                    '${ClipLength.label(Duration(milliseconds: _limitMs))} '
+                    'to post.'
+                : 'Your whole video fits. Drag the handles to trim it.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white54, fontSize: 12.5),
+          ),
+        ),
+
+        // ── Next ──
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+          child: SizedBox(
+            height: 52,
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: _trimming ? null : _onUseClip,
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTheme.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
                 ),
               ),
-              const SizedBox(height: 16),
-              FilledButton(
-                onPressed: _trimming ? null : _onUseClip,
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(52),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-                child: _trimming
-                    ? SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          // FilledButton uses cs.primary for bg, so
-                          // its foreground should be cs.onPrimary —
-                          // hardcoded Colors.white was correct by
-                          // coincidence on most themes.
-                          color: cs.onPrimary,
-                        ),
-                      )
-                    : const Text(
-                        'Use clip',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                        ),
+              child: _trimming
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
                       ),
-              ),
-            ],
+                    )
+                  : const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          'Next',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        SizedBox(width: 6),
+                        Icon(Icons.arrow_forward_rounded, size: 20),
+                      ],
+                    ),
+            ),
           ),
         ),
       ],
     );
   }
+
+  static const _timeStyle = TextStyle(
+    color: Colors.white70,
+    fontSize: 12.5,
+    fontWeight: FontWeight.w500,
+    fontFeatures: [FontFeature.tabularFigures()],
+  );
 
   /// Choose how long the clip may run.
   ///
@@ -564,5 +669,199 @@ class _VideoTrimPageState extends State<VideoTrimPage>
     final mm = (s ~/ 60).toString().padLeft(2, '0');
     final ss = (s % 60).toString().padLeft(2, '0');
     return '$mm:$ss';
+  }
+}
+
+/// The clip as a card that can be tilted.
+///
+/// Drag across it and it leans in 3D, following the finger, with a sheen
+/// sliding over it like light on glass; let go and it springs back flat.
+/// A tap is passed on (play and pause).
+class _TiltCard extends StatefulWidget {
+  final Widget child;
+  final VoidCallback onTap;
+
+  const _TiltCard({required this.child, required this.onTap});
+
+  @override
+  State<_TiltCard> createState() => _TiltCardState();
+}
+
+class _TiltCardState extends State<_TiltCard>
+    with SingleTickerProviderStateMixin {
+  Offset _tilt = Offset.zero;
+  late final AnimationController _back = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 520),
+  )..addListener(() {
+      final t = Curves.elasticOut.transform(_back.value);
+      setState(() => _tilt = Offset.lerp(_from, Offset.zero, t)!);
+    });
+  Offset _from = Offset.zero;
+
+  /// The furthest it leans, in radians — enough to read as 3D, not so much
+  /// the video is hard to see.
+  static const double _max = 0.32;
+
+  @override
+  void dispose() {
+    _back.dispose();
+    super.dispose();
+  }
+
+  void _onPan(DragUpdateDetails d, Size size) {
+    _back.stop();
+    setState(() {
+      _tilt = Offset(
+        (_tilt.dx - d.delta.dy / size.height * 1.4).clamp(-_max, _max),
+        (_tilt.dy + d.delta.dx / size.width * 1.4).clamp(-_max, _max),
+      );
+    });
+  }
+
+  void _release() {
+    _from = _tilt;
+    _back.forward(from: 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, box) {
+        final size = Size(box.maxWidth, box.maxHeight);
+        final sheen = Alignment(-_tilt.dy * 4, -_tilt.dx * 4);
+        return GestureDetector(
+          onTap: widget.onTap,
+          onPanUpdate: (d) => _onPan(d, size),
+          onPanEnd: (_) => _release(),
+          onPanCancel: _release,
+          child: Transform(
+            alignment: Alignment.center,
+            transform: Matrix4.identity()
+              ..setEntry(3, 2, 0.0016)
+              ..rotateX(_tilt.dx)
+              ..rotateY(_tilt.dy),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(22),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppTheme.primary.withValues(alpha: 0.22),
+                    blurRadius: 40,
+                    offset: Offset(-_tilt.dy * 40, 18 + _tilt.dx * 40),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(22),
+                child: Stack(
+                  children: [
+                    widget.child,
+                    // Light on glass, sliding as it leans.
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: RadialGradient(
+                              center: sheen,
+                              radius: 0.9,
+                              colors: [
+                                Colors.white.withValues(
+                                  alpha: 0.18 * (_tilt.distance / _max),
+                                ),
+                                Colors.white.withValues(alpha: 0),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// A trim handle: a tall white bar with a grip, like the edge of a film
+/// strip being pulled.
+class _HandleThumb extends RangeSliderThumbShape {
+  const _HandleThumb();
+
+  static const _size = Size(14, 44);
+
+  @override
+  Size getPreferredSize(bool isEnabled, bool isDiscrete) => _size;
+
+  @override
+  void paint(
+    PaintingContext context,
+    Offset center, {
+    required Animation<double> activationAnimation,
+    required Animation<double> enableAnimation,
+    bool isDiscrete = false,
+    bool isEnabled = false,
+    bool? isOnTop,
+    required SliderThemeData sliderTheme,
+    TextDirection? textDirection,
+    Thumb? thumb,
+    bool? isPressed,
+  }) {
+    final canvas = context.canvas;
+    final rect = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: center, width: _size.width, height: _size.height),
+      const Radius.circular(5),
+    );
+    canvas.drawShadow(Path()..addRRect(rect), Colors.black, 4, false);
+    canvas.drawRRect(rect, Paint()..color = Colors.white);
+    final grip = Paint()
+      ..color = Colors.black.withValues(alpha: 0.35)
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(
+      center.translate(0, -8),
+      center.translate(0, 8),
+      grip,
+    );
+  }
+}
+
+/// One clip-length choice, as a pill.
+class _LengthPill extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  const _LengthPill({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? Colors.white : Colors.white.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.black : Colors.white,
+            fontWeight: FontWeight.w600,
+            fontSize: 13.5,
+          ),
+        ),
+      ),
+    );
   }
 }

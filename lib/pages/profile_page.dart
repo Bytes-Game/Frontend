@@ -502,6 +502,11 @@ class _ProfilePageState extends State<ProfilePage>
       return (icon: icon, label: n > 0 ? '$label $n' : label);
     }
 
+    // A private account shows its header and stats to everyone, and its
+    // videos and battles only to the people it lets follow it.
+    final locked =
+        !isOwn && widget.user.visibility == 'friends' && !isFollowing;
+
     final body = NestedScrollView(
       headerSliverBuilder: (context, _) {
         return [
@@ -513,6 +518,8 @@ class _ProfilePageState extends State<ProfilePage>
               record: record,
               topInset: topInset,
               leading: widget.isEmbedded ? null : const BackButton(),
+              // "Add bio" sits right under your name while you have none.
+              onAddBio: isOwn ? _openEditProfile : null,
               // Everything that used to be a row of buttons under the
               // stats lives up here as icons, so the page below is all
               // about the person.
@@ -539,7 +546,6 @@ class _ProfilePageState extends State<ProfilePage>
                 postsCount: _myChallenges.length,
                 onTapFollowers: _openFollowers,
                 onTapFollowing: _openFollowing,
-                onEditProfile: _openEditProfile,
                 onFollowToggle: () {
                   if (isFollowing) {
                     EventTracker.instance.trackFollowToggle(
@@ -594,6 +600,7 @@ class _ProfilePageState extends State<ProfilePage>
             ),
           ),
           // Their battle record, tilting into place as it scrolls in.
+          if (!locked)
           SliverToBoxAdapter(
             child: ScrollReveal(
               child: Padding(
@@ -604,6 +611,7 @@ class _ProfilePageState extends State<ProfilePage>
           ),
           // Pinned tabs. Sliver wrapper so it sticks to the top edge as the
           // user scrolls past the header.
+          if (!locked)
           SliverPersistentHeader(
             pinned: true,
             delegate: _PinnedTabBarDelegate(
@@ -629,7 +637,9 @@ class _ProfilePageState extends State<ProfilePage>
           ),
         ];
       },
-      body: TabBarView(
+      body: locked
+          ? _LockedProfile(username: widget.user.username)
+          : TabBarView(
         controller: _tabs,
         children: [
           _buildPostsTab(isOwn: isOwn),
@@ -903,6 +913,9 @@ class _ProfilePageState extends State<ProfilePage>
 // Header
 // ────────────────────────────────────────────────────────────────────
 
+/// Under the header: the counts on one line, and — on someone else's
+/// profile — Follow, Message and Battle. Name, league and bio are up in the
+/// header, beside the picture.
 class _ProfileHeader extends StatelessWidget {
   final UserModel user;
   final bool isOwn;
@@ -910,7 +923,6 @@ class _ProfileHeader extends StatelessWidget {
   final int postsCount;
   final VoidCallback onTapFollowers;
   final VoidCallback onTapFollowing;
-  final VoidCallback onEditProfile;
   final VoidCallback onFollowToggle;
   final VoidCallback onMessage;
   final VoidCallback onChallenge;
@@ -923,7 +935,6 @@ class _ProfileHeader extends StatelessWidget {
     required this.postsCount,
     required this.onTapFollowers,
     required this.onTapFollowing,
-    required this.onEditProfile,
     required this.onFollowToggle,
     required this.onMessage,
     required this.onChallenge,
@@ -932,99 +943,36 @@ class _ProfileHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final tt = Theme.of(context).textTheme;
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         AppTheme.space16,
+        AppTheme.space4,
         AppTheme.space16,
-        AppTheme.space16,
-        AppTheme.space16,
+        AppTheme.space12,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Stats in one card across the full width. The avatar, name and
-          // league are up in the arena, and wins and losses in the record
-          // panel below.
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: AppTheme.space12),
-            decoration: BoxDecoration(
-              color: cs.onSurface.withValues(alpha: 0.05),
-              borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-            ),
-            child: IntrinsicHeight(
-              child: Row(
-                children: [
-                  Expanded(
-                    child: _StatPill(
-                      value: compact(postsCount),
-                      label: 'Videos',
-                    ),
-                  ),
-                  _divider(cs),
-                  Expanded(
-                    child: _StatPill(
-                      value: compact(user.followersCount),
-                      label: 'Followers',
-                      onTap: onTapFollowers,
-                    ),
-                  ),
-                  _divider(cs),
-                  Expanded(
-                    child: _StatPill(
-                      value: compact(user.followingCount),
-                      label: 'Following',
-                      onTap: onTapFollowing,
-                    ),
-                  ),
-                ],
+          // The counts, on one line: no card, no dividers. A Wrap, not a
+          // Row: with large text or big numbers the line is wider than a
+          // narrow phone, and a Row would run off the edge.
+          Wrap(
+            spacing: AppTheme.space20,
+            runSpacing: AppTheme.space4,
+            children: [
+              _StatPill(value: compact(postsCount), label: 'Videos'),
+              _StatPill(
+                value: compact(user.followersCount),
+                label: 'Followers',
+                onTap: onTapFollowers,
               ),
-            ),
+              _StatPill(
+                value: compact(user.followingCount),
+                label: 'Following',
+                onTap: onTapFollowing,
+              ),
+            ],
           ),
-
-          // Bio. Three states:
-          //   * Non-empty → the bio text, on every profile.
-          //   * Empty + own profile → a small "Add a bio" chip that opens
-          //     the edit form.
-          //   * Empty + other profile → nothing (no awkward dead row).
-          if (user.bio.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(4, AppTheme.space12, 4, 0),
-              child: Text(
-                user.bio,
-                textAlign: TextAlign.center,
-                style: tt.bodyMedium,
-              ),
-            )
-          else if (isOwn)
-            Padding(
-              padding: const EdgeInsets.only(top: AppTheme.space12),
-              child: Center(
-                child: Pressable(
-                  onTap: onEditProfile,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 6),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.add_rounded, size: 17, color: kAccent),
-                        SizedBox(width: 4),
-                        Text(
-                          'Add a bio',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                            color: kAccent,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
 
           // Someone else's profile: follow, message, battle. Your own has
           // nothing here — edit, share and settings are icons in the bar.
@@ -1041,16 +989,9 @@ class _ProfileHeader extends StatelessWidget {
       ),
     );
   }
-
-  Widget _divider(ColorScheme cs) => VerticalDivider(
-        width: 1,
-        thickness: 1,
-        indent: 6,
-        endIndent: 6,
-        color: cs.onSurface.withValues(alpha: 0.1),
-      );
 }
 
+/// One count: the number in bold, what it counts beside it.
 class _StatPill extends StatelessWidget {
   final String value;
   final String label;
@@ -1064,30 +1005,50 @@ class _StatPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final col = Column(
+    final row = Row(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
       children: [
         Text(
           value,
           style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w800,
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
             color: cs.onSurface,
           ),
         ),
-        const SizedBox(height: 2),
+        const SizedBox(width: 4),
         Text(
           label,
-          style: TextStyle(
-            fontSize: 12,
-            color: cs.onSurfaceVariant,
-            fontWeight: FontWeight.w500,
+          style: TextStyle(fontSize: 14, color: quietText(context)),
+        ),
+      ],
+    );
+    if (onTap == null) return row;
+    return Pressable(onTap: onTap, child: row);
+  }
+}
+
+/// What a private account shows to someone who does not follow it.
+class _LockedProfile extends StatelessWidget {
+  final String username;
+  const _LockedProfile({required this.username});
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomScrollView(
+      slivers: [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: ArenaEmptyState(
+            icon: Icons.lock_outline_rounded,
+            title: 'This account is private',
+            subtitle: 'Follow @$username to see their videos and battles.',
           ),
         ),
       ],
     );
-    if (onTap == null) return col;
-    return Pressable(onTap: onTap, child: col);
   }
 }
 

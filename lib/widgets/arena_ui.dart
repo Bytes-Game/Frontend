@@ -28,7 +28,9 @@ Color quietFill(BuildContext context) =>
 Color quietText(BuildContext context) =>
     Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
 
-/// A slightly shrinking press, so a tap is felt before anything opens.
+/// A press you can feel: while held, the thing sinks slightly and leans
+/// towards the finger in 3D — press a corner and that corner goes down,
+/// like a real card — then springs back when let go.
 class Pressable extends StatefulWidget {
   final Widget child;
   final VoidCallback? onTap;
@@ -37,12 +39,17 @@ class Pressable extends StatefulWidget {
   /// How far it shrinks while held. 0.97 is just enough to notice.
   final double pressedScale;
 
+  /// How far it leans towards the finger, in radians. Small on purpose:
+  /// enough to feel, not enough to read as a wobble.
+  final double maxTilt;
+
   const Pressable({
     super.key,
     required this.child,
     this.onTap,
     this.onLongPress,
     this.pressedScale = 0.97,
+    this.maxTilt = 0.12,
   });
 
   @override
@@ -52,8 +59,30 @@ class Pressable extends StatefulWidget {
 class _PressableState extends State<Pressable> {
   bool _down = false;
 
-  void _set(bool v) {
-    if (_down != v) setState(() => _down = v);
+  /// Where it leans while held: x about the horizontal axis, y about the
+  /// vertical one.
+  Offset _lean = Offset.zero;
+
+  void _press(Offset local) {
+    final size = context.size;
+    var lean = Offset.zero;
+    if (size != null && size.width > 0 && size.height > 0) {
+      // -1..1 across each side, from the middle.
+      final fx = (local.dx / size.width) * 2 - 1;
+      final fy = (local.dy / size.height) * 2 - 1;
+      // Wide things (a row) lean less sideways than tall things do, or a
+      // full-width row would swing like a door.
+      final aspect = (size.height / size.width).clamp(0.25, 1.0);
+      lean = Offset(-fy * widget.maxTilt, fx * widget.maxTilt * aspect);
+    }
+    setState(() {
+      _down = true;
+      _lean = lean;
+    });
+  }
+
+  void _release() {
+    if (_down) setState(() => _down = false);
   }
 
   @override
@@ -61,20 +90,29 @@ class _PressableState extends State<Pressable> {
     final enabled = widget.onTap != null || widget.onLongPress != null;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTapDown: enabled ? (_) => _set(true) : null,
-      onTapUp: enabled ? (_) => _set(false) : null,
-      onTapCancel: enabled ? () => _set(false) : null,
+      onTapDown: enabled ? (d) => _press(d.localPosition) : null,
+      onTapUp: enabled ? (_) => _release() : null,
+      onTapCancel: enabled ? _release : null,
       onTap: widget.onTap,
       onLongPress: widget.onLongPress == null
           ? null
           : () {
-              _set(false);
+              _release();
               HapticFeedback.mediumImpact();
               widget.onLongPress!();
             },
-      child: AnimatedOpacity(
-        opacity: _down ? 0.7 : 1,
-        duration: const Duration(milliseconds: 110),
+      child: TweenAnimationBuilder<Offset>(
+        tween: Tween(end: _down ? _lean : Offset.zero),
+        duration: Duration(milliseconds: _down ? 90 : 260),
+        curve: _down ? Curves.easeOut : Curves.easeOutBack,
+        builder: (context, lean, child) => Transform(
+          alignment: Alignment.center,
+          transform: Matrix4.identity()
+            ..setEntry(3, 2, 0.0015)
+            ..rotateX(lean.dx)
+            ..rotateY(lean.dy),
+          child: child,
+        ),
         child: AnimatedScale(
           scale: _down ? widget.pressedScale : 1,
           duration: const Duration(milliseconds: 110),
@@ -302,6 +340,11 @@ class _ArenaSearchFieldState extends State<ArenaSearchField> {
                 enabledBorder: InputBorder.none,
                 focusedBorder: InputBorder.none,
                 isCollapsed: true,
+                // Zero, explicitly. The app's theme gives every text box 20
+                // pixels of padding at the side and 16 above and below, and a
+                // collapsed field still takes it — which pushed the words
+                // right and off-centre inside this slim bar.
+                contentPadding: EdgeInsets.zero,
               ),
             ),
           ),
