@@ -1,0 +1,288 @@
+// A profile's tabs are videos, drawn like Search, and a tap plays that
+// tab's videos — only them, in order. Never the recommendations.
+//
+// Each test goes through the real tap on the real profile page, and counts
+// the feed requests, so a tap quietly routed back to the explore feed goes
+// red here even when a video still appears.
+
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:provider/provider.dart';
+
+import 'package:myapp/models/user_model.dart';
+import 'package:myapp/pages/liked_videos_page.dart';
+import 'package:myapp/pages/profile_page.dart';
+import 'package:myapp/providers/data_provider.dart';
+import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/reel_diagnostics.dart';
+import 'package:myapp/widgets/smart_reels_feed.dart';
+
+const words = {
+  '11': 'eleven',
+  '12': 'twelve',
+  '13': 'thirteen',
+  '21': 'twenty-one',
+  '31': 'thirty-one',
+  '32': 'thirty-two',
+  '33': 'thirty-three',
+};
+
+Map<String, dynamic> video(String id, {String by = 'maya', bool vs = false}) =>
+    {
+      'id': id,
+      'creatorId': by == 'maya' ? '5' : '8',
+      'creatorUsername': by,
+      'creatorLeague': 'Silver',
+      'videoUrl': 'https://x/$id.mp4',
+      'prefix': 'Who can juggle',
+      'subject': words[id],
+      'status': vs ? 'completed' : 'open',
+      'visibility': 'arena',
+      'likes': 10,
+      'views': 1200,
+      'createdAt': '2026-09-01T10:00:00Z',
+      'responseCount': vs ? 1 : 0,
+      if (vs) 'topResponseId': '9$id',
+      if (vs) 'topResponseUsername': 'leo',
+      if (vs) 'topResponseVideoUrl': 'https://x/r$id.mp4',
+    };
+
+/// Every feed the app asked for. Must stay empty.
+late List<String> feedAsks;
+
+void fakeServer() {
+  feedAsks = [];
+  ApiService.useClient(
+    MockClient((req) async {
+      final p = req.url.path;
+      Object body = {};
+      if (p.contains('/feed')) {
+        feedAsks.add(p);
+        body = {'items': [], 'hasMore': false};
+      } else if (p.endsWith('/challenges') && p.contains('/users/')) {
+        body = [video('11'), video('12'), video('13')];
+      } else if (p.endsWith('/battles')) {
+        final tab = req.url.queryParameters['tab'];
+        body = {
+          'summary': {
+            'rating': 1080,
+            'league': 'Silver',
+            'wins': 1,
+            'counts': {'won': 1},
+          },
+          'tab': tab,
+          'battles': [
+            if (tab == 'won')
+              {
+                'challengeId': '21',
+                'title': 'Who can juggle twenty-one',
+                'role': 'creator',
+                'status': 'completed',
+                'outcome': 'won',
+                'myVotes': 5,
+                'theirVotes': 2,
+                'opponent': 'leo',
+                'video': video('21', vs: true),
+              },
+          ],
+        };
+      } else if (p.contains('/saved/')) {
+        body = [
+          video('31', by: 'zara'),
+          video('32', by: 'zara'),
+          video('33', by: 'zara'),
+        ];
+      } else if (p.endsWith('/likes')) {
+        body = {
+          'items': [video('32', by: 'zara'), video('33', by: 'zara')],
+          'hasMore': false,
+          'nextCursor': '',
+        };
+      }
+      return http.Response.bytes(
+        utf8.encode(json.encode(body)),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }),
+  );
+}
+
+UserModel person(String id, String name) => UserModel(
+  id: id,
+  username: name,
+  wins: 1,
+  losses: 0,
+  followersCount: 3,
+  followingCount: 2,
+);
+
+Future<void> open(WidgetTester t, Widget home, {String me = '1'}) async {
+  t.view.physicalSize = const Size(400, 860);
+  t.view.devicePixelRatio = 1;
+  addTearDown(t.view.resetPhysicalSize);
+  addTearDown(t.view.resetDevicePixelRatio);
+  fakeServer();
+  final dp = DataProvider()..setUser(person(me, me == '5' ? 'maya' : 'me'));
+  EventTracker.instance.dispose();
+  await t.pumpWidget(
+    ChangeNotifierProvider<DataProvider>.value(
+      value: dp,
+      child: MaterialApp(home: home),
+    ),
+  );
+  await settle(t);
+}
+
+Future<void> settle(WidgetTester t) async {
+  for (var i = 0; i < 8; i++) {
+    await t.pump(const Duration(milliseconds: 100));
+  }
+}
+
+Future<void> close(WidgetTester t) async {
+  await t.pumpWidget(const MaterialApp(home: SizedBox()));
+  await t.pump(const Duration(seconds: 5));
+  ReelDiagnostics.instance.debugReset();
+  EventTracker.instance.dispose();
+}
+
+/// The reel on screen is the one about [id].
+Finder playing(String id) => find.descendant(
+  of: find.byKey(const ValueKey('reel_caption')),
+  matching: find.textContaining(words[id]!),
+);
+
+Future<void> swipe(WidgetTester t, {bool up = true}) async {
+  await t.fling(find.byType(PageView).first, Offset(0, up ? -500 : 500), 1500);
+  await settle(t);
+}
+
+/// Tap a tile low down, clear of the tab bar pinned over the top of the
+/// grid once the page has scrolled.
+Future<void> tapTile(WidgetTester t, Finder tile) async {
+  await t.tapAt(t.getBottomLeft(tile) + const Offset(30, -20));
+  await settle(t);
+}
+
+Future<void> tapTab(WidgetTester t, String label) async {
+  await t.ensureVisible(find.text(label));
+  await t.pumpAndSettle();
+  await t.tap(find.text(label));
+  await settle(t);
+}
+
+void main() {
+  // A tap that misses fails, rather than warning and carrying on.
+  WidgetController.hitTestWarningShouldBeFatal = true;
+  setUp(SmartReelsFeed.debugForgetAppOpen);
+  tearDown(() => ApiService.useClient(http.Client()));
+
+  testWidgets('on someone else\'s profile, a tapped short plays, and the '
+      'swipes go through their shorts and stop at the last', (t) async {
+    await open(t, ProfilePage(user: person('5', 'maya'), isEmbedded: false));
+    // Drawn the way Search draws them: who made it, the title, the views.
+    final tile = find.byKey(const ValueKey('short_tile_12'));
+    expect(tile, findsOneWidget);
+    expect(
+      find.descendant(of: tile, matching: find.text('maya')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: tile, matching: find.text('1.2K')),
+      findsOneWidget,
+    );
+
+    await tapTile(t, tile);
+    expect(playing('12'), findsOneWidget);
+    await swipe(t);
+    expect(playing('13'), findsOneWidget, reason: 'their next short');
+    await swipe(t);
+    expect(playing('13'), findsOneWidget, reason: 'nothing after the last');
+    await swipe(t, up: false);
+    await swipe(t, up: false);
+    expect(playing('11'), findsOneWidget, reason: 'and back to their first');
+    expect(feedAsks, isEmpty, reason: 'no recommendations mixed in');
+    await close(t);
+  });
+
+  testWidgets('on your own profile the same, from the first short', (t) async {
+    await open(
+      t,
+      ProfilePage(user: person('5', 'maya'), isEmbedded: false),
+      me: '5',
+    );
+    await tapTile(t, find.byKey(const ValueKey('short_tile_11')));
+    expect(playing('11'), findsOneWidget);
+    await swipe(t);
+    expect(playing('12'), findsOneWidget);
+    expect(feedAsks, isEmpty);
+    await close(t);
+  });
+
+  testWidgets('a battle tab is videos with the score, and a tap plays the '
+      'battle, both names on it', (t) async {
+    await open(t, ProfilePage(user: person('5', 'maya'), isEmbedded: false));
+    await tapTab(t, 'Won 1');
+    final tile = find.byKey(const ValueKey('battle_tile_21'));
+    expect(tile, findsOneWidget);
+    expect(
+      find.descendant(of: tile, matching: find.text('Won 5–2')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: tile, matching: find.text('VS')),
+      findsOneWidget,
+    );
+
+    await tapTile(t, tile);
+    expect(playing('21'), findsOneWidget);
+    expect(find.text('leo'), findsWidgets, reason: 'the opponent is named');
+    expect(feedAsks, isEmpty);
+    await close(t);
+  });
+
+  testWidgets('your Saved tab plays what you saved, in order', (t) async {
+    await open(
+      t,
+      ProfilePage(user: person('5', 'maya'), isEmbedded: false),
+      me: '5',
+    );
+    await tapTab(t, 'Saved');
+    final tile = find.byKey(const ValueKey('saved_tile_32'));
+    expect(tile, findsOneWidget);
+    expect(
+      find.descendant(of: tile, matching: find.byIcon(Icons.bookmark_rounded)),
+      findsOneWidget,
+    );
+    await tapTile(t, tile);
+    expect(playing('32'), findsOneWidget);
+    await swipe(t);
+    expect(playing('33'), findsOneWidget);
+    expect(feedAsks, isEmpty);
+    await close(t);
+  });
+
+  testWidgets('Liked plays the videos you liked, not a bare player on one', (
+    t,
+  ) async {
+    await open(t, const LikedVideosPage(), me: '5');
+    final tile = find.byKey(const ValueKey('liked_tile_32'));
+    expect(tile, findsOneWidget);
+    expect(
+      find.descendant(of: tile, matching: find.text('zara')),
+      findsOneWidget,
+    );
+    await tapTile(t, tile);
+    expect(playing('32'), findsOneWidget);
+    await swipe(t);
+    expect(playing('33'), findsOneWidget);
+    expect(feedAsks, isEmpty);
+    await close(t);
+  });
+}

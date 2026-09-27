@@ -1,22 +1,31 @@
 import 'package:flutter/material.dart';
 
 import 'package:myapp/models/battle_model.dart';
+import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/services/api_service.dart';
-import 'package:myapp/widgets/battle_scoreboard.dart' show timeLeft, votesText;
+import 'package:myapp/widgets/battle_scoreboard.dart' show votesText;
+import 'package:myapp/widgets/video_grid_tile.dart';
 
 /// One of a profile's battle tabs: Open, Live, Won, Lost or Draw.
 ///
-/// Open is challenges nobody has answered yet. Live is battles being voted
-/// on now, with who is ahead. Won, Lost and Draw are decided ones — and a
-/// lost one says by how much and to whom, so there is something to work on.
+/// Drawn as videos, the same grid as Search, each with one coloured line
+/// saying where it stands: "Open", "Ahead 5–2" (with "2d left" beside the
+/// views), "Won 5–2 · +16", "Lost 2–5 · −16". These tabs used to be lists of written notes about each
+/// battle, the only grid in the app you could not watch.
 class BattlesTab extends StatefulWidget {
   final String userId;
+
+  /// Whose profile, for a battle the server sent without its video.
+  final String ownerName;
 
   /// "open", "live", "won", "lost" or "draw".
   final String tab;
   final bool isOwn;
 
-  /// Opens a battle. Given its challenge id.
+  /// Plays this tab's videos from [index], and only them.
+  final void Function(List<ChallengeModel> videos, int index)? onPlay;
+
+  /// Opens the battle page, for a battle that came without its video.
   final void Function(String challengeId) onOpen;
 
   const BattlesTab({
@@ -24,6 +33,8 @@ class BattlesTab extends StatefulWidget {
     required this.userId,
     required this.tab,
     required this.onOpen,
+    this.onPlay,
+    this.ownerName = '',
     this.isOwn = false,
   });
 
@@ -72,19 +83,57 @@ class _BattlesTabState extends State<BattlesTab>
           : const Center(child: CircularProgressIndicator(strokeWidth: 2));
     }
     if (cards.isEmpty) return _empty();
+    // The ones that can be played, in the tab's order: a swipe goes to the
+    // next battle on this tab.
+    final playable = [
+      for (final c in cards)
+        if (c.video != null) c.video!,
+    ];
     return RefreshIndicator(
       onRefresh: _load,
-      child: ListView.separated(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
+      child: GridView.builder(
+        padding: videoGridPadding,
+        gridDelegate: videoGridDelegate,
         itemCount: cards.length,
-        separatorBuilder: (_, _) => const SizedBox(height: 10),
-        itemBuilder: (_, i) => BattleCardTile(
-          card: cards[i],
-          onTap: () => widget.onOpen(cards[i].challengeId),
-        ),
+        itemBuilder: (_, i) {
+          final card = cards[i];
+          final video = card.video;
+          return VideoGridTile(
+            key: ValueKey('battle_tile_${card.challengeId}'),
+            video: video ?? _stand(card),
+            badge: battleBadge(card),
+            trailing: battleTimeLeft(card),
+            onTap: () {
+              final play = widget.onPlay;
+              if (video != null && play != null) {
+                play(playable, playable.indexOf(video));
+              } else {
+                widget.onOpen(card.challengeId);
+              }
+            },
+          );
+        },
       ),
     );
   }
+
+  /// A battle the server sent without its video: enough to draw the tile.
+  ChallengeModel _stand(BattleCard c) => ChallengeModel(
+    id: c.challengeId,
+    creatorId: '',
+    creatorUsername: c.role == 'creator' ? widget.ownerName : c.opponent,
+    creatorLeague: '',
+    videoUrl: c.videoUrl,
+    thumbnailUrl: c.thumbnailUrl,
+    prefix: c.title,
+    subject: '',
+    visibility: 'arena',
+    status: c.status,
+    likes: 0,
+    views: 0,
+    createdAt: '',
+    responseCount: c.status == 'open' ? 0 : 1,
+  );
 
   Widget _empty() {
     final own = widget.isOwn;
@@ -123,191 +172,60 @@ class _BattlesTabState extends State<BattlesTab>
   }
 }
 
-/// One battle on a profile tab.
-class BattleCardTile extends StatelessWidget {
-  final BattleCard card;
-  final VoidCallback onTap;
-
-  const BattleCardTile({super.key, required this.card, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final tt = Theme.of(context).textTheme;
-    final look = _look(card);
-    return Material(
-      color: look.color.withValues(alpha: 0.08),
-      borderRadius: BorderRadius.circular(16),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: look.color.withValues(alpha: 0.35)),
-          ),
-          child: Row(
-            children: [
-              _Thumb(
-                url: card.thumbnailUrl,
-                icon: look.icon,
-                color: look.color,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      card.title.isEmpty ? 'Untitled battle' : card.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: tt.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      look.headline,
-                      style: tt.bodyMedium?.copyWith(
-                        color: look.color,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    if (look.detail.isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        look.detail,
-                        style: tt.bodySmall?.copyWith(
-                          color: cs.onSurface.withValues(alpha: 0.7),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              if (card.ratingChange != 0)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: (card.ratingChange > 0 ? Colors.green : Colors.red)
-                        .withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    '${card.ratingChange > 0 ? '+' : ''}${card.ratingChange}',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w800,
-                      color: card.ratingChange > 0 ? Colors.green : Colors.red,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// How one battle card reads: its colour, icon and two lines.
-({Color color, IconData icon, String headline, String detail}) _look(
-  BattleCard c,
-) {
+/// Where one battle stands, as the coloured line on its tile.
+TileBadge battleBadge(BattleCard c) {
   final score = '${votesText(c.myVotes)}–${votesText(c.theirVotes)}';
-  final vs = c.opponent.isEmpty ? '' : ' @${c.opponent}';
+  final rating = c.ratingChange == 0
+      ? ''
+      : ' · ${c.ratingChange > 0 ? '+' : '−'}${c.ratingChange.abs()}';
   switch (c.outcome) {
     case 'won':
-      return (
-        color: Colors.green,
-        icon: Icons.emoji_events,
-        headline: 'Won $score${vs.isEmpty ? '' : ' vs$vs'}',
-        detail: '',
+      return TileBadge(
+        'Won $score$rating',
+        Icons.emoji_events_rounded,
+        const Color(0xFF1E9E55),
       );
     case 'lost':
-      return (
-        color: Colors.redAccent,
-        icon: Icons.trending_down,
-        headline: 'Lost $score${vs.isEmpty ? '' : ' to$vs'}',
-        detail: lossLesson(c),
+      return TileBadge(
+        'Lost $score$rating',
+        Icons.trending_down_rounded,
+        const Color(0xFFD64545),
       );
     case 'draw':
-      return (
-        color: Colors.blueGrey,
-        icon: Icons.balance,
-        headline: 'Draw $score${vs.isEmpty ? '' : ' with$vs'}',
-        detail: '',
+      return TileBadge(
+        'Draw $score',
+        Icons.balance_rounded,
+        const Color(0xFF5F6B7A),
       );
   }
   if (c.status == 'open') {
-    return (
-      color: Colors.amber.shade700,
-      icon: Icons.flag,
-      headline: 'Waiting for someone to accept',
-      detail: 'Voting starts when it is answered',
+    return const TileBadge('Open', Icons.flag_rounded, Color(0xFFB7791F));
+  }
+  final ends = c.endsAt;
+  if (ends != null && !ends.isAfter(DateTime.now())) {
+    return TileBadge(
+      'Deciding $score',
+      Icons.hourglass_bottom_rounded,
+      const Color(0xFF5F6B7A),
     );
   }
-  final left = c.endsAt == null
-      ? ''
-      : c.endsAt!.isAfter(DateTime.now())
-      ? '${timeLeft(c.endsAt!.difference(DateTime.now()))} left'
-      : 'voting closed, being decided';
-  return (
-    color: c.leading ? Colors.green : Colors.orange,
-    icon: Icons.bolt,
-    headline:
-        '${c.leading ? 'Ahead' : 'Behind'} $score${vs.isEmpty ? '' : ' vs$vs'}',
-    detail: left,
+  return TileBadge(
+    '${c.leading ? 'Ahead' : 'Behind'} $score',
+    Icons.bolt_rounded,
+    c.leading ? const Color(0xFF1E9E55) : const Color(0xFFD9822B),
   );
 }
 
-/// One honest line on what a lost battle came down to, from what the server
-/// knows about it.
-String lossLesson(BattleCard c) {
-  final gap = c.theirVotes - c.myVotes;
-  if (c.myVotes == 0 && c.theirVotes == 0) {
-    return 'Decided on likes and views: no genuine votes either side.';
-  }
-  if (c.myVotes == 0) {
-    return 'No genuine votes counted for this side. More people watching '
-        'it to the end is where it starts.';
-  }
-  if (gap <= 1) return 'Lost by ${votesText(gap)} vote — that close.';
-  return 'Lost by ${votesText(gap)} votes.';
-}
-
-class _Thumb extends StatelessWidget {
-  final String url;
-  final IconData icon;
-  final Color color;
-
-  const _Thumb({required this.url, required this.icon, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    final fallback = Container(
-      color: color.withValues(alpha: 0.2),
-      child: Icon(icon, color: color),
-    );
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: SizedBox(
-        width: 52,
-        height: 72,
-        child: url.isEmpty
-            ? fallback
-            : Image.network(
-                url,
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => fallback,
-              ),
-      ),
-    );
-  }
+/// How long a live battle has left, short enough for a tile: "2d left",
+/// "5h left", "40m left". Null for anything not being voted on now.
+String? battleTimeLeft(BattleCard c) {
+  final ends = c.endsAt;
+  if (c.outcome.isNotEmpty || c.status == 'open' || ends == null) return null;
+  final d = ends.difference(DateTime.now());
+  if (d.isNegative) return null;
+  if (d.inDays >= 1) return '${d.inDays}d left';
+  if (d.inHours >= 1) return '${d.inHours}h left';
+  return '${d.inMinutes < 1 ? 1 : d.inMinutes}m left';
 }
 
 class _Message extends StatelessWidget {

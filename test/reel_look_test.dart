@@ -5,6 +5,7 @@
 // nothing to find.
 
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,6 +13,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:provider/provider.dart';
 
+import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
@@ -54,15 +56,85 @@ Map<String, dynamic> short() => {
   'createdAt': '2026-09-20T10:00:00Z',
 };
 
+/// How many times the app asked for a battle's score.
+int standingsAsked = 0;
+
+/// When true the server refuses new comments.
+bool refuseComments = false;
+
+/// Comments the app tried to post.
+List<String> posted = [];
+
 /// The body of the last vote the app sent.
 Map<String, dynamic>? lastVote;
 
 void fakeServer(Map<String, dynamic> first) {
   lastVote = null;
+  standingsAsked = 0;
+  refuseComments = false;
+  posted = [];
   ApiService.useClient(
     MockClient((req) async {
       if (req.url.path.endsWith('/challenges/vote')) {
         lastVote = json.decode(req.body) as Map<String, dynamic>;
+      }
+      if (req.url.path.endsWith('/comments') && req.method == 'GET') {
+        return http.Response.bytes(
+          utf8.encode(
+            json.encode([
+              {
+                'authorUsername': 'sam',
+                'text': 'that last move though',
+                'createdAt': DateTime.now()
+                    .subtract(const Duration(hours: 2))
+                    .toUtc()
+                    .toIso8601String(),
+              },
+            ]),
+          ),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }
+      if (req.url.path.endsWith('/challenges/comments')) {
+        posted.add((json.decode(req.body) as Map)['text'] as String);
+        return refuseComments
+            ? http.Response('no', 503)
+            : http.Response('{"id":"c1"}', 200);
+      }
+      if (req.url.path.endsWith('/standings')) {
+        standingsAsked++;
+        return http.Response.bytes(
+          utf8.encode(
+            json.encode({
+              'challengeId': '1',
+              'status': 'active',
+              'battleDays': 7,
+              'acceptedAt': DateTime.now()
+                  .subtract(const Duration(days: 1))
+                  .toIso8601String(),
+              'endsAt': DateTime.now()
+                  .add(const Duration(days: 2, hours: 3))
+                  .toIso8601String(),
+              'participants': [
+                {
+                  'username': 'maya',
+                  'role': 'creator',
+                  'votes': 12,
+                  'leading': true,
+                },
+                {
+                  'username': 'leo_beats',
+                  'role': 'responder',
+                  'responseId': '77',
+                  'votes': 9,
+                },
+              ],
+            }),
+          ),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
       }
       final body = req.url.path.contains('/like')
           ? {'liked': true, 'likes': 1281}
@@ -83,7 +155,11 @@ void fakeServer(Map<String, dynamic> first) {
   );
 }
 
-Future<void> openReel(WidgetTester t, Map<String, dynamic> first) async {
+Future<void> openReel(
+  WidgetTester t,
+  Map<String, dynamic> first, {
+  ChallengeModel? seed,
+}) async {
   t.view.physicalSize = const Size(400, 860);
   t.view.devicePixelRatio = 1;
   addTearDown(t.view.resetPhysicalSize);
@@ -104,8 +180,10 @@ Future<void> openReel(WidgetTester t, Map<String, dynamic> first) async {
   await t.pumpWidget(
     ChangeNotifierProvider<DataProvider>.value(
       value: dp,
-      child: const MaterialApp(
-        home: Scaffold(body: SmartReelsFeed(userId: '1')),
+      child: MaterialApp(
+        home: Scaffold(
+          body: SmartReelsFeed(userId: '1', seedChallenge: seed),
+        ),
       ),
     ),
   );
@@ -132,8 +210,10 @@ void main() {
     expect(find.text('leo_beats'), findsOneWidget);
     expect(find.text('vs'), findsOneWidget);
     expect(find.text('Who can dance on a moving bus?'), findsOneWidget);
-    expect(find.text('18.4K views  ·  Swipe to switch sides'), findsOneWidget);
-    expect(find.text('View battle'), findsOneWidget);
+    expect(find.text('18.4K views'), findsOneWidget);
+    // The hint line is gone; the edge tab says it instead.
+    expect(find.textContaining('Swipe'), findsNothing);
+    expect(find.byTooltip('See leo_beats'), findsOneWidget);
 
     // The old top panel, gone.
     expect(find.text('CHALLENGER'), findsNothing);
@@ -198,13 +278,250 @@ void main() {
     await closeReel(t);
   });
 
+  group('what you already did comes back', () {
+    Map<String, dynamic> done() => {
+      ...battle(),
+      'isLiked': true,
+      'isSaved': true,
+      'hasVoted': true,
+      'votedFor': 'maya',
+      'topResponseLiked': true,
+    };
+
+    testWidgets('in the feed: liked, saved and voted show as done', (t) async {
+      await openReel(t, done());
+      expect(find.byTooltip('Unlike'), findsOneWidget);
+      expect(find.byIcon(Icons.favorite_rounded), findsOneWidget);
+      expect(find.byTooltip('Saved'), findsOneWidget);
+      expect(find.byTooltip('You voted'), findsOneWidget);
+      // And the answer's heart, on the answer's side.
+      await t.tap(find.byKey(const ValueKey('matchup_opponent')));
+      await t.pump(const Duration(milliseconds: 700));
+      expect(find.byTooltip('Unlike'), findsOneWidget);
+      await closeReel(t);
+    });
+
+    testWidgets('opened from a profile or search: the same', (t) async {
+      await openReel(
+        t,
+        short(),
+        seed: ChallengeModel.fromJson({...done(), 'id': '31'}),
+      );
+      expect(find.byTooltip('Unlike'), findsOneWidget);
+      expect(find.byTooltip('Saved'), findsOneWidget);
+      expect(find.byTooltip('You voted'), findsOneWidget);
+      await closeReel(t);
+    });
+
+    testWidgets('and nothing is marked when the server says nothing', (
+      t,
+    ) async {
+      await openReel(t, battle());
+      expect(find.byTooltip('Like'), findsOneWidget);
+      expect(find.byTooltip('Save'), findsOneWidget);
+      expect(find.byTooltip('Vote'), findsOneWidget);
+      await closeReel(t);
+    });
+  });
+
+  testWidgets('a battle shows its live score where "View battle" was, '
+      'and opens the battle from it', (t) async {
+    await openReel(t, battle());
+    expect(standingsAsked, 1);
+    expect(find.text('12'), findsOneWidget);
+    expect(find.text('9'), findsOneWidget);
+    expect(find.text('  ·  2d left'), findsOneWidget);
+    expect(find.text('View battle'), findsNothing);
+    await t.tap(find.byKey(const ValueKey('battle_score')));
+    for (var i = 0; i < 5; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byType(Scaffold), findsWidgets);
+    expect(
+      find.byWidgetPredicate(
+        (w) => w.runtimeType.toString() == 'ChallengeDetailPage',
+      ),
+      findsOneWidget,
+    );
+    await closeReel(t);
+  });
+
+  testWidgets('the edge tab shows the other person and switches to them; '
+      'both names stay readable', (t) async {
+    await openReel(t, battle());
+    // The name not on screen is still near-white, not faded out.
+    final other = t.widget<Text>(find.text('leo_beats'));
+    expect(other.style!.color!.a, greaterThan(0.85));
+
+    await t.tap(find.byTooltip('See leo_beats'));
+    await t.pump(const Duration(milliseconds: 700));
+    expect(find.text('940'), findsOneWidget, reason: "leo's side now");
+    expect(
+      find.byTooltip('See maya'),
+      findsOneWidget,
+      reason: 'the tab moves to the other edge and offers the way back',
+    );
+    // On the left edge now.
+    expect(
+      t.getCenter(find.byKey(const ValueKey('battle_side_tab'))).dx,
+      lessThan(100),
+    );
+    await closeReel(t);
+  });
+
+  testWidgets('the comment button is the drawn bubble', (t) async {
+    await openReel(t, battle());
+    expect(
+      find.descendant(
+        of: find.byTooltip('Comments'),
+        matching: find.byWidgetPredicate(
+          (w) => w.runtimeType.toString() == '_CommentGlyph',
+        ),
+      ),
+      findsOneWidget,
+    );
+    await closeReel(t);
+  });
+
+  testWidgets('Accept challenge opens Record and Upload right there', (
+    t,
+  ) async {
+    await openReel(t, short());
+    await t.tap(find.text('Accept challenge'));
+    for (var i = 0; i < 6; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.text('Record'), findsOneWidget);
+    expect(find.text('Upload'), findsOneWidget);
+    // Closing it goes back to the video, having started nothing.
+    await t.tapAt(const Offset(20, 60));
+    for (var i = 0; i < 6; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.text('Record'), findsNothing);
+    await closeReel(t);
+  });
+
+  test('choosing Record or Upload goes on to accept, on the battle page', () {
+    String code(String path) => File(
+      path,
+    ).readAsLinesSync().where((l) => !l.trimLeft().startsWith('//')).join('\n');
+    expect(
+      code('lib/widgets/smart_reels_feed.dart'),
+      contains('ChallengeDetailPage(challengeId: item.id, acceptWith: how)'),
+    );
+    final page = code('lib/pages/challenge_detail_page.dart');
+    expect(page, contains('_startAcceptIfAsked();'));
+    expect(page, contains('case CreateChoice.record:\n          _onRecord();'));
+    expect(
+      page,
+      contains('case CreateChoice.upload:\n          _onPickFile();'),
+    );
+  });
+
+  group('caption and comments', () {
+    Map<String, dynamic> wordy() => {
+      ...short(),
+      'subject':
+          'cook a three course dinner using only a kettle, a toaster and '
+          'whatever is left in the fridge on a Sunday night',
+    };
+    const whole =
+        'Who can cook a three course dinner using only a kettle, a toaster '
+        'and whatever is left in the fridge on a Sunday night?';
+
+    Future<void> openSheet(WidgetTester t, Finder from) async {
+      await t.tap(from);
+      for (var i = 0; i < 8; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    testWidgets('a long caption is one line on the video', (t) async {
+      await openReel(t, wordy());
+      final caption = t.widget<Text>(
+        find.descendant(
+          of: find.byKey(const ValueKey('reel_caption')),
+          matching: find.byType(Text),
+        ),
+      );
+      expect(caption.data, whole);
+      expect(caption.maxLines, 1);
+      expect(caption.overflow, TextOverflow.ellipsis);
+      expect(
+        t.getSize(find.byKey(const ValueKey('reel_caption'))).height,
+        lessThan(24),
+        reason: 'one line tall',
+      );
+      await closeReel(t);
+    });
+
+    testWidgets('tapping it opens the whole caption with the comments below', (
+      t,
+    ) async {
+      await openReel(t, wordy());
+      await openSheet(t, find.byKey(const ValueKey('reel_caption')));
+      final full = t.widget<Text>(find.byKey(const ValueKey('full_caption')));
+      expect(full.data, whole);
+      expect(full.maxLines, isNull, reason: 'all of it');
+      expect(find.text('1 comment'), findsOneWidget);
+      expect(find.text('that last move though'), findsOneWidget);
+      // The comment sits below the caption.
+      expect(
+        t.getTopLeft(find.text('that last move though')).dy,
+        greaterThan(
+          t.getBottomLeft(find.byKey(const ValueKey('full_caption'))).dy,
+        ),
+      );
+      await closeReel(t);
+    });
+
+    testWidgets('the comment button opens the same sheet', (t) async {
+      await openReel(t, wordy());
+      await openSheet(t, find.byTooltip('Comments'));
+      // The × is at the right edge, clear of the title.
+      final close = t.getRect(find.byTooltip('Close'));
+      final title = t.getRect(find.text('1 comment'));
+      expect(close.left, greaterThan(title.right));
+      expect(find.byKey(const ValueKey('full_caption')), findsOneWidget);
+      expect(find.text('that last move though'), findsOneWidget);
+      await closeReel(t);
+    });
+
+    testWidgets('a comment that could not be posted comes back to the box', (
+      t,
+    ) async {
+      await openReel(t, wordy());
+      // After opening: opening sets the fake server up afresh.
+      refuseComments = true;
+      await openSheet(t, find.byTooltip('Comments'));
+      await t.enterText(find.byType(TextField), 'nice');
+      await t.pump();
+      await t.tap(find.byTooltip('Post'));
+      for (var i = 0; i < 4; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+      expect(posted, ['nice']);
+      expect(find.textContaining("Couldn't post"), findsOneWidget);
+      expect(
+        t.widget<TextField>(find.byType(TextField)).controller!.text,
+        'nice',
+        reason: 'what they typed is not lost',
+      );
+      expect(find.text('2 comments'), findsNothing);
+      await closeReel(t);
+    });
+  });
+
   testWidgets('a short says it is an open challenge and offers to take it '
       'on; no vote button', (t) async {
     await openReel(t, short());
     expect(find.text('zara'), findsOneWidget);
     expect(find.text('Open challenge'), findsOneWidget);
     expect(find.text('Who can cook pasta in 5 minutes?'), findsOneWidget);
-    expect(find.text('Take the challenge'), findsOneWidget);
+    expect(find.text('Accept challenge'), findsOneWidget);
+    expect(find.byKey(const ValueKey('battle_score')), findsNothing);
+    expect(find.byKey(const ValueKey('battle_side_tab')), findsNothing);
     expect(find.text('5.4K views'), findsOneWidget);
     expect(find.byTooltip('Vote'), findsNothing);
     expect(find.text('vs'), findsNothing);

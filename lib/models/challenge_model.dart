@@ -64,6 +64,16 @@ class ChallengeModel {
 
   /// The answer's own likes. See _ReelItem.opponentLikes.
   final int topResponseLikes;
+
+  /// What the person looking has done to this video, as the server knows
+  /// it: liked it, saved it, voted in it (and for whom), liked the answer.
+  /// Without these every heart started empty, so a video you had liked came
+  /// back unliked — and tapping it took your like away.
+  final bool isLiked;
+  final bool isSaved;
+  final bool hasVoted;
+  final String votedFor;
+  final bool topResponseLiked;
   /// Multi-bitrate variants for the opponent video (see [videoVariants]).
   /// Empty when the response was uploaded before the multi-bitrate feature
   /// shipped — readers should fall back to [topResponseVideoUrl].
@@ -107,6 +117,11 @@ class ChallengeModel {
   this.topResponseUsername = '',
   this.topResponseLeague = '',
   this.topResponseLikes = 0,
+  this.isLiked = false,
+  this.isSaved = false,
+  this.hasVoted = false,
+  this.votedFor = '',
+  this.topResponseLiked = false,
   this.topResponseVideoVariants = const {},
   this.topResponseHlsManifestUrl = '',
   });
@@ -164,6 +179,11 @@ class ChallengeModel {
       topResponseUsername: json['topResponseUsername'] ?? '',
       topResponseLeague: json['topResponseLeague'] ?? '',
       topResponseLikes: json['topResponseLikes'] as int? ?? 0,
+      isLiked: json['isLiked'] == true,
+      isSaved: json['isSaved'] == true,
+      hasVoted: json['hasVoted'] == true,
+      votedFor: json['votedFor']?.toString() ?? '',
+      topResponseLiked: json['topResponseLiked'] == true,
       topResponseVideoVariants:
           (json['topResponseVideoVariants'] as Map<String, dynamic>?)
                   ?.map((k, v) => MapEntry(k, v?.toString() ?? '')) ??

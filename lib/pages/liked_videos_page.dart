@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
-import 'package:myapp/pages/video_player_page.dart';
+import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/page_tracker.dart';
-import 'package:myapp/widgets/shimmer_loading.dart';
+import 'package:myapp/widgets/video_grid_tile.dart';
 
 /// Liked videos surface — fully wired.
 ///
@@ -29,7 +29,7 @@ class _LikedVideosPageState extends State<LikedVideosPage>
   @override
   String get pageName => 'liked_videos_page';
 
-  final List<Map<String, dynamic>> _items = [];
+  final List<ChallengeModel> _items = [];
   bool _loadingFirstPage = true;
   bool _loadingMore = false;
   bool _hasMore = true;
@@ -63,8 +63,7 @@ class _LikedVideosPageState extends State<LikedVideosPage>
     setState(() {
       _items
         ..clear()
-        ..addAll((res['items'] as List?)?.cast<Map<String, dynamic>>() ??
-            const []);
+        ..addAll(_videos(res));
       _hasMore = res['hasMore'] == true;
       _nextCursor = (res['nextCursor'] as String?) ?? '';
       _loadingFirstPage = false;
@@ -83,8 +82,7 @@ class _LikedVideosPageState extends State<LikedVideosPage>
     );
     if (!mounted) return;
     setState(() {
-      _items.addAll((res['items'] as List?)?.cast<Map<String, dynamic>>() ??
-          const []);
+      _items.addAll(_videos(res));
       _hasMore = res['hasMore'] == true;
       _nextCursor = (res['nextCursor'] as String?) ?? '';
       _loadingMore = false;
@@ -99,15 +97,17 @@ class _LikedVideosPageState extends State<LikedVideosPage>
     }
   }
 
-  void _openItem(Map<String, dynamic> item) {
-    final videoUrl = (item['videoUrl'] as String?) ?? '';
-    final title = '${item['prefix'] ?? ''} ${item['subject'] ?? ''}'.trim();
-    if (videoUrl.isEmpty) return;
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => VideoPlayerPage(videoUrl: videoUrl, title: title),
-      ),
-    );
+  /// The page's videos, whole — the server sends the same record every
+  /// feed does, so they play like any other reel.
+  static List<ChallengeModel> _videos(Map<String, dynamic> res) => [
+        for (final m in (res['items'] as List?) ?? const [])
+          if (m is Map<String, dynamic>) ChallengeModel.fromJson(m),
+      ];
+
+  /// Plays your liked videos from the one tapped, in the order you liked
+  /// them. It used to open a bare player on that one video alone.
+  void _openItem(int index) {
+    openVideoPlaylist(context, List.of(_items), index);
   }
 
   @override
@@ -122,14 +122,7 @@ class _LikedVideosPageState extends State<LikedVideosPage>
 
   Widget _buildBody(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    if (_loadingFirstPage) {
-      return const CustomScrollView(slivers: [
-        SliverFillRemaining(
-          hasScrollBody: false,
-          child: ShimmerLoading(child: GridSkeleton()),
-        ),
-      ]);
-    }
+    if (_loadingFirstPage) return const VideoGridPlaceholder();
     if (_items.isEmpty) {
       return CustomScrollView(
         slivers: [
@@ -167,13 +160,8 @@ class _LikedVideosPageState extends State<LikedVideosPage>
 
     return GridView.builder(
       controller: _scroll,
-      padding: const EdgeInsets.fromLTRB(2, 2, 2, 80),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        crossAxisSpacing: 2,
-        mainAxisSpacing: 2,
-        childAspectRatio: 9 / 16,
-      ),
+      padding: videoGridPadding,
+      gridDelegate: videoGridDelegate,
       itemCount: _items.length + (_hasMore ? 1 : 0),
       itemBuilder: (_, i) {
         if (i >= _items.length) {
@@ -189,86 +177,14 @@ class _LikedVideosPageState extends State<LikedVideosPage>
             ),
           );
         }
-        final item = _items[i];
-        return _LikedTile(item: item, onTap: () => _openItem(item));
+        return VideoGridTile(
+          key: ValueKey('liked_tile_${_items[i].id}'),
+          video: _items[i],
+          mark: Icons.favorite_rounded,
+          markColor: const Color(0xFFFF3B5C),
+          onTap: () => _openItem(i),
+        );
       },
     );
-  }
-}
-
-class _LikedTile extends StatelessWidget {
-  final Map<String, dynamic> item;
-  final VoidCallback onTap;
-  const _LikedTile({required this.item, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final thumb = (item['thumbnailUrl'] as String?) ?? '';
-    final views = item['views'] is int ? item['views'] as int : 0;
-    return GestureDetector(
-      onTap: onTap,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          if (thumb.isNotEmpty)
-            Image.network(
-              thumb,
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => Container(
-                color: cs.surfaceContainerHighest,
-                child: Icon(Icons.videocam_outlined,
-                    color: cs.onSurfaceVariant, size: 28),
-              ),
-            )
-          else
-            Container(
-              color: cs.surfaceContainerHighest,
-              child: Icon(Icons.videocam_outlined,
-                  color: cs.onSurfaceVariant, size: 28),
-            ),
-          const Positioned(
-            top: 4,
-            right: 4,
-            child: Icon(Icons.favorite, color: Colors.red, size: 18),
-          ),
-          if (views > 0)
-            Positioned(
-              bottom: 4,
-              left: 4,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.play_arrow,
-                        color: Colors.white, size: 12),
-                    const SizedBox(width: 2),
-                    Text(
-                      _compact(views),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  static String _compact(int n) {
-    if (n < 1000) return '$n';
-    if (n < 1000000) return '${(n / 1000).toStringAsFixed(n < 10000 ? 1 : 0)}K';
-    return '${(n / 1000000).toStringAsFixed(n < 10000000 ? 1 : 0)}M';
   }
 }

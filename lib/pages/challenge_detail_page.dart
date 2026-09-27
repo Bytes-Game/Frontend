@@ -2,6 +2,7 @@ import 'package:file_picker/file_picker.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:myapp/widgets/create_burst.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/models/challenge_model.dart';
@@ -15,13 +16,29 @@ import 'package:myapp/widgets/battle_scoreboard.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/upload_job_manager.dart';
-import 'package:myapp/widgets/league_badge.dart';
+import 'package:myapp/models/battle_model.dart' show BattleStandings;
+import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/config/constants.dart' show ContentCategories;
+import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
+import 'package:myapp/widgets/feed_action_bar.dart'
+    show ChallengeCommentSheet, CommentSheetCaption;
+import 'package:myapp/widgets/league_badge.dart' show leagueWash;
 import 'package:myapp/widgets/tag_suggestion_strip.dart';
 
 /// Full-screen challenge detail: video, description, responses, and action buttons.
 class ChallengeDetailPage extends StatefulWidget {
   final String challengeId;
-  const ChallengeDetailPage({super.key, required this.challengeId});
+
+  /// Opened from a short's "Accept challenge" button with Record or Upload
+  /// already chosen: start that as soon as the challenge has loaded, rather
+  /// than making the person find the accept button again here.
+  final CreateChoice? acceptWith;
+
+  const ChallengeDetailPage({
+    super.key,
+    required this.challengeId,
+    this.acceptWith,
+  });
   
   @override
   State<ChallengeDetailPage> createState() => _ChallengeDetailPageState();
@@ -35,6 +52,20 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
   int _scoreVersion = 0;
   bool _loading = true;
   bool _accepting = false;
+
+  /// [ChallengeDetailPage.acceptWith] runs once, not on every reload.
+  bool _acceptStarted = false;
+
+  /// The first comments, for the preview under the score.
+  List<Map<String, dynamic>> _comments = [];
+
+  /// The live count, for the "Leading" crown on the video cards. The
+  /// scoreboard below loads its own; this is only who is ahead.
+  BattleStandings? _standings;
+
+  /// The heart, starting from what the server says you did.
+  bool _liked = false;
+  int _likes = 0;
 
   // Subscription to background-upload completions. Fires when ANY
   // upload finishes; we filter by kind == response && challengeId
@@ -80,10 +111,94 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
             (data['responses'] as List).cast<ChallengeResponseModel>();
         _scoreVersion++;
         _loading = false;
+        _liked = _challenge!.isLiked;
+        _likes = _challenge!.likes;
       });
+      _startAcceptIfAsked();
+      _loadExtras();
     } else if (mounted) {
       setState(() => _loading = false);
     }
+  }
+
+  /// Comments and who is leading. Neither holds the page up.
+  Future<void> _loadExtras() async {
+    final id = widget.challengeId;
+    final comments = await ApiService.getChallengeComments(id);
+    final standings = _responses.isEmpty
+        ? null
+        : await ApiService.getBattleStandings(id);
+    if (!mounted) return;
+    setState(() {
+      _comments = comments;
+      _standings = standings;
+    });
+  }
+
+  void _openComments() {
+    final c = _challenge;
+    if (c == null) return;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => ChallengeCommentSheet(
+        challengeId: c.id,
+        header: CommentSheetCaption(
+          username: c.creatorUsername,
+          caption: _question(c),
+          detail: '${_compact(c.views)} views',
+        ),
+      ),
+    ).then((_) => _loadExtras());
+  }
+
+  /// "Accept challenge": Record or Upload rising out of the button, then
+  /// the same steps as ever.
+  void _acceptFrom(Offset anchor) {
+    CreateBurst.show(
+      context,
+      anchor: anchor,
+      fromHold: false,
+      title: 'Accept challenge',
+      anchorSize: const Size(44, 44),
+      anchorRadius: 22,
+      onChoose: (how) {
+        if (!mounted) return;
+        switch (how) {
+          case CreateChoice.record:
+            _onRecord();
+          case CreateChoice.upload:
+            _onPickFile();
+        }
+      },
+    );
+  }
+
+  static String _question(ChallengeModel c) {
+    final t = c.title.trim();
+    return t.endsWith('?') ? t : '$t?';
+  }
+
+  static String _compact(int n) {
+    if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
+    if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}K';
+    return '$n';
+  }
+
+  void _startAcceptIfAsked() {
+    final how = widget.acceptWith;
+    if (how == null || _acceptStarted) return;
+    _acceptStarted = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      switch (how) {
+        case CreateChoice.record:
+          _onRecord();
+        case CreateChoice.upload:
+          _onPickFile();
+      }
+    });
   }
 
   Future<void> _like() async {
@@ -94,11 +209,29 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
       pageName: 'challenge_detail_page',
       params: {'challengeId': _challenge!.id},
     );
-    await ApiService.likeChallenge(
+    final was = _liked;
+    setState(() {
+      _liked = !was;
+      _likes = (_likes + (was ? -1 : 1)).clamp(0, 1 << 31);
+    });
+    final res = await ApiService.likeChallenge(
       challengeId: _challenge!.id,
       userId: dp.user!.id,
     );
-    _load(); // refresh
+    if (!mounted) return;
+    if (res == null) {
+      setState(() {
+        _liked = was;
+        _likes = (_likes + (was ? 1 : -1)).clamp(0, 1 << 31);
+      });
+      _toast("Couldn't update your like. Try again.");
+      return;
+    }
+    setState(() {
+      _liked = res['liked'] == true;
+      final n = res['likes'];
+      if (n is int) _likes = n;
+    });
   }
 
   Future<void> _vote(String responseId) async {
@@ -191,83 +324,6 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     // pull-to-refresh.
     dp.bumpFeedRefresh();
     Navigator.of(context).pop<bool>(true);
-  }
-
-  /// Opens the response-source chooser. Two big buttons: record a
-  /// clip with the in-app camera, or pick one from the device. Both
-  /// paths converge on the trim page and then the upload page — the
-  /// same Record → Trim → R2 pipeline that create-challenge uses.
-  ///
-  /// The legacy "paste a video URL" form has been retired: hosting
-  /// the video ourselves on R2 is what enables multi-bitrate
-  /// adaptive playback, per-user storage prefix scans, and stable
-  /// public URLs we control. Letting users paste arbitrary URLs
-  /// defeats all three.
-  void _showAcceptSheet() {
-    if (_challenge == null) return;
-    EventTracker.instance.trackTap(
-      target: 'challenge_accept_open_sheet',
-      pageName: 'challenge_detail_page',
-      params: {'challengeId': _challenge!.id},
-    );
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        final cs = Theme.of(ctx).colorScheme;
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Accept Challenge',
-                  style: Theme.of(ctx).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Record or upload your response — we\'ll create three '
-                  'quality versions so it plays smoothly on any network.',
-                  style: TextStyle(
-                    color: cs.onSurface.withValues(alpha: 0.6),
-                    fontSize: 13,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                _bigChoice(
-                  cs: cs,
-                  icon: Icons.videocam_rounded,
-                  title: 'Record now',
-                  subtitle: 'Use the in-app camera with flip and flash',
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    _onRecord();
-                  },
-                ),
-                const SizedBox(height: 12),
-                _bigChoice(
-                  cs: cs,
-                  icon: Icons.video_library_rounded,
-                  title: 'Pick from device',
-                  subtitle: 'Upload a clip from your gallery or files',
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    _onPickFile();
-                  },
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
   }
 
   Future<void> _onRecord() async {
@@ -370,81 +426,31 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     );
   }
 
-  Widget _bigChoice({
-    required ColorScheme cs,
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required VoidCallback? onTap,
-  }) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(16),
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: cs.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: cs.primary.withValues(alpha: 0.18),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(icon, size: 26, color: cs.primary),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      color: cs.onSurface,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 15,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      color: cs.onSurface.withValues(alpha: 0.6),
-                      fontSize: 12.5,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.chevron_right_rounded,
-                color: cs.onSurface.withValues(alpha: 0.4)),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final tt = Theme.of(context).textTheme;
     final dp = Provider.of<DataProvider>(context, listen: false);
-    final isOwner =
-        _challenge != null && dp.user?.id == _challenge!.creatorId;
-
+    final c = _challenge;
+    final isOwner = c != null && dp.user?.id == c.creatorId;
+    final isBattle = _responses.isNotEmpty;
     return Scaffold(
+      backgroundColor: Colors.black,
       appBar: AppBar(
-        title: const Text('Challenge'),
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        centerTitle: true,
+        title: Text(
+          c == null ? '' : (isBattle ? 'Battle' : 'Challenge'),
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+        ),
         actions: [
           if (isOwner)
             PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert),
+              icon: const Icon(Icons.more_horiz_rounded),
               tooltip: 'More',
+              color: const Color(0xFF2C2C2E),
               onSelected: (v) {
                 if (v == 'delete') _delete();
               },
@@ -453,9 +459,11 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                   value: 'delete',
                   child: Row(
                     children: [
-                      Icon(Icons.delete_outline, color: Colors.red),
+                      Icon(Icons.delete_outline_rounded,
+                          color: Color(0xFFFF453A)),
                       SizedBox(width: 10),
-                      Text('Delete', style: TextStyle(color: Colors.red)),
+                      Text('Delete',
+                          style: TextStyle(color: Color(0xFFFF453A))),
                     ],
                   ),
                 ),
@@ -463,301 +471,914 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
             ),
         ],
       ),
-      body:_loading
-        ? const Center(child: CircularProgressIndicator())
-        : _challenge == null
-            ? const Center(child: Text('Challenge not found'))
-            : RefreshIndicator(
-                onRefresh: _load,
-                child: ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    // -- Challenge title --
-                    Text(
-                      _challenge!.title,
-                      style: tt.displayLarge?.copyWith(
-                        color: cs.primary,
-                        fontSize: 26,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-
-                    // —— Creator info ——
-                    Row(
-                      children: [
-                        CircleAvatar(
-                          radius: 20,
-                          backgroundColor: cs.primaryContainer,
-                          child: Text(
-                            _challenge!.creatorUsername.isNotEmpty
-                                ? _challenge!.creatorUsername[0].toUpperCase()
-                                : '?',
-                            style: TextStyle(
-                              color: cs.onPrimaryContainer,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 18),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(_challenge!.creatorUsername,
-                                style: tt.bodyLarge
-                                    ?.copyWith(fontWeight: FontWeight.w600)),
-                            Text(
-                              _challenge!.visibility == 'arena'
-                                  ? 'Arena challenge'
-                                  : 'Friends only',
-                              style: tt.bodySmall?.copyWith(
-                                  color: cs.onSurface.withOpacity(0.5)),
-                            ),
-                          ],
-                        ),
-                        const Spacer(),
-                        LeagueBadge(league: _challenge!.creatorLeague),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-
-                    // —— Video thumbnail / placeholder — tap to play ——
-                    GestureDetector(
-                      onTap: _challenge!.videoUrl.isNotEmpty
-                          ? () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => VideoPlayerPage(
-                                    videoUrl: _challenge!.videoUrl,
-                                    title: _challenge!.title,
-                                  ),
-                                ),
-                              )
-                          : null,
-                      child: Container(
-                        width: double.infinity,
-                        height: 220,
-                        decoration: BoxDecoration(
-                          color: cs.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(16),
-                          image: (_challenge!.thumbnailUrl != null &&
-                                  _challenge!.thumbnailUrl!.isNotEmpty)
-                              ? DecorationImage(
-                                  image: NetworkImage(
-                                      _challenge!.thumbnailUrl!),
-                                  fit: BoxFit.cover,
-                              )
-                            : null,
-                        ),
-                        child: Center(
-                          child: Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.4),
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(
-                              _challenge!.videoUrl.isNotEmpty
-                                  ? Icons.play_arrow
-                                  : Icons.videocam_off,
-                              size: 40,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-
-                    // —— Stats + Actions ——
-                    Row(
-                      children: [
-                        _StatButton(
-                          icon: Icons.favorite,
-                          value: _challenge!.likes,
-                          color: Colors.red,
-                          onTap: _like,
-                        ),
-                        const SizedBox(width: 20),
-                        _StatButton(
-                          icon: Icons.visibility,
-                          value: _challenge!.views,
-                          color: cs.onSurface.withOpacity(0.6),
-                        ),
-                        const SizedBox(width: 20),
-                        _StatButton(
-                          icon: Icons.reply,
-                          value: _responses.length,
-                          color: cs.primary,
-                        ),
-                        const Spacer(),
-                        _statusChip(_challenge!.status, cs),
-                      ],
-                    ),
-                    const SizedBox(height: 20),
-                    
-                    // —— Accept button ——
-                    if (_challenge!.status == 'open')...[
-                      SizedBox(
-                        width: double.infinity,
-                        height: 50,
-                        child: FilledButton.icon(
-                          onPressed: _accepting ? null : _showAcceptSheet,
-                          icon: _accepting
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2, color: Colors.white))
-                              : const Icon(Icons.sports_kabaddi),
-                          label: const Text('Accept Challenge',
-                              style:TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.w600)),
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                    ],
-
-                    // —— Live score ——
-                    // Genuine votes, likes, views and shares per side, how
-                    // long is left, and what did not count — the same count
-                    // that decides the winner. Replaces the raw vote list,
-                    // which counted every vote and had no way to vote for
-                    // the person who posted the challenge.
-                    if (_challenge!.status != 'open' ||
-                        _responses.isNotEmpty) ...[
-                      BattleScoreboard(
-                        challengeId: _challenge!.id,
-                        viewerId: dp.user?.id,
-                        onVote: dp.user == null ? null : _vote,
-                        refreshToken: _scoreVersion,
-                      ),
-                      const SizedBox(height: 16),
-                    ],
-
-                    if (_responses.isNotEmpty)...[
-                      Row(
-                        children:[
-                          Icon(Icons.emoji_events, color: cs.primary, size: 22),
-                          const SizedBox(width: 6),
-                          Text('Responses (${_responses.length})',
-                              style: tt.titleMedium),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      ..._responses.map((r) => _ResponseCard(
-                        response: r,
-                        onVote: _challenge!.status == 'active'
-                            ? () => _vote(r.id)
-                            : null,
-                        // An answer is read, listened to and looked at by the
-                        // same worker a challenge is, and until now the person
-                        // who posted it was never shown any of that. The strip
-                        // renders nothing unless there is something to offer,
-                        // and the server checks ownership again regardless of
-                        // what this passes.
-                        isMine: dp.user?.id != null &&
-                            dp.user!.id == r.responderId,
-                      )),
-                    ] else ...[
-                      Center(
-                        child:Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 24),
-                          child: Column(
-                            children: [
-                              Icon(Icons.hourglass_empty,
-                                  size: 40,
-                                  color: cs.onSurface.withOpacity(0.2)),
-                              const SizedBox(height: 8),
-                              Text('No responses yet — be the first!',
-                                  style: TextStyle(
-                                      color:
-                                          cs.onSurface.withOpacity(0.4))),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
+      body: _loading && c == null
+          ? const Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white54,
                 ),
               ),
-    );
-  }
-
-  Widget _statusChip(String status, ColorScheme cs) {
-    Color bg;
-    Color fg;
-    switch (status) {
-      case 'active':
-        bg = Colors.orange.withOpacity(0.15);
-        fg = Colors.orange;
-        break;
-      case 'completed':
-        bg =Colors.green.withOpacity(0.15);
-        fg = Colors.green;
-        break;
-      default:
-        bg = cs.primary.withOpacity(0.15);
-        fg = cs.primary;
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child:Text(
-        status.toUpperCase(),
-        style: TextStyle(fontSize:11, fontWeight: FontWeight.w700, color: fg),
-      ),
+            )
+          : c == null
+              ? const Center(
+                  child: Text(
+                    'This challenge is not here any more.',
+                    style: TextStyle(color: _muted),
+                  ),
+                )
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+                    children: [
+                      // Who: the two videos, side by side.
+                      _Versus(
+                        challenge: c,
+                        answer: isBattle ? _responses.first : null,
+                        standings: _standings,
+                        isOwner: isOwner,
+                        onAccept: _acceptFrom,
+                      ),
+                      const SizedBox(height: 18),
+                      // What: the question, as big as anything on the page.
+                      Text(
+                        _question(c),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 23,
+                          height: 1.2,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.5,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          _StatusChip(challenge: c, standings: _standings),
+                          _Chip(
+                            icon: c.visibility == 'friends'
+                                ? Icons.group_rounded
+                                : Icons.public_rounded,
+                            label: c.visibility == 'friends'
+                                ? 'Friends only'
+                                : 'Everyone',
+                          ),
+                          if (ContentCategories.isRealAnswer(c.category))
+                            _Chip(
+                              icon: Icons.local_offer_rounded,
+                              label: c.category[0].toUpperCase() +
+                                  c.category.substring(1),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      _StatsBar(
+                        liked: _liked,
+                        likes: _likes,
+                        views: c.views,
+                        comments: _comments.length,
+                        answers: _responses.length,
+                        onLike: dp.user == null ? null : _like,
+                        onComments: _openComments,
+                      ),
+                      if (c.status == 'open' && !isOwner) ...[
+                        const SizedBox(height: 16),
+                        Builder(
+                          builder: (btn) => SizedBox(
+                            height: 52,
+                            child: FilledButton.icon(
+                              key: const ValueKey('accept_button'),
+                              onPressed: _accepting
+                                  ? null
+                                  : () {
+                                      final box = btn.findRenderObject()!
+                                          as RenderBox;
+                                      _acceptFrom(box.localToGlobal(
+                                          box.size.center(Offset.zero)));
+                                    },
+                              style: FilledButton.styleFrom(
+                                backgroundColor: AppTheme.primary,
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                              icon: _accepting
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Icon(Icons.bolt_rounded),
+                              label: const Text(
+                                'Accept challenge',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                      // —— Live score ——
+                      // Genuine votes, likes, views and shares per side, how
+                      // long is left, and what did not count — the same
+                      // count that decides the winner.
+                      if (c.status != 'open' || isBattle) ...[
+                        const SizedBox(height: 16),
+                        BattleScoreboard(
+                          challengeId: c.id,
+                          viewerId: dp.user?.id,
+                          onVote: dp.user == null ? null : _vote,
+                          refreshToken: _scoreVersion,
+                        ),
+                      ],
+                      const SizedBox(height: 20),
+                      _CommentsPreview(
+                        comments: _comments,
+                        onOpen: _openComments,
+                      ),
+                      // The top answer is in the cards above. Any others,
+                      // listed; and on your own answer, what the app
+                      // noticed in it.
+                      if (isBattle && _responses.length > 1) ...[
+                        const SizedBox(height: 20),
+                        const _SectionTitle('More answers'),
+                        ..._responses.skip(1).map(
+                              (r) => _ResponseCard(
+                                response: r,
+                                onVote: c.status == 'active'
+                                    ? () => _vote(r.id)
+                                    : null,
+                                isMine: dp.user?.id != null &&
+                                    dp.user!.id == r.responderId,
+                              ),
+                            ),
+                      ],
+                      if (isBattle)
+                        _AnswerTags(
+                          response: _responses.first,
+                          isMine: dp.user?.id != null &&
+                              dp.user!.id == _responses.first.responderId,
+                        ),
+                    ],
+                  ),
+                ),
     );
   }
 }
 
+const _surface = Color(0xFF1C1C1E);
+const _raised = Color(0xFF2C2C2E);
+const _muted = Color(0xFF8E8E93);
+
 // ----------------------------------------------------------------------------
-// Stat button (like, views, responses)
+// The two videos
 // ----------------------------------------------------------------------------
 
-class _StatButton extends StatelessWidget {
-  final IconData icon;
-  final int value;
-  final Color color;
-  final VoidCallback? onTap;
+/// The creator's video and the answer, as two tall cards with "VS" between
+/// them. On an open challenge the right-hand card is the empty seat: tap it
+/// to take it.
+class _Versus extends StatelessWidget {
+  final ChallengeModel challenge;
+  final ChallengeResponseModel? answer;
+  final BattleStandings? standings;
+  final bool isOwner;
+  final ValueChanged<Offset> onAccept;
 
-  const _StatButton({
-    required this.icon,
-    required this.value,
-    required this.color,
-    this.onTap,
+  const _Versus({
+    required this.challenge,
+    required this.answer,
+    required this.standings,
+    required this.isOwner,
+    required this.onAccept,
+  });
+
+  bool _leading(bool creator) {
+    final st = standings;
+    if (st == null) return false;
+    for (final s in st.sides) {
+      if (s.isCreator == creator && s.leading) return true;
+    }
+    return false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final a = answer;
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _VideoCard(
+                key: const ValueKey('card_creator'),
+                role: 'Challenger',
+                username: challenge.creatorUsername,
+                league: challenge.creatorLeague,
+                thumbnailUrl: challenge.thumbnailUrl ?? '',
+                videoUrl: challenge.videoUrl,
+                title: challenge.title,
+                leading: _leading(true),
+                decided: standings?.resolved == true,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: a != null
+                  ? _VideoCard(
+                      key: const ValueKey('card_answer'),
+                      role: 'Answer',
+                      username: a.responderUsername,
+                      league: a.responderLeague,
+                      thumbnailUrl: a.thumbnailUrl ?? '',
+                      videoUrl: a.videoUrl,
+                      title: "${a.responderUsername}'s answer",
+                      leading: _leading(false),
+                      decided: standings?.resolved == true,
+                    )
+                  : _EmptySeat(
+                      opponent: challenge.creatorUsername,
+                      canTake: !isOwner && challenge.status == 'open',
+                      onTake: onAccept,
+                    ),
+            ),
+          ],
+        ),
+        IgnorePointer(
+          child: Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.black,
+              border: Border.all(color: Colors.white24, width: 1.5),
+            ),
+            alignment: Alignment.center,
+            child: const Text(
+              'VS',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+                fontStyle: FontStyle.italic,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// One side's video: its picture, who it is, and a play button. Tap to
+/// watch.
+class _VideoCard extends StatelessWidget {
+  final String role;
+  final String username;
+  final String league;
+  final String thumbnailUrl;
+  final String videoUrl;
+  final String title;
+  final bool leading;
+  final bool decided;
+
+  const _VideoCard({
+    super.key,
+    required this.role,
+    required this.username,
+    required this.league,
+    required this.thumbnailUrl,
+    required this.videoUrl,
+    required this.title,
+    this.leading = false,
+    this.decided = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Padding(
-        padding: const EdgeInsets.all(4),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 22, color: color),
-            const SizedBox(width: 4),
-            Text('$value',
-                style: TextStyle(
+    final ring = league.isEmpty ? Colors.white38 : leagueWash(league);
+    return GestureDetector(
+      onTap: videoUrl.isEmpty
+          ? null
+          : () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      VideoPlayerPage(videoUrl: videoUrl, title: title),
+                ),
+              ),
+      child: AspectRatio(
+        aspectRatio: 0.66,
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: leading ? const Color(0xFFFFD60A) : Colors.white12,
+              width: leading ? 1.5 : 1,
+            ),
+            boxShadow: leading
+                ? [
+                    BoxShadow(
+                      color: const Color(0xFFFFD60A).withValues(alpha: 0.25),
+                      blurRadius: 18,
+                    ),
+                  ]
+                : null,
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (thumbnailUrl.isNotEmpty)
+                Image.network(
+                  thumbnailUrl,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => _cardBackground(ring),
+                )
+              else
+                _cardBackground(ring),
+              const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    stops: [0.45, 1],
+                    colors: [Colors.transparent, Color(0xCC000000)],
+                  ),
+                ),
+              ),
+              Center(
+                child: Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.black.withValues(alpha: 0.35),
+                    border: Border.all(color: Colors.white38),
+                  ),
+                  child: const Icon(
+                    Icons.play_arrow_rounded,
+                    color: Colors.white,
+                    size: 30,
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 10,
+                left: 10,
+                child: _Pill(
+                  label: role,
+                  color: Colors.black.withValues(alpha: 0.45),
+                ),
+              ),
+              if (leading)
+                Positioned(
+                  top: 10,
+                  right: 10,
+                  child: _Pill(
+                    label: decided ? 'Winner' : 'Leading',
+                    icon: Icons.emoji_events_rounded,
+                    color: const Color(0xFFFFD60A),
+                    dark: true,
+                  ),
+                ),
+              Positioned(
+                left: 10,
+                right: 10,
+                bottom: 10,
+                child: Row(
+                  children: [
+                    Container(
+                      width: 26,
+                      height: 26,
+                      padding: const EdgeInsets.all(1.5),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: ring,
+                      ),
+                      child: Container(
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: _raised,
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          username.isEmpty ? '?' : username[0].toUpperCase(),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        username,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    if (league.isNotEmpty) ...[
+                      const SizedBox(width: 4),
+                      LeagueEmblem(league: league, size: 13),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _cardBackground(Color ring) => DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color.lerp(ring, Colors.black, 0.55)!,
+              const Color(0xFF111113),
+            ],
+          ),
+        ),
+      );
+}
+
+/// The right-hand card on an open challenge: nobody has taken it yet.
+class _EmptySeat extends StatelessWidget {
+  final String opponent;
+  final bool canTake;
+  final ValueChanged<Offset> onTake;
+
+  const _EmptySeat({
+    required this.opponent,
+    required this.canTake,
+    required this.onTake,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AspectRatio(
+      aspectRatio: 0.66,
+      child: Builder(
+        builder: (card) => GestureDetector(
+          key: const ValueKey('empty_seat'),
+          onTap: canTake
+              ? () {
+                  final box = card.findRenderObject()! as RenderBox;
+                  onTake(box.localToGlobal(box.size.center(Offset.zero)));
+                }
+              : null,
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              color: _surface,
+              border: Border.all(
+                color: canTake
+                    ? AppTheme.primary.withValues(alpha: 0.6)
+                    : Colors.white12,
+                width: 1.5,
+              ),
+            ),
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: canTake
+                        ? AppTheme.primary.withValues(alpha: 0.18)
+                        : _raised,
+                  ),
+                  child: Icon(
+                    canTake ? Icons.add_rounded : Icons.hourglass_top_rounded,
+                    color: canTake ? AppTheme.primary : _muted,
+                    size: 28,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  canTake ? 'Your move' : 'Waiting for a challenger',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
                     fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: color)),
-          ],
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  canTake
+                      ? 'Accept to take on $opponent'
+                      : 'Anyone can accept it',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: _muted, fontSize: 12.5),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
   }
 }
 
-// ---------------------------------------------------------------------------
-// Response card
-// ---------------------------------------------------------------------------
+class _Pill extends StatelessWidget {
+  final String label;
+  final IconData? icon;
+  final Color color;
+  final bool dark;
 
+  const _Pill({
+    required this.label,
+    required this.color,
+    this.icon,
+    this.dark = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = dark ? Colors.black : Colors.white;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 12, color: fg),
+            const SizedBox(width: 3),
+          ],
+          Text(
+            label,
+            style: TextStyle(
+              color: fg,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Under the title
+// ----------------------------------------------------------------------------
+
+class _Chip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color? color;
+
+  const _Chip({required this.icon, required this.label, this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = color ?? const Color(0xFFD1D1D6);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: color == null ? _surface : color!.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: fg),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: TextStyle(
+              color: fg,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Where the challenge is in its life: waiting, live (and how long is
+/// left), or decided.
+class _StatusChip extends StatelessWidget {
+  final ChallengeModel challenge;
+  final BattleStandings? standings;
+
+  const _StatusChip({required this.challenge, required this.standings});
+
+  @override
+  Widget build(BuildContext context) {
+    final st = standings;
+    if (challenge.status == 'open') {
+      return const _Chip(
+        icon: Icons.hourglass_top_rounded,
+        label: 'Open',
+        color: AppTheme.primary,
+      );
+    }
+    if (challenge.status == 'completed' || (st?.resolved ?? false)) {
+      return const _Chip(
+        icon: Icons.flag_rounded,
+        label: 'Final',
+        color: _muted,
+      );
+    }
+    var label = 'Live';
+    final end = st?.endsAt;
+    if (end != null) {
+      final d = end.difference(DateTime.now());
+      if (d.isNegative) {
+        label = 'Voting closed';
+      } else if (d.inDays >= 1) {
+        label = 'Live · ${d.inDays}d ${d.inHours % 24}h left';
+      } else {
+        label = 'Live · ${d.inHours}h left';
+      }
+    }
+    return _Chip(
+      icon: Icons.circle,
+      label: label,
+      color: const Color(0xFF30D158),
+    );
+  }
+}
+
+/// Likes, views, comments and answers on one bar. The heart and the
+/// comments are buttons; the others are counts.
+class _StatsBar extends StatelessWidget {
+  final bool liked;
+  final int likes;
+  final int views;
+  final int comments;
+  final int answers;
+  final VoidCallback? onLike;
+  final VoidCallback onComments;
+
+  const _StatsBar({
+    required this.liked,
+    required this.likes,
+    required this.views,
+    required this.comments,
+    required this.answers,
+    required this.onLike,
+    required this.onComments,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    Widget cell({
+      required IconData icon,
+      required String value,
+      required String label,
+      Color color = Colors.white,
+      VoidCallback? onTap,
+      String? tooltip,
+    }) {
+      final body = InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Column(
+            children: [
+              Icon(icon, size: 22, color: color),
+              const SizedBox(height: 4),
+              Text(
+                value,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              Text(label, style: const TextStyle(color: _muted, fontSize: 11.5)),
+            ],
+          ),
+        ),
+      );
+      return Expanded(
+        child: tooltip == null ? body : Tooltip(message: tooltip, child: body),
+      );
+    }
+
+    String n(int v) => _ChallengeDetailPageState._compact(v);
+    return Container(
+      decoration: BoxDecoration(
+        color: _surface,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Row(
+        children: [
+          cell(
+            icon: liked
+                ? Icons.favorite_rounded
+                : Icons.favorite_border_rounded,
+            value: n(likes),
+            label: 'Likes',
+            color: liked ? const Color(0xFFFF375F) : Colors.white,
+            onTap: onLike,
+            tooltip: liked ? 'Unlike' : 'Like',
+          ),
+          cell(icon: Icons.visibility_outlined, value: n(views), label: 'Views'),
+          cell(
+            icon: Icons.chat_bubble_outline_rounded,
+            value: n(comments),
+            label: 'Comments',
+            onTap: onComments,
+            tooltip: 'Comments',
+          ),
+          cell(
+            icon: Icons.people_alt_outlined,
+            value: n(answers),
+            label: answers == 1 ? 'Answer' : 'Answers',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SectionTitle extends StatelessWidget {
+  final String text;
+  final Widget? trailing;
+
+  const _SectionTitle(this.text, {this.trailing});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          Text(
+            text,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 17,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const Spacer(),
+          ?trailing,
+        ],
+      ),
+    );
+  }
+}
+
+/// The first two comments, and the way into all of them.
+class _CommentsPreview extends StatelessWidget {
+  final List<Map<String, dynamic>> comments;
+  final VoidCallback onOpen;
+
+  const _CommentsPreview({required this.comments, required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionTitle(
+          'Comments',
+          trailing: comments.length > 2
+              ? TextButton(
+                  onPressed: onOpen,
+                  child: Text(
+                    'View all ${comments.length}',
+                    style: const TextStyle(
+                      color: AppTheme.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                )
+              : null,
+        ),
+        for (final c in comments.take(2))
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                CircleAvatar(
+                  radius: 15,
+                  backgroundColor: _raised,
+                  child: Text(
+                    ((c['authorUsername'] as String?) ?? '?')
+                        .characters
+                        .first
+                        .toUpperCase(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: '${c['authorUsername'] ?? '?'}  ',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        TextSpan(
+                          text: '${c['text'] ?? ''}',
+                          style: const TextStyle(color: Color(0xFFD1D1D6)),
+                        ),
+                      ],
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 14, height: 1.3),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        // The way in, even with nothing yet: a field-shaped button.
+        InkWell(
+          key: const ValueKey('add_comment'),
+          onTap: onOpen,
+          borderRadius: BorderRadius.circular(20),
+          child: Container(
+            height: 42,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            decoration: BoxDecoration(
+              color: _surface,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            alignment: Alignment.centerLeft,
+            child: Text(
+              comments.isEmpty ? 'Be the first to comment…' : 'Add a comment…',
+              style: const TextStyle(color: _muted, fontSize: 14.5),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// On your own answer, what the app noticed in it — the same strip a
+/// challenge's creator gets. Takes no space when there is nothing to offer.
+class _AnswerTags extends StatelessWidget {
+  final ChallengeResponseModel response;
+  final bool isMine;
+
+  const _AnswerTags({required this.response, required this.isMine});
+
+  @override
+  Widget build(BuildContext context) {
+    if (isMine && response.id.isNotEmpty) {
+      return TagSuggestionStrip(
+        key: ValueKey('response-tags-${response.id}'),
+        videoId: response.id,
+        subject: TagSubject.response,
+      );
+    }
+    return const SizedBox.shrink();
+  }
+}
+
+/// Another answer, beyond the top one shown in the cards: its video, who,
+/// its likes and views, and a vote.
 class _ResponseCard extends StatelessWidget {
   final ChallengeResponseModel response;
   final VoidCallback? onVote;
@@ -774,108 +1395,102 @@ class _ResponseCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs =Theme.of(context).colorScheme;
-    final tt = Theme.of(context).textTheme;
-
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 6),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-        Row(
-          children: [
-            // Thumbnail / placeholder — tap to play
-            GestureDetector(
-              onTap: response.videoUrl.isNotEmpty
-                  ? () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => VideoPlayerPage(
-                            videoUrl: response.videoUrl,
-                            title: '${response.responderUsername}\'s response',
+    final thumb = response.thumbnailUrl ?? '';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: _surface,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              GestureDetector(
+                onTap: response.videoUrl.isNotEmpty
+                    ? () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => VideoPlayerPage(
+                              videoUrl: response.videoUrl,
+                              title: "${response.responderUsername}'s answer",
+                            ),
+                          ),
+                        )
+                    : null,
+                child: Container(
+                  width: 54,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    color: _raised,
+                    borderRadius: BorderRadius.circular(10),
+                    image: thumb.isNotEmpty
+                        ? DecorationImage(
+                            image: NetworkImage(thumb),
+                            fit: BoxFit.cover,
+                          )
+                        : null,
+                  ),
+                  child: const Icon(
+                    Icons.play_arrow_rounded,
+                    color: Colors.white70,
+                    size: 26,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            response.responderUsername,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ),
-                      )
-                  : null,
-              child: Container(
-                width: 80,
-                height: 60,
-                decoration: BoxDecoration(
-                  color: cs.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(10),
-                  image: (response.thumbnailUrl != null &&
-                          response.thumbnailUrl!.isNotEmpty)
-                      ? DecorationImage(
-                          image: NetworkImage(response.thumbnailUrl!),
-                          fit: BoxFit.cover,
-                        )
-                      : null,
+                        const SizedBox(width: 5),
+                        LeagueEmblem(league: response.responderLeague, size: 14),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${_ChallengeDetailPageState._compact(response.likes)} '
+                      'likes  ·  '
+                      '${_ChallengeDetailPageState._compact(response.views)} '
+                      'views',
+                      style: const TextStyle(color: _muted, fontSize: 12.5),
+                    ),
+                  ],
                 ),
-                child: Icon(Icons.play_circle,
-                    color: cs.primary.withOpacity(0.4), size: 28),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text(response.responderUsername,
-                          style: tt.bodyMedium
-                              ?.copyWith(fontWeight: FontWeight.w600)),
-                      const SizedBox(width: 6),
-                      LeagueBadge(
-                          league: response.responderLeague, small: true),
-                    ],
+              if (onVote != null)
+                IconButton(
+                  onPressed: onVote,
+                  icon: const Icon(
+                    Icons.how_to_vote_rounded,
+                    color: AppTheme.primary,
                   ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Icon(Icons.favorite,
-                          size: 14, color: cs.onSurface.withOpacity(0.4)),
-                      const SizedBox(width: 3),
-                      Text('${response.likes}',
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: cs.onSurface.withOpacity(0.5))),
-                      const SizedBox(width: 12),
-                      Icon(Icons.visibility,
-                          size:14, color: cs.onSurface.withOpacity(0.4)),
-                      const SizedBox(width: 3),
-                      Text('${response.views}',
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: cs.onSurface.withOpacity(0.5))),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            if (onVote != null)
-              IconButton(
-                onPressed: onVote,
-                icon: Icon(Icons.how_to_vote, color: cs.primary),
-                tooltip: 'Vote for this response',
-              ),
-          ],
-        ),
-            // What the model found in this answer, offered back to whoever
-            // posted it. Takes up no space at all when there is nothing to
-            // offer, which is most answers most of the time.
-            if (isMine && response.id.isNotEmpty)
-              TagSuggestionStrip(
-                key: ValueKey('response-tags-${response.id}'),
-                videoId: response.id,
-                subject: TagSubject.response,
-              ),
-          ],
-        ),
+                  tooltip: 'Vote for this answer',
+                ),
+            ],
+          ),
+          // What the model found in this answer, offered back to whoever
+          // posted it. Takes up no space at all when there is nothing to
+          // offer, which is most answers most of the time.
+          _AnswerTags(response: response, isMine: isMine),
+        ],
       ),
     );
   }

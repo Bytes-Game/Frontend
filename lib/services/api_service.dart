@@ -1230,9 +1230,15 @@ class ApiService {
     try {
       final res = await _authHttp.get(Uri.parse(
           '$_base/api/v1/users/$userId/battles?tab=$tab&limit=$limit&offset=$offset'));
-      if (res.statusCode != 200) return null;
+      if (res.statusCode != 200) {
+        debugPrint('[profile] $tab battles answered ${res.statusCode}; '
+            'the tab offers a retry');
+        return null;
+      }
       return BattlesPage.fromJson(json.decode(res.body) as Map<String, dynamic>);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[profile] $tab battles could not be read: $e; '
+          'the tab offers a retry');
       return null;
     }
   }
@@ -2064,8 +2070,12 @@ class ApiService {
       if (res.statusCode == 200) {
         return (json.decode(res.body) as List).cast<Map<String, dynamic>>();
       }
+      debugPrint('[profile] saved videos answered ${res.statusCode}; '
+          'the Saved tab shows none');
       return [];
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[profile] saved videos could not be read: $e; '
+          'the Saved tab shows none');
       return [];
     }
   }
@@ -2157,8 +2167,12 @@ class ApiService {
       if (res.statusCode == 200) {
         return json.decode(res.body) as Map<String, dynamic>;
       }
+      debugPrint('[profile] liked videos answered ${res.statusCode}; '
+          'the Liked tab shows none');
       return const {'items': [], 'hasMore': false, 'nextCursor': ''};
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[profile] liked videos could not be read: $e; '
+          'the Liked tab shows none');
       return const {'items': [], 'hasMore': false, 'nextCursor': ''};
     }
   }
