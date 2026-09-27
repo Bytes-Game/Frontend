@@ -8,8 +8,9 @@ import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/video_processor_service.dart';
 
 /// The two ways a challenge starts — record now, or upload from the phone —
-/// in one place, so the pop-out on the + button and the create page run
-/// the same steps rather than two copies that drift apart.
+/// in one place, so the pop-out on the + button and the one on a profile's
+/// Battle button run the same steps rather than two copies that drift
+/// apart.
 ///
 /// Either way ends on the trim screen with the clip, which then carries on
 /// to the details screen and the upload.

@@ -15,6 +15,7 @@ import 'package:provider/provider.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
 import 'package:myapp/models/user_model.dart';
+import 'package:myapp/pages/challenge_metadata_page.dart';
 import 'package:myapp/pages/edit_profile_page.dart';
 import 'package:myapp/pages/notifications_page.dart';
 import 'package:myapp/pages/profile_page.dart';
@@ -130,6 +131,15 @@ void fakeServer() {
       return jsonBody({});
     }),
   );
+}
+
+/// A phone-sized screen. The window itself, not only the drawing surface,
+/// so the app's idea of the screen size (MediaQuery) matches it too.
+void phone(WidgetTester t, Size size) {
+  t.view.physicalSize = size;
+  t.view.devicePixelRatio = 1;
+  addTearDown(t.view.resetPhysicalSize);
+  addTearDown(t.view.resetDevicePixelRatio);
 }
 
 Future<void> settle(WidgetTester t) async {
@@ -417,7 +427,10 @@ void main() {
     Future<(CreateBurstHandle, List<CreateChoice>)> open(
       WidgetTester t, {
       bool fromHold = false,
+      Offset anchor = const Offset(200, 560),
+      Size? screen,
     }) async {
+      if (screen != null) phone(t, screen);
       final picked = <CreateChoice>[];
       late CreateBurstHandle handle;
       await t.pumpWidget(
@@ -428,7 +441,7 @@ void main() {
                 child: TextButton(
                   onPressed: () => handle = CreateBurst.show(
                     context,
-                    anchor: const Offset(200, 560),
+                    anchor: anchor,
                     fromHold: fromHold,
                     onChoose: picked.add,
                   ),
@@ -487,6 +500,107 @@ void main() {
       expect(picked, isEmpty);
     });
 
+    // Both choices, whole, inside a phone-width screen, and not on top of
+    // each other.
+    void bothOnScreen(WidgetTester t, double width) {
+      final record = t.getRect(find.byIcon(Icons.videocam_rounded));
+      final upload = t.getRect(find.byIcon(Icons.photo_library_rounded));
+      for (final r in [record, upload]) {
+        expect(r.left, greaterThanOrEqualTo(0));
+        expect(r.right, lessThanOrEqualTo(width));
+        expect(r.top, greaterThanOrEqualTo(0));
+      }
+      expect(
+        (record.center - upload.center).distance,
+        greaterThan(66),
+        reason: 'the two circles are 66 across; closer and they overlap',
+      );
+    }
+
+    testWidgets('from a button at the right edge it swings left, so Upload '
+        'is not pushed off the screen', (t) async {
+      final (handle, picked) = await open(
+        t,
+        anchor: const Offset(352, 420),
+        screen: const Size(390, 844),
+      );
+      bothOnScreen(t, 390);
+      // Still steerable where it now is.
+      final upload = t.getCenter(find.byIcon(Icons.photo_library_rounded));
+      handle.pointerMoved(upload);
+      await t.pump();
+      handle.pointerReleased(upload);
+      await t.pumpAndSettle();
+      expect(picked, [CreateChoice.upload]);
+    });
+
+    testWidgets('from a button near the top it opens downwards', (t) async {
+      await open(
+        t,
+        anchor: const Offset(195, 110),
+        screen: const Size(390, 844),
+      );
+      bothOnScreen(t, 390);
+      expect(t.getCenter(find.text('Record')).dy, greaterThan(110));
+      expect(t.getCenter(find.text('Upload')).dy, greaterThan(110));
+      // Mirrored, so Record is still the one on the left.
+      expect(
+        t.getCenter(find.text('Record')).dx,
+        lessThan(t.getCenter(find.text('Upload')).dx),
+      );
+      expect(
+        t.getCenter(find.text('Create a challenge')).dy,
+        greaterThan(t.getCenter(find.text('Record')).dy),
+        reason: 'the line saying what to do goes below, on the open side',
+      );
+    });
+
+    testWidgets('a profile\'s Battle button opens it, rising out of the '
+        'button, instead of a new page', (t) async {
+      phone(t, const Size(390, 900));
+      await t.pumpWidget(
+        app(ProfilePage(user: person('5', 'maya'), isEmbedded: false)),
+      );
+      await settle(t);
+      final battle = t.getCenter(find.byTooltip('Challenge to a battle'));
+
+      await t.tap(find.byTooltip('Challenge to a battle'));
+      await settle(t);
+
+      expect(find.text('Start a battle'), findsOneWidget);
+      expect(find.text('Record'), findsOneWidget);
+      expect(find.text('Upload'), findsOneWidget);
+      bothOnScreen(t, 390);
+      // The × that closes it sits exactly where the Battle button is.
+      final close = t.getCenter(find.byIcon(Icons.add_rounded).last);
+      expect((close - battle).distance, lessThan(1));
+      // Still on the profile underneath: no page was pushed.
+      expect(find.byType(ProfilePage), findsOneWidget);
+      expect(find.byType(ChallengeMetadataPage), findsNothing);
+
+      await t.tapAt(close);
+      await settle(t);
+      expect(find.text('Start a battle'), findsNothing);
+      expect(find.byTooltip('Challenge to a battle'), findsOneWidget);
+    });
+
+    test('Battle\'s choices go to the same record and upload steps as the '
+        '+, and the old chooser page is gone', () {
+      final code = File('lib/pages/profile_page.dart')
+          .readAsLinesSync()
+          .where((l) => !l.trimLeft().startsWith('//'))
+          .join('\n');
+      expect(
+        code,
+        contains("CreateFlow.record(context, from: 'profile_battle')"),
+      );
+      expect(
+        code,
+        contains("CreateFlow.upload(context, from: 'profile_battle')"),
+      );
+      expect(File('lib/pages/create_challenge_page.dart').existsSync(), false);
+    });
+
     test('the + button opens it on a tap and on a hold, and follows the '
         'finger', () {
       final code = File('lib/screens/main_shell.dart')
@@ -510,6 +624,83 @@ void main() {
         isNot(contains('const CreateChallengePage()')),
         reason: 'the + still opens the old chooser page',
       );
+    });
+  });
+
+  group('Challenge details', () {
+    // No one signed in, so the page does not start uploading the clip in
+    // the background; nothing here is about the upload.
+    Future<void> openDetails(WidgetTester t) async {
+      phone(t, const Size(400, 1600));
+      await t.pumpWidget(
+        ChangeNotifierProvider<DataProvider>(
+          create: (_) => DataProvider(),
+          child: const MaterialApp(
+            home: ChallengeMetadataPage(processedSourcePath: '/tmp/clip.mp4'),
+          ),
+        ),
+      );
+      await settle(t);
+    }
+
+    Finder onCard(String text) => find.descendant(
+      of: find.byType(TiltCard),
+      matching: find.text(text),
+    );
+
+    testWidgets('the card at the top writes the challenge as you type it', (
+      t,
+    ) async {
+      await openDetails(t);
+      expect(onCard('YOUR CHALLENGE'), findsOneWidget);
+      expect(onCard('Who is better at'), findsOneWidget);
+      expect(onCard('your subject?'), findsOneWidget);
+
+      await t.enterText(find.byType(TextFormField).at(1), 'dancing');
+      await settle(t);
+      expect(onCard('dancing?'), findsOneWidget);
+      expect(onCard('your subject?'), findsNothing);
+    });
+
+    testWidgets('one tap on a common opening puts it in the field and on the '
+        'card', (t) async {
+      await openDetails(t);
+      expect(onCard('Who is the best at'), findsNothing);
+      await t.ensureVisible(find.text('Who is the best at'));
+      await settle(t);
+      await t.tap(find.text('Who is the best at'));
+      await settle(t);
+      expect(onCard('Who is the best at'), findsOneWidget);
+      expect(
+        t.widget<TextFormField>(find.byType(TextFormField).first).controller!
+            .text,
+        'Who is the best at',
+      );
+    });
+
+    testWidgets('who can see it and how long it runs are big taps, and the '
+        'card follows them', (t) async {
+      await openDetails(t);
+      expect(onCard('Everyone'), findsOneWidget);
+      expect(onCard('7-day battle'), findsOneWidget);
+
+      await t.tap(find.text('Friends only'));
+      await t.tap(find.text('14'));
+      await settle(t);
+      expect(onCard('Friends'), findsOneWidget);
+      expect(onCard('14-day battle'), findsOneWidget);
+      expect(onCard('7-day battle'), findsNothing);
+    });
+
+    testWidgets('Post is pinned to the bottom, whatever is scrolled', (
+      t,
+    ) async {
+      await openDetails(t);
+      final post = t.getRect(find.text('Post Challenge'));
+      expect(post.bottom, greaterThan(1600 - 80));
+      await t.drag(find.byType(ListView).first, const Offset(0, -600));
+      await settle(t);
+      expect(t.getRect(find.text('Post Challenge')), post);
     });
   });
 

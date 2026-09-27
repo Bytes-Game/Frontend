@@ -12,6 +12,7 @@ import 'package:myapp/services/clip_length.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/video_processor_service.dart';
+import 'package:myapp/widgets/arena_ui.dart';
 
 // We use video_player (ExoPlayer/AVPlayer/HTML5) — the official
 // Flutter plugin. It doesn't ship a Windows/Linux desktop backend, so
@@ -405,7 +406,7 @@ class _VideoTrimPageState extends State<VideoTrimPage>
           child: Padding(
             padding: const EdgeInsets.fromLTRB(28, 8, 28, 12),
             child: Center(
-              child: _TiltCard(
+              child: TiltCard(
                 onTap: () {
                   setState(() {
                     if (controller.value.isPlaying) {
@@ -669,121 +670,6 @@ class _VideoTrimPageState extends State<VideoTrimPage>
     final mm = (s ~/ 60).toString().padLeft(2, '0');
     final ss = (s % 60).toString().padLeft(2, '0');
     return '$mm:$ss';
-  }
-}
-
-/// The clip as a card that can be tilted.
-///
-/// Drag across it and it leans in 3D, following the finger, with a sheen
-/// sliding over it like light on glass; let go and it springs back flat.
-/// A tap is passed on (play and pause).
-class _TiltCard extends StatefulWidget {
-  final Widget child;
-  final VoidCallback onTap;
-
-  const _TiltCard({required this.child, required this.onTap});
-
-  @override
-  State<_TiltCard> createState() => _TiltCardState();
-}
-
-class _TiltCardState extends State<_TiltCard>
-    with SingleTickerProviderStateMixin {
-  Offset _tilt = Offset.zero;
-  late final AnimationController _back = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 520),
-  )..addListener(() {
-      final t = Curves.elasticOut.transform(_back.value);
-      setState(() => _tilt = Offset.lerp(_from, Offset.zero, t)!);
-    });
-  Offset _from = Offset.zero;
-
-  /// The furthest it leans, in radians — enough to read as 3D, not so much
-  /// the video is hard to see.
-  static const double _max = 0.32;
-
-  @override
-  void dispose() {
-    _back.dispose();
-    super.dispose();
-  }
-
-  void _onPan(DragUpdateDetails d, Size size) {
-    _back.stop();
-    setState(() {
-      _tilt = Offset(
-        (_tilt.dx - d.delta.dy / size.height * 1.4).clamp(-_max, _max),
-        (_tilt.dy + d.delta.dx / size.width * 1.4).clamp(-_max, _max),
-      );
-    });
-  }
-
-  void _release() {
-    _from = _tilt;
-    _back.forward(from: 0);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, box) {
-        final size = Size(box.maxWidth, box.maxHeight);
-        final sheen = Alignment(-_tilt.dy * 4, -_tilt.dx * 4);
-        return GestureDetector(
-          onTap: widget.onTap,
-          onPanUpdate: (d) => _onPan(d, size),
-          onPanEnd: (_) => _release(),
-          onPanCancel: _release,
-          child: Transform(
-            alignment: Alignment.center,
-            transform: Matrix4.identity()
-              ..setEntry(3, 2, 0.0016)
-              ..rotateX(_tilt.dx)
-              ..rotateY(_tilt.dy),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(22),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppTheme.primary.withValues(alpha: 0.22),
-                    blurRadius: 40,
-                    offset: Offset(-_tilt.dy * 40, 18 + _tilt.dx * 40),
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(22),
-                child: Stack(
-                  children: [
-                    widget.child,
-                    // Light on glass, sliding as it leans.
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            gradient: RadialGradient(
-                              center: sheen,
-                              radius: 0.9,
-                              colors: [
-                                Colors.white.withValues(
-                                  alpha: 0.18 * (_tilt.distance / _max),
-                                ),
-                                Colors.white.withValues(alpha: 0),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
   }
 }
 
