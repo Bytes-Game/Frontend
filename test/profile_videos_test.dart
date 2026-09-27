@@ -6,6 +6,7 @@
 // red here even when a video still appears.
 
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -14,12 +15,16 @@ import 'package:http/testing.dart';
 import 'package:provider/provider.dart';
 
 import 'package:myapp/models/user_model.dart';
+import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/pages/liked_videos_page.dart';
 import 'package:myapp/pages/profile_page.dart';
+import 'package:myapp/pages/video_player_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
+import 'package:myapp/services/upload_job_manager.dart';
+import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/widgets/smart_reels_feed.dart';
 
 const words = {
@@ -55,12 +60,20 @@ Map<String, dynamic> video(String id, {String by = 'maya', bool vs = false}) =>
 /// Every feed the app asked for. Must stay empty.
 late List<String> feedAsks;
 
+/// Every video file the app started fetching.
+late List<String> videoAsks;
+
 void fakeServer() {
   feedAsks = [];
+  videoAsks = [];
   ApiService.useClient(
     MockClient((req) async {
       final p = req.url.path;
       Object body = {};
+      if (p.endsWith('.mp4')) {
+        videoAsks.add(req.url.toString());
+        return http.Response('no', 404);
+      }
       if (p.contains('/feed')) {
         feedAsks.add(p);
         body = {'items': [], 'hasMore': false};
@@ -180,8 +193,38 @@ Future<void> tapTab(WidgetTester t, String label) async {
 void main() {
   // A tap that misses fails, rather than warning and carrying on.
   WidgetController.hitTestWarningShouldBeFatal = true;
-  setUp(SmartReelsFeed.debugForgetAppOpen);
-  tearDown(() => ApiService.useClient(http.Client()));
+  late Directory cacheDir;
+  setUp(() {
+    SmartReelsFeed.debugForgetAppOpen();
+    cacheDir = Directory.systemTemp.createTempSync('profile_videos');
+    VideoCacheService.instance.debugSetDirectory(cacheDir);
+  });
+  tearDown(() async {
+    UploadJobManager.instance.activeJobs.value = const [];
+    ApiService.useClient(http.Client());
+    VideoCacheService.instance.warm(const []);
+    try {
+      cacheDir.deleteSync(recursive: true);
+    } catch (_) {}
+  });
+
+  testWidgets('opening a profile fetches the start of its first videos '
+      'before any tap, as TikTok does', (t) async {
+    await open(t, ProfilePage(user: person('5', 'maya'), isEmbedded: false));
+    expect(find.byKey(const ValueKey('short_tile_11')), findsOneWidget);
+    expect(
+      VideoCacheService.instance.debugWindow,
+      {'https://x/11.mp4', 'https://x/12.mp4', 'https://x/13.mp4'},
+      reason: 'the same addresses the reels will play',
+    );
+    expect(videoAsks, contains('https://x/11.mp4'), reason: 'and asked for');
+    expect(feedAsks, isEmpty);
+
+    // Another tab: the fetching moves with you.
+    await tapTab(t, 'Won 1');
+    expect(VideoCacheService.instance.debugWindow, {'https://x/21.mp4'});
+    await close(t);
+  });
 
   testWidgets('on someone else\'s profile, a tapped short plays, and the '
       'swipes go through their shorts and stop at the last', (t) async {
@@ -256,6 +299,11 @@ void main() {
     await tapTab(t, 'Saved');
     final tile = find.byKey(const ValueKey('saved_tile_32'));
     expect(tile, findsOneWidget);
+    expect(VideoCacheService.instance.debugWindow, {
+      'https://x/31.mp4',
+      'https://x/32.mp4',
+      'https://x/33.mp4',
+    }, reason: 'the start of each fetched before the tap');
     expect(
       find.descendant(of: tile, matching: find.byIcon(Icons.bookmark_rounded)),
       findsOneWidget,
@@ -274,6 +322,10 @@ void main() {
     await open(t, const LikedVideosPage(), me: '5');
     final tile = find.byKey(const ValueKey('liked_tile_32'));
     expect(tile, findsOneWidget);
+    expect(VideoCacheService.instance.debugWindow, {
+      'https://x/32.mp4',
+      'https://x/33.mp4',
+    }, reason: 'the start of each fetched before the tap');
     expect(
       find.descendant(of: tile, matching: find.text('zara')),
       findsOneWidget,
@@ -284,5 +336,126 @@ void main() {
     expect(playing('33'), findsOneWidget);
     expect(feedAsks, isEmpty);
     await close(t);
+  });
+
+  group('a post on its way up', () {
+    late File clip;
+    UploadJob posting({ChallengeSubmissionMeta? meta, double progress = 0.4}) =>
+        UploadJob.debug(
+          sourcePath: clip.path,
+          stage: UploadJobStage.uploading,
+          progress: progress,
+          postedAs: meta,
+        );
+    const meta = ChallengeSubmissionMeta(
+      prefix: 'Who can',
+      subject: 'backflip off a wall',
+      visibility: 'arena',
+      category: 'sports',
+      emotionTags: [],
+    );
+
+    setUp(() {
+      clip = File('${cacheDir.path}/devf_trim_1.mp4')..writeAsBytesSync([1]);
+    });
+
+    testWidgets('shows first in your Shorts from the moment you press Post, '
+        'and plays from your phone', (t) async {
+      final job = posting(meta: meta);
+      UploadJobManager.instance.activeJobs.value = [job];
+      await open(
+        t,
+        ProfilePage(user: person('5', 'maya'), isEmbedded: false),
+        me: '5',
+      );
+      final tile = find.byKey(ValueKey('posting_tile_${job.id}'));
+      expect(tile, findsOneWidget);
+      expect(
+        find.descendant(of: tile, matching: find.text('Posting…')),
+        findsOneWidget,
+      );
+      expect(find.descendant(of: tile, matching: find.text('40%')),
+          findsOneWidget);
+      expect(
+        find.descendant(
+          of: tile,
+          matching: find.text('Who can backflip off a wall'),
+        ),
+        findsOneWidget,
+      );
+      // First, ahead of what is already posted.
+      final first = t.getTopLeft(tile);
+      final older = t.getTopLeft(find.byKey(const ValueKey('short_tile_11')));
+      expect(first.dx < older.dx || first.dy < older.dy, isTrue);
+
+      await tapTile(t, tile);
+      final player = t.widget<VideoPlayerPage>(find.byType(VideoPlayerPage));
+      expect(player.videoUrl, clip.path, reason: 'the video on the phone');
+      await close(t);
+    });
+
+    testWidgets('when it finishes, the real post takes its place at once',
+        (t) async {
+      final job = posting(meta: meta, progress: 0.9);
+      UploadJobManager.instance.activeJobs.value = [job];
+      await open(
+        t,
+        ProfilePage(user: person('5', 'maya'), isEmbedded: false),
+        me: '5',
+      );
+      expect(find.byKey(ValueKey('posting_tile_${job.id}')), findsOneWidget);
+
+      job.debugFinish(ChallengeModel.fromJson(video('14')));
+      await settle(t);
+      expect(find.byKey(ValueKey('posting_tile_${job.id}')), findsNothing);
+      final posted = find.byKey(const ValueKey('short_tile_14'));
+      expect(posted, findsOneWidget);
+      final older = t.getTopLeft(find.byKey(const ValueKey('short_tile_11')));
+      final at = t.getTopLeft(posted);
+      expect(at.dx < older.dx || at.dy < older.dy, isTrue, reason: 'first');
+      await close(t);
+    });
+
+    testWidgets('a video still being prepared while you type is not shown, '
+        'and nobody else sees yours', (t) async {
+      final typing = posting();
+      final mine = posting(meta: meta);
+      UploadJobManager.instance.activeJobs.value = [typing, mine];
+      await open(
+        t,
+        ProfilePage(user: person('5', 'maya'), isEmbedded: false),
+        me: '5',
+      );
+      expect(find.byKey(ValueKey('posting_tile_${typing.id}')), findsNothing);
+      expect(find.byKey(ValueKey('posting_tile_${mine.id}')), findsOneWidget);
+      await close(t);
+
+      await open(
+        t,
+        ProfilePage(user: person('5', 'maya'), isEmbedded: false),
+      );
+      expect(find.text('Posting…'), findsNothing);
+      expect(find.byKey(const ValueKey('short_tile_11')), findsOneWidget);
+      await close(t);
+    });
+  });
+
+  test('every upload path hands the tile its picture as soon as one is made',
+      () {
+    // Comments out first: a test that finds the words in a comment checks
+    // nothing.
+    final code = File('lib/services/upload_job_manager.dart')
+        .readAsLinesSync()
+        .where((l) => !l.trimLeft().startsWith('//'))
+        .join('\n');
+    final loops = RegExp(r'await for \(final a in processed\) \{')
+        .allMatches(code)
+        .length;
+    final pictures = RegExp(
+      r'if \(a\.kind == ProcessingArtifactKind\.thumbnail\) \{\s*'
+      r'job\._poster = a\.path;',
+    ).allMatches(code).length;
+    expect(loops, 3, reason: 'challenge, prepared challenge, answer');
+    expect(pictures, loops);
   });
 }

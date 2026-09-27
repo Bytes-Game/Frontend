@@ -268,6 +268,9 @@ class UploadJobManager {
         try {
           await for (final a in processed) {
             pathsToCleanup.add(a.path);
+            if (a.kind == ProcessingArtifactKind.thumbnail) {
+              job._poster = a.path;
+            }
             final d = a.duration;
             if (d != null && d > uploadedDuration) uploadedDuration = d;
             upstream.add(a);
@@ -459,6 +462,9 @@ class UploadJobManager {
         try {
           await for (final a in processed) {
             pathsToCleanup.add(a.path);
+            if (a.kind == ProcessingArtifactKind.thumbnail) {
+              job._poster = a.path;
+            }
             final d = a.duration;
             if (d != null && d > uploadedDuration) uploadedDuration = d;
             upstream.add(a);
@@ -614,6 +620,9 @@ class UploadJobManager {
         try {
           await for (final a in processed) {
             pathsToCleanup.add(a.path);
+            if (a.kind == ProcessingArtifactKind.thumbnail) {
+              job._poster = a.path;
+            }
             final d = a.duration;
             if (d != null && d > uploadedDuration) uploadedDuration = d;
             upstream.add(a);
@@ -964,21 +973,44 @@ class UploadJob {
     this.challengeId,
   });
 
+  /// What the creator wrote, from the moment they pressed Post. Null while
+  /// the video is only being prepared in the background as they type —
+  /// nothing has been posted yet, so nothing should show as posting.
+  ChallengeSubmissionMeta? get postedAs => _challengeMeta;
+
+  /// A picture of the video on this phone, once processing has made one.
+  /// Deleted with the other working files when the job ends.
+  String? get posterPath => _poster;
+  String? _poster;
+
   /// A job that runs nothing, sitting at [stage], for tests of code that
   /// reads the job list — "Free up space" asks it which files to keep.
   @visibleForTesting
   factory UploadJob.debug({
     required String sourcePath,
     required UploadJobStage stage,
+    ChallengeSubmissionMeta? postedAs,
+    double progress = 0,
   }) {
     final job = UploadJob._(
-      id: 'debug_${sourcePath.hashCode}_${stage.name}',
+      id: 'debug_${sourcePath.hashCode}_${stage.name}_${_debugJobs++}',
       kind: UploadJobKind.challenge,
       sourcePath: sourcePath,
       title: '',
     );
-    job.state.value = UploadJobState(stage: stage);
+    job._challengeMeta = postedAs;
+    job.state.value = UploadJobState(stage: stage, progress: progress);
     return job;
+  }
+
+  static int _debugJobs = 0;
+
+  /// For tests: finish a [debug] job as the runner does — done, with the
+  /// post the server made — and tell whoever listens for finished posts.
+  @visibleForTesting
+  void debugFinish(Object result) {
+    _update((s) => s.copyWith(stage: UploadJobStage.done, result: result));
+    UploadJobManager.instance._completedCtl.add(this);
   }
 
   void _update(UploadJobState Function(UploadJobState) f) {

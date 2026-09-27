@@ -187,6 +187,12 @@ class SmartReelsFeed extends StatefulWidget {
   /// rebuilt on every tab switch and "since the app opened" is what matters.
   static final Set<FeedKind> _freshSinceOpen = <FeedKind>{};
 
+  /// The address a reel of [c] will play, so a page can fetch the start of
+  /// it before the tap — the same address, or the fetch is wasted. Empty
+  /// when there is nothing to play.
+  static String playbackUrlFor(ChallengeModel c) =>
+      _ReelItem.fromChallengeModel(c)?.videoUrl ?? '';
+
   /// For tests: what a reel of [c] would play — its video, the retry if
   /// that fails, and the answer's video.
   @visibleForTesting
