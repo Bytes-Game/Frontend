@@ -440,86 +440,203 @@ Future<void> showChallengeVoteDialog({
   required String votedFor,
   required void Function(String responseId, String username) onVote,
 }) {
-  return showDialog(
+  // A sheet from the bottom with the two people side by side, rather than a
+  // dialog of two orange and blue outlined buttons stacked with "VS" between
+  // them. The one you already voted for is marked, so changing your mind is
+  // one tap on the other.
+  final creator = creatorUsername.isEmpty ? 'Creator' : creatorUsername;
+  final opponent = opponentUsername.isEmpty ? 'Opponent' : opponentUsername;
+  return showModalBottomSheet<void>(
     context: context,
-    builder: (ctx) => AlertDialog(
-      title: Text(voted ? 'Change Your Vote' : 'Cast Your Vote'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            challengeTitle,
-            style: const TextStyle(fontSize: 14),
-            textAlign: TextAlign.center,
-          ),
-          if (voted) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Currently voted for: $votedFor',
-              style: TextStyle(
-                fontSize: 12,
-                color: Theme.of(context)
-                    .colorScheme
-                    .onSurface
-                    .withValues(alpha: 0.6),
+    backgroundColor: const Color(0xFF1C1C1E),
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+    ),
+    builder: (ctx) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 36,
+              height: 5,
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(3),
               ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              voted ? 'Change your vote' : 'Who did it better?',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 19,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.3,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              challengeTitle,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 14),
+            ),
+            const SizedBox(height: 18),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: _VoteSide(
+                    key: const ValueKey('vote_creator'),
+                    username: creator,
+                    picked: voted && votedFor == creatorUsername,
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      // The creator's side is voted for with the challenge
+                      // id standing in for a response id.
+                      onVote(challengeId, creator);
+                    },
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 10),
+                  child: Text(
+                    'vs',
+                    style: TextStyle(
+                      color: Color(0xFF8E8E93),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ),
+                // Only with a real answer to vote for (defence in depth;
+                // the feed only opens this on a battle).
+                Expanded(
+                  child: opponentResponseId.isEmpty
+                      ? const SizedBox()
+                      : _VoteSide(
+                          key: const ValueKey('vote_opponent'),
+                          username: opponent,
+                          picked: voted && votedFor == opponentUsername,
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            onVote(opponentResponseId, opponent);
+                          },
+                        ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF8E8E93),
+              ),
+              child: const Text('Cancel'),
             ),
           ],
-          const SizedBox(height: 16),
-          // Creator side
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: () {
-                Navigator.pop(ctx);
-                // Match the inline behavior above: creator vote uses the
-                // challenge id as the "response id" placeholder.
-                onVote(challengeId, creatorUsername);
-              },
-              icon: const Icon(Icons.person),
-              label: Text(creatorUsername.isEmpty ? 'Creator' : creatorUsername),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.orange,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text('VS',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-          const SizedBox(height: 8),
-          // Opponent side — only render when we have a real responseId
-          // (defense in depth; the smart-reels caller only opens this
-          // dialog when isBattle == true, which already gates on a
-          // populated opponent).
-          if (opponentResponseId.isNotEmpty)
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  onVote(opponentResponseId,
-                      opponentUsername.isEmpty ? 'Opponent' : opponentUsername);
-                },
-                icon: const Icon(Icons.person),
-                label: Text(
-                    opponentUsername.isEmpty ? 'Opponent' : opponentUsername),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.blue,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                ),
-              ),
-            ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx),
-          child: const Text('Cancel'),
         ),
-      ],
+      ),
     ),
   );
+}
+
+/// One person in the vote sheet: their initial, their name, and what a tap
+/// does — "Vote", or a tick if they already have your vote.
+class _VoteSide extends StatelessWidget {
+  final String username;
+  final bool picked;
+  final VoidCallback onTap;
+
+  const _VoteSide({
+    super.key,
+    required this.username,
+    required this.picked,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const blue = Color(0xFF0A84FF);
+    return Material(
+      color: const Color(0xFF2C2C2E),
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(10, 16, 10, 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: picked ? blue : Colors.transparent,
+              width: 1.5,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircleAvatar(
+                radius: 26,
+                backgroundColor: const Color(0xFF3A3A3C),
+                child: Text(
+                  username[0].toUpperCase(),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                username,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Container(
+                height: 32,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: picked ? Colors.white12 : blue,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      picked ? Icons.check_rounded : Icons.how_to_vote_rounded,
+                      size: 16,
+                      color: picked ? const Color(0xFF30D158) : Colors.white,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      picked ? 'Your vote' : 'Vote',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Comment bottom sheet — loads comments from API, allows adding new ones.
