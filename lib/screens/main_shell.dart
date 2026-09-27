@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/providers/data_provider.dart';
@@ -8,14 +9,16 @@ import 'package:myapp/pages/home_page.dart';
 import 'package:myapp/pages/chat_list_page.dart';
 import 'package:myapp/pages/search_page.dart';
 import 'package:myapp/pages/profile_page.dart';
-import 'package:myapp/pages/create_challenge_page.dart';
+import 'package:myapp/services/create_flow.dart';
+import 'package:myapp/widgets/create_burst.dart';
 
 /// Root shell — 5-slot bottom nav using standard Material 3 NavigationBar.
 /// 0 - Home      (TikTok-style reels: challenges + unaccepted-as-shorts mix)
 /// 1 - Messages  (chat list)
-/// 2 - Create    (NOT a tab — special prominent "+" that pushes the
-///                CreateChallengePage on top of whatever tab is active.
-///                Selecting it never updates _currentIndex.)
+/// 2 - Create    (NOT a tab — the "+" opens the Create pop-out on top of
+///                whatever tab is active: tap it, or hold it and slide to
+///                Record or Upload. Selecting it never updates
+///                _currentIndex.)
 /// 3 - Search
 /// 4 - Profile
 ///
@@ -38,6 +41,10 @@ class _MainShellState extends State<MainShell> {
   static const _tabLabels = ['Home', 'Messages', 'Create', 'Search', 'Profile'];
   static const _createIndex = 2;
 
+  /// The + button, so the pop-out can open exactly where it is.
+  final _plusKey = GlobalKey();
+  CreateBurstHandle? _burst;
+
   @override
   void initState() {
     super.initState();
@@ -50,22 +57,11 @@ class _MainShellState extends State<MainShell> {
   }
 
   void _onDestination(int index) {
-    // The center "+" is not a tab — it's a launcher. Tapping it pushes the
-    // create page on top of the current tab and leaves _currentIndex
-    // untouched, so when the user dismisses the create sheet they land
-    // back on whatever tab they were on.
+    // The center "+" is not a tab — it's a launcher. Tapping it opens the
+    // Create pop-out over the current tab and leaves _currentIndex
+    // untouched, so closing it lands back on whatever tab they were on.
     if (index == _createIndex) {
-      // Mute the reels feed while the create page sits on top — even
-      // though the home tab is still mounted underneath, the user is
-      // not looking at it and shouldn't hear it.
-      VideoPlayerService.instance.pauseAll();
-      EventTracker.instance.trackTap(
-        target: 'nav_create_challenge',
-        pageName: '${_tabLabels[_currentIndex].toLowerCase()}_tab',
-      );
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const CreateChallengePage()),
-      );
+      _openBurst(fromHold: false);
       return;
     }
 
@@ -90,6 +86,53 @@ class _MainShellState extends State<MainShell> {
     );
     setState(() => _currentIndex = index);
   }
+
+  /// Open the Create pop-out over the + button. From a hold, the finger
+  /// that is still down keeps steering it: see the pill's gesture below.
+  void _openBurst({required bool fromHold}) {
+    if (_burst != null && !_burst!.isClosed) return;
+    // Mute the reels feed while the pop-out sits on top — the home tab is
+    // still mounted underneath, but nobody is watching it.
+    VideoPlayerService.instance.pauseAll();
+    EventTracker.instance.trackTap(
+      target: 'nav_create_challenge',
+      pageName: '${_tabLabels[_currentIndex].toLowerCase()}_tab',
+      params: {'how': fromHold ? 'hold' : 'tap'},
+    );
+    final box = _plusKey.currentContext?.findRenderObject() as RenderBox?;
+    final anchor = box == null
+        ? Offset(MediaQuery.sizeOf(context).width / 2,
+            MediaQuery.sizeOf(context).height - 40)
+        : box.localToGlobal(box.size.center(Offset.zero));
+    _burst = CreateBurst.show(
+      context,
+      anchor: anchor,
+      fromHold: fromHold,
+      onChoose: (choice) {
+        if (!mounted) return;
+        switch (choice) {
+          case CreateChoice.record:
+            CreateFlow.record(context, from: 'create_burst');
+          case CreateChoice.upload:
+            CreateFlow.upload(context, from: 'create_burst');
+        }
+      },
+    );
+  }
+
+  /// The + itself. A tap goes through the bar and opens the pop-out; a
+  /// hold opens it at once and then follows the finger, so sliding onto
+  /// Record or Upload and letting go picks it in one movement.
+  Widget get _createPill => GestureDetector(
+        key: _plusKey,
+        onLongPressStart: (_) {
+          HapticFeedback.mediumImpact();
+          _openBurst(fromHold: true);
+        },
+        onLongPressMoveUpdate: (d) => _burst?.pointerMoved(d.globalPosition),
+        onLongPressEnd: (d) => _burst?.pointerReleased(d.globalPosition),
+        child: const _CreatePill(),
+      );
 
   Widget _body() {
     final dp = Provider.of<DataProvider>(context, listen: false);
@@ -147,13 +190,13 @@ class _MainShellState extends State<MainShell> {
           selectedIndex: _currentIndex,
           onDestinationSelected: _onDestination,
           // The chosen tab's icon fills in; the rest stay outlines.
-          destinations: const [
-            NavigationDestination(
+          destinations: [
+            const NavigationDestination(
               icon: Icon(Icons.home_outlined),
               selectedIcon: Icon(Icons.home_rounded),
               label: 'Home',
             ),
-            NavigationDestination(
+            const NavigationDestination(
               icon: Icon(Icons.chat_bubble_outline_rounded),
               selectedIcon: Icon(Icons.chat_bubble_rounded),
               label: 'Messages',
@@ -163,16 +206,16 @@ class _MainShellState extends State<MainShell> {
             // there's no "selected" state to render — pressing it always
             // launches the create sheet, never marks itself active.
             NavigationDestination(
-              icon: _CreatePill(),
-              selectedIcon: _CreatePill(),
+              icon: _createPill,
+              selectedIcon: _createPill,
               label: 'Create',
             ),
-            NavigationDestination(
+            const NavigationDestination(
               icon: Icon(Icons.search_rounded),
               selectedIcon: Icon(Icons.search_rounded),
               label: 'Search',
             ),
-            NavigationDestination(
+            const NavigationDestination(
               icon: Icon(Icons.person_outline_rounded),
               selectedIcon: Icon(Icons.person_rounded),
               label: 'Profile',

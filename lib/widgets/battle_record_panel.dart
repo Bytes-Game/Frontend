@@ -36,7 +36,11 @@ class BattleRecordPanel extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-        color: cs.onSurface.withValues(alpha: 0.05),
+        // A faint wash of the league's colour, so the card belongs to it.
+        color: Color.alphaBlend(
+          leagueWash(record.league).withValues(alpha: 0.08),
+          cs.onSurface.withValues(alpha: 0.04),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -81,11 +85,19 @@ class BattleRecordPanel extends StatelessWidget {
                   ],
                 ),
               ),
-              _WinRateRing(record: record),
+              _WinRateRing(
+                record: record,
+                color: leagueWash(record.league),
+              ),
             ],
           ),
           const SizedBox(height: 14),
-          _LeagueProgress(step: step, isOwn: isOwn),
+          _LeagueProgress(
+            step: step,
+            isOwn: isOwn,
+            // Filling towards the NEXT league, in its colour.
+            color: leagueWash(step.next ?? step.league),
+          ),
           const SizedBox(height: 14),
           Row(
             children: [
@@ -172,8 +184,13 @@ class CountUp extends StatelessWidget {
 class _LeagueProgress extends StatelessWidget {
   final LeagueStep step;
   final bool isOwn;
+  final Color color;
 
-  const _LeagueProgress({required this.step, required this.isOwn});
+  const _LeagueProgress({
+    required this.step,
+    required this.isOwn,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -202,7 +219,7 @@ class _LeagueProgress extends StatelessWidget {
               value: v,
               minHeight: 6,
               backgroundColor: cs.onSurface.withValues(alpha: 0.08),
-              valueColor: const AlwaysStoppedAnimation(AppTheme.primary),
+              valueColor: AlwaysStoppedAnimation(color),
             ),
           ),
         ),
@@ -220,8 +237,9 @@ class _LeagueProgress extends StatelessWidget {
 
 class _WinRateRing extends StatelessWidget {
   final BattleRecord record;
+  final Color color;
 
-  const _WinRateRing({required this.record});
+  const _WinRateRing({required this.record, required this.color});
 
   @override
   Widget build(BuildContext context) {
@@ -242,7 +260,7 @@ class _WinRateRing extends StatelessWidget {
                 value: v,
                 strokeWidth: 6,
                 backgroundColor: cs.onSurface.withValues(alpha: 0.08),
-                valueColor: const AlwaysStoppedAnimation(AppTheme.primary),
+                valueColor: AlwaysStoppedAnimation(color),
               ),
             ),
             Column(

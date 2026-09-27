@@ -5,6 +5,7 @@
 // having nothing to find.
 
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,6 +24,7 @@ import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/widgets/arena_ui.dart';
+import 'package:myapp/widgets/create_burst.dart';
 import 'package:myapp/widgets/user_tile.dart';
 
 UserModel person(String id, String name, {String bio = ''}) => UserModel(
@@ -56,10 +58,21 @@ http.Response jsonBody(Object o) => http.Response.bytes(
   headers: {'content-type': 'application/json; charset=utf-8'},
 );
 
+/// Whom the app asked the server to follow, in order.
+late List<String> followed;
+
 void fakeServer() {
+  followed = [];
   ApiService.useClient(
     MockClient((req) async {
       final p = req.url.path;
+      if (p.endsWith('/follow')) {
+        followed.add(
+          (json.decode(req.body) as Map<String, dynamic>)['followingId']
+              as String,
+        );
+        return jsonBody({'ok': true});
+      }
       if (p.contains('/feed/explore')) {
         return jsonBody({
           'items': [
@@ -88,6 +101,13 @@ void fakeServer() {
               'league': 'Gold',
               'wins': 12,
               'losses': 4,
+              'visibility': 'public',
+            },
+            {
+              'id': '6',
+              'username': 'leo_private',
+              'league': 'Silver',
+              'visibility': 'friends',
             },
           ],
           'battles': [challenge(1, 1)],
@@ -118,8 +138,10 @@ Future<void> settle(WidgetTester t) async {
   }
 }
 
-Widget app(Widget home, {UserModel? me}) {
-  final dp = DataProvider()..setUser(me ?? person('1', 'me'));
+Widget app(Widget home, {UserModel? me, List<String> following = const []}) {
+  final dp = DataProvider()
+    ..setUser(me ?? person('1', 'me'))
+    ..setFollowing([...following]);
   EventTracker.instance.dispose();
   return ChangeNotifierProvider<DataProvider>.value(
     value: dp,
@@ -136,27 +158,40 @@ void main() {
   tearDown(() => ApiService.useClient(http.Client()));
 
   group('Search', () {
-    testWidgets('no title bar: the search bar is the top of the page', (
-      t,
-    ) async {
+    testWidgets('opens straight onto videos; suggestions only while the bar '
+        'is tapped, and Cancel goes back', (t) async {
       await t.pumpWidget(app(const SearchPage()));
       await settle(t);
 
       expect(find.byType(AppBar), findsNothing);
       expect(find.text('Search people, battles, shorts'), findsOneWidget);
-      // Before searching: what people search for, then videos to discover.
+      // Videos, and nothing above them.
+      expect(find.text('Who can dance better'), findsWidgets);
+      expect(find.text('Recent'), findsNothing);
+      expect(find.text('Trending'), findsNothing);
+      expect(find.text('Cancel'), findsNothing);
+
+      // Tap into the bar: what you searched before, what is trending.
+      await t.tap(find.byType(TextField));
+      await settle(t);
       expect(find.text('Recent'), findsOneWidget);
+      expect(find.text('dance'), findsOneWidget);
       expect(find.text('Trending'), findsOneWidget);
-      expect(find.text('Discover'), findsOneWidget);
-      // The result tabs only arrive with results.
-      expect(find.text('Accounts'), findsNothing);
+      expect(find.text('freestyle'), findsOneWidget);
+      expect(find.text('Cancel'), findsOneWidget);
+
+      // Cancel: back to the videos.
+      await t.tap(find.text('Cancel'));
+      await settle(t);
+      expect(find.text('Recent'), findsNothing);
+      expect(find.text('Who can dance better'), findsWidgets);
 
       await t.pumpWidget(const SizedBox());
       await t.pump(const Duration(seconds: 1));
     });
 
-    testWidgets('searching brings the tabs and a person card; clearing '
-        'takes them away', (t) async {
+    testWidgets('people are slim rows: name, league, a lock when private, '
+        'and a Follow button that follows', (t) async {
       await t.pumpWidget(app(const SearchPage()));
       await settle(t);
 
@@ -164,25 +199,83 @@ void main() {
       await settle(t);
 
       expect(find.text('Top'), findsOneWidget);
-      expect(find.text('Battles'), findsWidgets);
       expect(find.text('Maya Singh'), findsOneWidget);
-      expect(find.text('@maya'), findsOneWidget);
-      expect(find.text('12W · 4L'), findsOneWidget);
+      expect(find.text('@maya · Gold'), findsOneWidget);
+      // Leo's account is private; Maya's is not.
+      expect(find.text('leo_private'), findsOneWidget);
+      expect(find.byIcon(Icons.lock_rounded), findsOneWidget);
+      // No boxes round people any more: no card holds the row.
+      expect(
+        find.ancestor(
+          of: find.text('Maya Singh'),
+          matching: find.byWidgetPredicate(
+            (w) =>
+                w is Container &&
+                w.decoration is BoxDecoration &&
+                (w.decoration as BoxDecoration).borderRadius != null,
+          ),
+        ),
+        findsNothing,
+      );
+
+      // Follow follows, and the button says so.
+      expect(find.text('Follow'), findsNWidgets(2));
+      await t.tap(find.text('Follow').first);
+      await settle(t);
+      expect(find.text('Following'), findsOneWidget);
+      expect(followed, ['5']);
 
       await t.tap(find.byTooltip('Clear'));
       await settle(t);
       expect(find.text('Top'), findsNothing);
-      expect(find.text('Discover'), findsOneWidget);
 
       await t.pumpWidget(const SizedBox());
       await t.pump(const Duration(seconds: 1));
+    });
+
+    testWidgets('the search bar\'s words sit centred, even under the app\'s '
+        'big text-box padding', (t) async {
+      final ctrl = TextEditingController();
+      await t.pumpWidget(
+        MaterialApp(
+          // The app's own setting: 20 at the side, 16 above and below.
+          theme: ThemeData(
+            inputDecorationTheme: const InputDecorationTheme(
+              filled: true,
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 16,
+              ),
+            ),
+          ),
+          home: Scaffold(
+            body: Padding(
+              padding: const EdgeInsets.all(16),
+              child: ArenaSearchField(controller: ctrl, hint: 'Search chats'),
+            ),
+          ),
+        ),
+      );
+      final field = t.getRect(find.byType(ArenaSearchField));
+      final hint = t.getRect(find.text('Search chats'));
+      expect(
+        (hint.center.dy - field.center.dy).abs(),
+        lessThan(2.5),
+        reason: 'the words sit above or below the middle of the bar',
+      );
+      // Magnifier at 10 + 20 wide, then 6: the words start 36 in, not 56.
+      expect(
+        hint.left - field.left,
+        closeTo(36, 3),
+        reason: 'the theme\'s 20 pixels are pushing the words right',
+      );
     });
 
     testWidgets('leaving the page opens no video on the way out', (t) async {
       await t.pumpWidget(app(const SearchPage()));
       await settle(t);
       // The grid is on screen and has had its turn at opening previews.
-      expect(find.text('Discover'), findsOneWidget);
+      expect(find.text('Who can dance better'), findsWidgets);
       final before = ReelDiagnostics.instance.debugPreviewOpened;
 
       // Closing the page closes every tile. None of them may hand the
@@ -238,6 +331,185 @@ void main() {
       // Not yours to edit.
       expect(find.byTooltip('Edit profile'), findsNothing);
       expect(find.byTooltip('Settings'), findsNothing);
+    });
+  });
+
+  group('Profile, continued', () {
+    testWidgets('a private account you do not follow shows a lock, not its '
+        'battles', (t) async {
+      await t.binding.setSurfaceSize(const Size(400, 1000));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final private = UserModel(
+        id: '6',
+        username: 'leo_private',
+        wins: 1,
+        losses: 0,
+        followersCount: 3,
+        followingCount: 2,
+        visibility: 'friends',
+      );
+      await t.pumpWidget(app(ProfilePage(user: private, isEmbedded: false)));
+      await settle(t);
+
+      expect(find.text('This account is private'), findsOneWidget);
+      expect(find.byIcon(Icons.lock_rounded), findsOneWidget);
+      // Still there: who they are, and the way to follow them.
+      expect(find.text('Follow'), findsOneWidget);
+      expect(find.text('Followers'), findsOneWidget);
+      // Not there: their tabs.
+      expect(find.text('Shorts'), findsNothing);
+    });
+
+    testWidgets('the same account, once you follow it, shows its tabs', (
+      t,
+    ) async {
+      await t.binding.setSurfaceSize(const Size(400, 1000));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final private = UserModel(
+        id: '6',
+        username: 'leo_private',
+        wins: 1,
+        losses: 0,
+        followersCount: 3,
+        followingCount: 2,
+        visibility: 'friends',
+      );
+      await t.pumpWidget(
+        app(
+          ProfilePage(user: private, isEmbedded: false),
+          following: const ['6'],
+        ),
+      );
+      await settle(t);
+
+      expect(find.text('This account is private'), findsNothing);
+      expect(find.text('Shorts'), findsOneWidget);
+    });
+
+    testWidgets('your own profile with no bio: "Add bio" beside the name '
+        'opens the editor', (t) async {
+      await t.binding.setSurfaceSize(const Size(400, 1000));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final me = person('1', 'me');
+      await t.pumpWidget(app(ProfilePage(user: me, isEmbedded: false), me: me));
+      await settle(t);
+
+      // Up in the header, level with the name — not somewhere below.
+      final name = t.getRect(find.text('me').first);
+      final addBio = t.getRect(
+        find
+            .ancestor(
+              of: find.text('Add bio'),
+              matching: find.byType(Container),
+            )
+            .first,
+      );
+      expect(addBio.top - name.bottom, lessThan(60));
+      expect(addBio.left, closeTo(name.left, 2));
+
+      await t.tap(find.text('Add bio'));
+      await settle(t);
+      expect(find.byType(EditProfilePage), findsOneWidget);
+    });
+  });
+
+  group('Create pop-out', () {
+    Future<(CreateBurstHandle, List<CreateChoice>)> open(
+      WidgetTester t, {
+      bool fromHold = false,
+    }) async {
+      final picked = <CreateChoice>[];
+      late CreateBurstHandle handle;
+      await t.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: TextButton(
+                  onPressed: () => handle = CreateBurst.show(
+                    context,
+                    anchor: const Offset(200, 560),
+                    fromHold: fromHold,
+                    onChoose: picked.add,
+                  ),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await t.tap(find.text('open'));
+      await t.pumpAndSettle();
+      return (handle, picked);
+    }
+
+    testWidgets('Record and Upload rise out of the +; tapping one picks it', (
+      t,
+    ) async {
+      final (_, picked) = await open(t);
+      expect(find.text('Record'), findsOneWidget);
+      expect(find.text('Upload'), findsOneWidget);
+      // Upload is up and to the right of the +, Record up and to the left.
+      expect(t.getCenter(find.text('Upload')).dx, greaterThan(200));
+      expect(t.getCenter(find.text('Record')).dx, lessThan(200));
+      expect(t.getCenter(find.text('Record')).dy, lessThan(560));
+
+      await t.tap(find.text('Upload'));
+      await t.pumpAndSettle();
+      expect(picked, [CreateChoice.upload]);
+      expect(find.text('Record'), findsNothing, reason: 'it closes');
+    });
+
+    testWidgets('hold, slide onto Record, let go: picked in one movement', (
+      t,
+    ) async {
+      final (handle, picked) = await open(t, fromHold: true);
+      expect(find.text('Slide to choose'), findsOneWidget);
+      final record = t.getCenter(find.byIcon(Icons.videocam_rounded));
+      handle.pointerMoved(record);
+      await t.pump();
+      handle.pointerReleased(record);
+      await t.pumpAndSettle();
+      expect(picked, [CreateChoice.record]);
+    });
+
+    testWidgets('letting go on nothing keeps it open; the background closes '
+        'it with no pick', (t) async {
+      final (handle, picked) = await open(t, fromHold: true);
+      handle.pointerReleased(const Offset(200, 300));
+      await t.pumpAndSettle();
+      expect(find.text('Record'), findsOneWidget, reason: 'still open');
+
+      await t.tapAt(const Offset(30, 60));
+      await t.pumpAndSettle();
+      expect(find.text('Record'), findsNothing);
+      expect(picked, isEmpty);
+    });
+
+    test('the + button opens it on a tap and on a hold, and follows the '
+        'finger', () {
+      final code = File('lib/screens/main_shell.dart')
+          .readAsLinesSync()
+          .where((l) => !l.trimLeft().startsWith('//'))
+          .join('\n');
+      expect(code, contains('_openBurst(fromHold: false)'));
+      expect(code, contains('_openBurst(fromHold: true)'));
+      expect(code, contains('_burst?.pointerMoved(d.globalPosition)'));
+      expect(code, contains('_burst?.pointerReleased(d.globalPosition)'));
+      expect(
+        code,
+        contains("CreateFlow.record(context, from: 'create_burst')"),
+      );
+      expect(
+        code,
+        contains("CreateFlow.upload(context, from: 'create_burst')"),
+      );
+      expect(
+        code,
+        isNot(contains('const CreateChallengePage()')),
+        reason: 'the + still opens the old chooser page',
+      );
     });
   });
 

@@ -18,7 +18,7 @@ import 'package:myapp/pages/profile_page.dart';
 import 'package:myapp/widgets/shimmer_loading.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/widgets/arena_ui.dart';
-import 'package:myapp/widgets/league_badge.dart';
+import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
 
 /// Search page — TikTok / Instagram style with four tabs:
 ///   * Top      — interleaved best of accounts + battles + shorts
@@ -87,9 +87,11 @@ class _SearchPageState extends State<SearchPage>
   List<String> _relatedSearches = const [];
   String _intent = 'general';
 
-  // Empty-state suggestion rows (loaded once).
+  // Suggestions (loaded once), shown only while the empty search bar has
+  // focus — the page itself opens straight onto videos.
   List<String> _recentSearches = [];
   List<String> _trendingSearches = [];
+  bool _searchFocused = false;
 
   @override
   String get pageName => 'search_page';
@@ -109,8 +111,18 @@ class _SearchPageState extends State<SearchPage>
       // the new tab can claim a fresh active tile based on its own scroll.
       _previewCoord.clearActive();
     });
+    _focusNode.addListener(() {
+      if (mounted) setState(() => _searchFocused = _focusNode.hasFocus);
+    });
     _loadExploreChallenges();
     _loadSearchSuggestions();
+  }
+
+  /// Leave search: empty the bar, drop the results, put the keyboard away.
+  void _cancelSearch() {
+    _searchCtrl.clear();
+    _onSearchChanged('');
+    _focusNode.unfocus();
   }
 
   Future<void> _loadSearchSuggestions() async {
@@ -327,6 +339,11 @@ class _SearchPageState extends State<SearchPage>
           ),
         ],
       );
+    } else if (_searchFocused && _searchCtrl.text.trim().isEmpty) {
+      // Tapped into the bar, nothing typed yet: what you searched before
+      // and what everyone is searching now. Only here — the page itself
+      // opens straight onto videos.
+      body = _buildSuggestionsPanel();
     } else {
       body = _buildEmptyStateGrid(cs);
     }
@@ -340,13 +357,36 @@ class _SearchPageState extends State<SearchPage>
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-              child: ArenaSearchField(
-                controller: _searchCtrl,
-                focusNode: _focusNode,
-                hint: 'Search people, battles, shorts',
-                onChanged: _onSearchChanged,
-                onSubmitted: _search,
+              padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: ArenaSearchField(
+                      controller: _searchCtrl,
+                      focusNode: _focusNode,
+                      hint: 'Search people, battles, shorts',
+                      onChanged: _onSearchChanged,
+                      onSubmitted: _search,
+                    ),
+                  ),
+                  // Cancel, while searching: back to the videos in one tap.
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOut,
+                    child: (_searchFocused || _hasSearched)
+                        ? TextButton(
+                            onPressed: _cancelSearch,
+                            style: TextButton.styleFrom(
+                              foregroundColor: kAccent,
+                            ),
+                            child: const Text(
+                              'Cancel',
+                              style: TextStyle(fontSize: 16),
+                            ),
+                          )
+                        : const SizedBox(width: 8),
+                  ),
+                ],
               ),
             ),
             AnimatedSize(
@@ -375,9 +415,8 @@ class _SearchPageState extends State<SearchPage>
     );
   }
 
-  /// Pre-search body: what people are searching for, then a grid of videos
-  /// to discover. One scroll for all of it, so the grid is not a box inside
-  /// the page.
+  /// Pre-search body: a grid of videos to discover, straight under the
+  /// search bar.
   Widget _buildEmptyStateGrid(ColorScheme cs) {
     if (_exploreChallenges.isEmpty) {
       // Even with nothing loaded, the user should still be able to pull to
@@ -388,8 +427,6 @@ class _SearchPageState extends State<SearchPage>
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           children: [
-            if (_recentSearches.isNotEmpty || _trendingSearches.isNotEmpty)
-              _suggestionRows(),
             SizedBox(
               height: MediaQuery.of(context).size.height * 0.5,
               child: const ArenaEmptyState(
@@ -408,15 +445,9 @@ class _SearchPageState extends State<SearchPage>
       child: CustomScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
         slivers: [
-          if (_recentSearches.isNotEmpty || _trendingSearches.isNotEmpty)
-            SliverToBoxAdapter(child: _suggestionRows()),
-          const SliverToBoxAdapter(
-            child: SectionTitle(
-              title: 'Discover',
-            ),
-          ),
+          // Straight onto the videos: no title, no rows above them.
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+            padding: const EdgeInsets.fromLTRB(12, 2, 12, 24),
             sliver: SliverGrid(
               gridDelegate: _gridDelegate,
               delegate: SliverChildBuilderDelegate(
@@ -442,57 +473,95 @@ class _SearchPageState extends State<SearchPage>
     childAspectRatio: 0.66,
   );
 
-  /// Recent (yours) and Trending (everyone's) searches as rows of chips
-  /// that scroll sideways. Tapping one runs it — the classic search entry.
-  Widget _suggestionRows() {
-    Widget chipRow(String label, IconData chipIcon, List<String> queries) {
-      if (queries.isEmpty) return const SizedBox.shrink();
-      final shown = queries.take(10).toList();
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SectionTitle(
-            title: label,
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+  /// What shows while the empty search bar has focus: your recent searches
+  /// as a list, and what everyone is searching as chips. Tapping either runs
+  /// it — the classic search entry.
+  Widget _buildSuggestionsPanel() {
+    final cs = Theme.of(context).colorScheme;
+    void run(String q, String kind) {
+      EventTracker.instance.trackTap(
+        target: 'search_suggestion_$kind',
+        pageName: pageName,
+        params: {'query': q},
+      );
+      _searchCtrl.text = q;
+      _search(q);
+    }
+
+    if (_recentSearches.isEmpty && _trendingSearches.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 48),
+        child: Text(
+          'Search for people, battles and shorts',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: quietText(context)),
+        ),
+      );
+    }
+    return ListView(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      padding: const EdgeInsets.only(bottom: 24),
+      children: [
+        if (_recentSearches.isNotEmpty) ...[
+          const SectionTitle(
+            title: 'Recent',
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
           ),
-          SizedBox(
-            height: 36,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              itemCount: shown.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 8),
-              itemBuilder: (_, i) {
-                final q = shown[i];
-                return _QueryChip(
-                  label: q,
-                  icon: chipIcon,
-                  onTap: () {
-                    EventTracker.instance.trackTap(
-                      target: 'search_suggestion_${label.toLowerCase()}',
-                      pageName: pageName,
-                      params: {'query': q},
-                    );
-                    _searchCtrl.text = q;
-                    _search(q);
-                  },
-                );
-              },
+          for (final q in _recentSearches.take(8))
+            InkWell(
+              onTap: () => run(q, 'recent'),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Row(
+                  children: [
+                    Icon(Icons.history_rounded,
+                        size: 20, color: quietText(context)),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        q,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 16, color: cs.onSurface),
+                      ),
+                    ),
+                    Icon(Icons.north_west_rounded,
+                        size: 18, color: quietText(context)),
+                  ],
+                ),
+              ),
+            ),
+        ],
+        if (_trendingSearches.isNotEmpty) ...[
+          const SectionTitle(
+            title: 'Trending',
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final q in _trendingSearches.take(10))
+                  // As wide as its words: a Wrap offers the full width, and
+                  // the chip would take all of it.
+                  IntrinsicWidth(
+                    child: SizedBox(
+                      height: 34,
+                      child: _QueryChip(
+                      label: q,
+                        icon: Icons.trending_up_rounded,
+                        onTap: () => run(q, 'trending'),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ],
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          chipRow('Recent', Icons.history_rounded, _recentSearches),
-          chipRow('Trending', Icons.trending_up_rounded, _trendingSearches),
-        ],
-      ),
+      ],
     );
   }
 
@@ -812,96 +881,114 @@ class _SearchPageState extends State<SearchPage>
     );
   }
 
-  /// One person in the results: their picture ringed in their league's
-  /// colours, name and handle, and their league and record as two chips.
-  /// Hold for the 3D card; tap for the profile.
+  /// One person in the results, in one slim row: picture, name, league,
+  /// and Follow or Following depending on whether you already do. A lock
+  /// next to the name when the account is private. Tap for the profile,
+  /// hold for the 3D card.
   Widget _accountTile(UserModel user, int position) {
-    final cs = Theme.of(context).colorScheme;
-    final leagueColors = LeagueBadge.gradientFor(user.league);
+    final dp = Provider.of<DataProvider>(context);
+    final isMe = dp.user?.id == user.id;
+    final following = dp.following.contains(user.id);
+    final private = user.visibility == 'friends';
     final hasName = user.fullName.isNotEmpty;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: Pressable(
-        onLongPress: () => _peekProfile(user, position),
-        onTap: () {
-          EventTracker.instance.trackSearchResultTap(
-            query: _lastQuery,
-            resultId: user.id,
-            resultType: 'user',
-            position: position,
-          );
-          _lastQueryHadResultTap = true;
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => ProfilePage(user: user, isEmbedded: false),
-            ),
-          );
-        },
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(10, 10, 6, 10),
-          decoration: BoxDecoration(
-            color: cs.onSurface.withValues(alpha: 0.05),
-            borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+    return InkWell(
+      onLongPress: () => _peekProfile(user, position),
+      onTap: () {
+        EventTracker.instance.trackSearchResultTap(
+          query: _lastQuery,
+          resultId: user.id,
+          resultType: 'user',
+          position: position,
+        );
+        _lastQueryHadResultTap = true;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ProfilePage(user: user, isEmbedded: false),
           ),
-          child: Row(
-            children: [
-              ArenaAvatar(
-                name: user.username,
-                size: 50,
-                ring: leagueColors.first,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      hasName ? user.fullName : user.username,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    if (hasName)
-                      Text(
-                        '@${user.username}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          color: cs.onSurface.withValues(alpha: 0.55),
+        );
+      },
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 12, 8),
+        child: Row(
+          children: [
+            ArenaAvatar(name: user.username, size: 44),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          hasName ? user.fullName : user.username,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 4,
-                      children: [
-                        InfoChip(
-                          label: user.league,
-                          icon: Icons.shield_rounded,
-                          color: leagueColors.first,
-                        ),
-                        InfoChip(
-                          label: '${user.wins}W · ${user.losses}L',
-                          icon: Icons.emoji_events_outlined,
+                      if (private) ...[
+                        const SizedBox(width: 4),
+                        Tooltip(
+                          message: 'Private account',
+                          child: Icon(Icons.lock_rounded,
+                              size: 13, color: quietText(context)),
                         ),
                       ],
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      LeagueEmblem(league: user.league, size: 14),
+                      const SizedBox(width: 5),
+                      Flexible(
+                        child: Text(
+                          hasName
+                              ? '@${user.username} · ${user.league}'
+                              : user.league,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: quietText(context),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
-              Icon(
-                Icons.chevron_right_rounded,
-                color: cs.onSurface.withValues(alpha: 0.35),
+            ),
+            if (!isMe) ...[
+              const SizedBox(width: 8),
+              _FollowButton(
+                following: following,
+                onTap: () => _toggleFollow(dp, user, position),
               ),
             ],
-          ),
+          ],
         ),
       ),
     );
+  }
+
+  Future<void> _toggleFollow(
+      DataProvider dp, UserModel user, int position) async {
+    final becameFollowing = !dp.following.contains(user.id);
+    EventTracker.instance.trackFollowToggle(
+      targetUserId: user.id,
+      becameFollowing: becameFollowing,
+      fromPage: pageName,
+    );
+    if (becameFollowing) {
+      await dp.followUser(user);
+    } else {
+      await dp.unfollowUser(user);
+    }
   }
 
   // Accounts tab — full list of ranked users from the search response.
@@ -938,7 +1025,7 @@ class _SearchPageState extends State<SearchPage>
       onRefresh: onRefresh,
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.only(top: 4, bottom: 24),
+        padding: const EdgeInsets.only(bottom: 24),
         // One line at the top saying what holding does, since nothing else
         // on the row can show it.
         itemCount: _accounts.length + 1,
@@ -964,6 +1051,41 @@ class _SearchPageState extends State<SearchPage>
           }
           return _accountTile(_accounts[i - 1], i - 1);
         },
+      ),
+    );
+  }
+}
+
+/// Follow, in blue, or Following, in grey — the same pair everywhere a
+/// person is listed.
+class _FollowButton extends StatelessWidget {
+  final bool following;
+  final VoidCallback onTap;
+
+  const _FollowButton({required this.following, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Pressable(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        height: 32,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: following ? quietFill(context) : kAccent,
+          borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        ),
+        child: Text(
+          following ? 'Following' : 'Follow',
+          style: TextStyle(
+            fontSize: 13.5,
+            fontWeight: FontWeight.w600,
+            color: following ? cs.onSurface : Colors.white,
+          ),
+        ),
       ),
     );
   }

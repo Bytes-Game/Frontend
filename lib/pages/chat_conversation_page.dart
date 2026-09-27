@@ -665,6 +665,11 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                           enabledBorder: InputBorder.none,
                           focusedBorder: InputBorder.none,
                           isCollapsed: true,
+                          // Zero, explicitly. The app's theme gives every text box 20
+                          // pixels of padding at the side and 16 above and below, and a
+                          // collapsed field still takes it — which pushed the words
+                          // right and off-centre inside this slim bar.
+                          contentPadding: EdgeInsets.zero,
                         ),
                         style: const TextStyle(fontSize: 15),
                         textInputAction: TextInputAction.send,

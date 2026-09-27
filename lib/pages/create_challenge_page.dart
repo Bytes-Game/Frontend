@@ -1,12 +1,7 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
 
-import 'package:myapp/pages/record_video_page.dart';
-import 'package:myapp/pages/video_trim_page.dart';
-import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/create_flow.dart';
 import 'package:myapp/services/page_tracker.dart';
-import 'package:myapp/services/video_processor_service.dart';
 
 /// Entry screen for the create-challenge flow. Two big choices: record
 /// in-app or pick a file from the device. Whichever the user picks
@@ -31,84 +26,21 @@ class _CreateChallengePageState extends State<CreateChallengePage>
 
   bool _busy = false;
 
+  // Both choices run the shared steps in CreateFlow, the same ones the
+  // pop-out on the + button uses.
   Future<void> _onRecord() async {
     if (_busy) return;
-    EventTracker.instance.trackTap(
-      target: 'create_challenge_record',
-      pageName: pageName,
-    );
-
-    // Camera + microphone permissions are mandatory before we can
-    // even build the camera preview. Ask once, if denied we surface a
-    // tap-to-open-settings toast rather than silently failing.
-    final cam = await Permission.camera.request();
-    final mic = await Permission.microphone.request();
-    if (!cam.isGranted || !mic.isGranted) {
-      _toast('Camera and microphone permission required.');
-      return;
-    }
-
-    if (!mounted) return;
-    final recorded = await Navigator.of(context).push<String>(
-      MaterialPageRoute(builder: (_) => const RecordVideoPage()),
-    );
-    if (!mounted || recorded == null || recorded.isEmpty) return;
-    await _continueWithSource(recorded);
+    await CreateFlow.record(context, from: pageName);
   }
 
   Future<void> _onPickFile() async {
     if (_busy) return;
-    EventTracker.instance.trackTap(
-      target: 'create_challenge_pick',
-      pageName: pageName,
-    );
-
     setState(() => _busy = true);
     try {
-      final picked = await FilePicker.platform.pickFiles(
-        type: FileType.video,
-        allowMultiple: false,
-        // We want a real path on disk, not a stream — VideoProcessor
-        // hands the path to ffmpeg directly.
-        withData: false,
-      );
-      if (picked == null || picked.files.isEmpty) return;
-      final path = picked.files.first.path;
-      if (path == null || path.isEmpty) {
-        _toast('Could not read the selected file. Try another.');
-        return;
-      }
-      if (!mounted) return;
-      await _continueWithSource(path);
+      await CreateFlow.upload(context, from: pageName);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
-  }
-
-  /// After the user has a source path (recorded or picked), push the
-  /// trim screen. Trim is mandatory for clips longer than the reel
-  /// cap; for shorter ones the trim screen still appears so the user
-  /// can preview and confirm before transcode kicks off.
-  Future<void> _continueWithSource(String sourcePath) async {
-    EventTracker.instance.track(
-      eventType: 'create_challenge_source_selected',
-      contentId: 'pending',
-      contentType: 'challenge',
-      metadata: {
-        'reelMaxSeconds': VideoProcessorService.maxReelDuration.inSeconds,
-      },
-    );
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => VideoTrimPage(sourcePath: sourcePath),
-      ),
-    );
-  }
-
-  void _toast(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating),
-    );
   }
 
   @override
