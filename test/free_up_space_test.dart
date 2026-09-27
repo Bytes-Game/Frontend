@@ -22,6 +22,7 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/leftover_files.dart';
 import 'package:myapp/services/local_media_server.dart';
+import 'package:myapp/services/own_uploads.dart';
 import 'package:myapp/services/upload_job_manager.dart';
 import 'package:myapp/services/video_cache_service.dart';
 
@@ -48,6 +49,7 @@ const mb = 1024 * 1024;
 void main() {
   late Directory cacheDir;
   late Directory tempDir;
+  late Directory ownDir;
   final realFolder = LeftoverFiles.folder;
 
   setUp(() async {
@@ -57,6 +59,9 @@ void main() {
     await VideoCacheService.instance.clear();
     LeftoverFiles.folder = () async => tempDir;
     UploadJobManager.instance.activeJobs.value = const [];
+    ownDir = Directory.systemTemp.createTempSync('ownposts');
+    OwnUploads.instance.folder = () async => Directory('${ownDir.path}/kept');
+    OwnUploads.instance.debugForget();
   });
 
   tearDown(() async {
@@ -64,7 +69,8 @@ void main() {
     UploadJobManager.instance.activeJobs.value = const [];
     LeftoverFiles.folder = realFolder;
     ApiService.useClient(http.Client());
-    for (final d in [cacheDir, tempDir]) {
+    OwnUploads.instance.debugForget();
+    for (final d in [cacheDir, tempDir, ownDir]) {
       try {
         d.deleteSync(recursive: true);
       } catch (_) {}
@@ -73,9 +79,14 @@ void main() {
 
   // ── Logout ──────────────────────────────────────────────────────────
 
-  testWidgets('logging out empties the saved videos', (tester) async {
+  testWidgets('logging out empties the saved videos, and the copies of '
+      'your own posts', (tester) async {
     final whole = put(cacheDir, 'aaaa.mp4', 4096);
     final piece = put(cacheDir, 'bbbb.mp4.prefix', 2048);
+    await tester.runAsync(() => OwnUploads.instance
+        .keep('challenge:7', put(tempDir, 'devf_trim_7.mp4', 1024).path));
+    final own = OwnUploads.instance.pathFor('challenge:7');
+    expect(own, isNotNull, reason: 'something of your own to empty');
 
     late BuildContext ctx;
     await tester.pumpWidget(
@@ -100,6 +111,9 @@ void main() {
 
     expect(whole.existsSync(), isFalse);
     expect(piece.existsSync(), isFalse);
+    expect(File(own!).existsSync(), isFalse,
+        reason: 'the next person on this phone should not find them');
+    expect(OwnUploads.instance.pathFor('challenge:7'), isNull);
   });
 
   // ── Clearing while a video plays ────────────────────────────────────
@@ -427,6 +441,28 @@ void main() {
     await tester.pumpAndSettle();
     expect(leftover.existsSync(), isFalse);
     expect(inRow('free_up_space_leftovers', find.text('0 KB')), findsOneWidget);
+  });
+
+  testWidgets('your recent posts have a row of their own, and clearing it '
+      'leaves the rest', (tester) async {
+    final saved = put(cacheDir, 'aaaa.mp4', 1 * mb);
+    await tester.runAsync(() => OwnUploads.instance
+        .keep('challenge:9', put(tempDir, 'devf_trim_9.mp4', 3 * mb).path));
+    final own = OwnUploads.instance.pathFor('challenge:9')!;
+
+    await tester.pumpWidget(const MaterialApp(home: FreeUpSpacePage()));
+    await tester.pumpAndSettle();
+    Finder inRow(String key, Finder f) =>
+        find.descendant(of: find.byKey(Key(key)), matching: f);
+    expect(inRow('free_up_space_own_posts', find.text('3.0 MB')),
+        findsOneWidget);
+
+    await tester.tap(inRow('free_up_space_own_posts', find.text('Clear')));
+    await tester.pumpAndSettle();
+    expect(File(own).existsSync(), isFalse);
+    expect(saved.existsSync(), isTrue, reason: 'only its own kind');
+    expect(inRow('free_up_space_own_posts', find.text('0 KB')),
+        findsOneWidget);
   });
 
   test('sizes read the way a person reads them', () {

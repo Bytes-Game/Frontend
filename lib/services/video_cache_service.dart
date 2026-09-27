@@ -10,6 +10,7 @@ import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/local_media_server.dart';
 import 'package:myapp/services/mp4_layout.dart';
 import 'package:myapp/services/network_quality_service.dart';
+import 'package:myapp/services/own_uploads.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 
 /// Downloads upcoming reels to disk BEFORE the user swipes to them, so a
@@ -703,7 +704,9 @@ class VideoCacheService {
       unawaited(init());
       return;
     }
-    final wanted = urls.where((u) => u.isNotEmpty).toList();
+    // A file already on the phone (one of your own) has nothing to fetch.
+    final wanted =
+        urls.where((u) => u.isNotEmpty && !isLocalVideo(u)).toList();
     final wantedSet = wanted.toSet();
     _window = wantedSet;
     // Diagnostics only, and it grows with every reel the session sees, so

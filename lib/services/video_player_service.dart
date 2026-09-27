@@ -12,6 +12,7 @@ import 'package:video_player/video_player.dart';
 import 'package:video_player_android/video_player_android.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
+import 'package:myapp/services/own_uploads.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 
@@ -502,6 +503,12 @@ class VideoPlayerService {
   /// A cache miss falls back to streaming, i.e. exactly the old
   /// behaviour, so a cold cache is never worse than before.
   VideoPlayerController _controllerFor(String url) {
+    // One of your own videos, kept on the phone: straight from disk, before
+    // anything else. See OwnUploads.
+    if (isLocalVideo(url) && File(url).existsSync()) {
+      ReelDiagnostics.instance.recordWholeFileStart();
+      return VideoPlayerController.file(File(url));
+    }
     // Proxy first: the loopback server answers out of the cached opening
     // with no network round-trip, which is the whole point.
     final proxied = VideoCacheService.instance.playbackUrlFor(url);

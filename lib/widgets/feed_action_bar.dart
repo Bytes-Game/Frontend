@@ -647,20 +647,42 @@ class _VoteSide extends StatelessWidget {
 /// and smart_reels_feed.dart's _ReelTile right-rail.
 class ChallengeCommentSheet extends StatefulWidget {
   final String challengeId;
-  const ChallengeCommentSheet({super.key, required this.challengeId});
+
+  /// Shown above the comments — the video's full caption and who posted
+  /// it, so tapping a caption cut short on the video opens the whole of it
+  /// with the conversation underneath, as in any app people know.
+  final Widget? header;
+
+  const ChallengeCommentSheet({
+    super.key,
+    required this.challengeId,
+    this.header,
+  });
 
   @override
   State<ChallengeCommentSheet> createState() => _ChallengeCommentSheetState();
+}
+
+/// The comments sheet's colours: dark whatever the phone's theme, the way
+/// comments sit over a video in every short-video app.
+class _Sheet {
+  static const bg = Color(0xFF121214);
+  static const field = Color(0xFF232326);
+  static const line = Color(0xFF2C2C30);
+  static const muted = Color(0xFF8E8E93);
+  static const accent = Color(0xFF0A84FF);
 }
 
 class _ChallengeCommentSheetState extends State<ChallengeCommentSheet> {
   final _ctrl = TextEditingController();
   List<Map<String, dynamic>> _comments = [];
   bool _loading = true;
+  bool _sending = false;
 
   @override
   void initState() {
     super.initState();
+    _ctrl.addListener(() => setState(() {}));
     _loadComments();
   }
 
@@ -680,36 +702,50 @@ class _ChallengeCommentSheetState extends State<ChallengeCommentSheet> {
     }
   }
 
-  void _addComment() async {
+  Future<void> _addComment() async {
     final text = _ctrl.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || _sending) return;
     final dp = Provider.of<DataProvider>(context, listen: false);
+    final me = dp.user;
+    if (me == null) return;
     _ctrl.clear();
-
-    // Optimistic add
+    // Shown at once, and taken back if the server says no — rather than
+    // left on screen as if it had been posted.
+    final mine = {
+      'authorUsername': me.username,
+      'text': text,
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+    };
     setState(() {
-      _comments.add({
-        'authorUsername': dp.user?.username ?? 'You',
-        'text': text,
-        'createdAt': DateTime.now().toUtc().toIso8601String(),
-      });
+      _comments.add(mine);
+      _sending = true;
     });
-
-    // Send to API
-    await ApiService.addChallengeComment(
+    final saved = await ApiService.addChallengeComment(
       challengeId: widget.challengeId,
-      userId: dp.user!.id,
-      username: dp.user!.username,
+      userId: me.id,
+      username: me.username,
       text: text,
     );
+    if (!mounted) return;
+    setState(() => _sending = false);
+    if (saved == null) {
+      setState(() => _comments.remove(mine));
+      _ctrl.text = text;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Couldn't post your comment. Try again."),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
-  String _timeAgo(String? createdAt) {
+  static String timeAgo(String? createdAt) {
     if (createdAt == null || createdAt.isEmpty) return '';
     final created = DateTime.tryParse(createdAt);
     if (created == null) return '';
     final diff = DateTime.now().difference(created);
-    if (diff.inSeconds < 60) return '${diff.inSeconds}s';
+    if (diff.inSeconds < 60) return 'now';
     if (diff.inMinutes < 60) return '${diff.inMinutes}m';
     if (diff.inHours < 24) return '${diff.inHours}h';
     if (diff.inDays < 7) return '${diff.inDays}d';
@@ -718,144 +754,346 @@ class _ChallengeCommentSheetState extends State<ChallengeCommentSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-
+    final me = Provider.of<DataProvider>(context, listen: false).user;
+    final count = _comments.length;
     return Container(
-      height: MediaQuery.of(context).size.height * 0.6,
+      height: MediaQuery.of(context).size.height * 0.72,
       padding: EdgeInsets.only(bottom: bottomInset),
-      decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      decoration: const BoxDecoration(
+        color: _Sheet.bg,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
       child: Column(
         children: [
-          // Handle bar
           const SizedBox(height: 8),
           Container(
-            width: 40,
-            height: 4,
+            width: 36,
+            height: 5,
             decoration: BoxDecoration(
-              color: cs.outline,
-              borderRadius: BorderRadius.circular(2),
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(3),
             ),
           ),
-          const SizedBox(height: 12),
-          Text('Comments',
-              style: Theme.of(context)
-                  .textTheme
-                  .titleMedium
-                  ?.copyWith(fontWeight: FontWeight.bold)),
-          const Divider(),
-
-          // Comments list
-          Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : _comments.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.chat_bubble_outline,
-                                size: 48,
-                                color: cs.onSurface.withValues(alpha: 0.4)),
-                            const SizedBox(height: 12),
-                            Text('No comments yet',
-                                style: TextStyle(
-                                    color: cs.onSurface
-                                        .withValues(alpha: 0.6))),
-                            const SizedBox(height: 4),
-                            Text('Be the first to comment!',
-                                style: TextStyle(
-                                    color: cs.onSurface
-                                        .withValues(alpha: 0.5),
-                                    fontSize: 12)),
-                          ],
-                        ),
-                      )
-                    : ListView.builder(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        itemCount: _comments.length,
-                        itemBuilder: (_, i) {
-                          final c = _comments[i];
-                          final username =
-                              c['authorUsername'] as String? ?? '?';
-                          final text = c['text'] as String? ?? '';
-                          final time = _timeAgo(c['createdAt'] as String?);
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 6),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                CircleAvatar(
-                                  radius: 16,
-                                  child: Text(username[0].toUpperCase(),
-                                      style: const TextStyle(fontSize: 13)),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Text(username,
-                                              style: const TextStyle(
-                                                  fontWeight: FontWeight.w600,
-                                                  fontSize: 13)),
-                                          if (time.isNotEmpty) ...[
-                                            const SizedBox(width: 8),
-                                            Text(time,
-                                                style: TextStyle(
-                                                    fontSize: 11,
-                                                    color: cs.onSurface
-                                                        .withValues(
-                                                            alpha: 0.5))),
-                                          ],
-                                        ],
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(text,
-                                          style:
-                                              const TextStyle(fontSize: 14)),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
+          // Full width, so the × sits at the right edge rather than on top
+          // of the title the Stack would otherwise shrink to.
+          SizedBox(
+            height: 44,
+            width: double.infinity,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Text(
+                  _loading
+                      ? 'Comments'
+                      : count == 1
+                          ? '1 comment'
+                          : '$count comments',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Positioned(
+                  right: 4,
+                  child: IconButton(
+                    tooltip: 'Close',
+                    onPressed: () => Navigator.of(context).maybePop(),
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      color: _Sheet.muted,
+                      size: 22,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
-
-          // Input field
+          const Divider(height: 1, color: _Sheet.line),
+          Expanded(
+            child: CustomScrollView(
+              slivers: [
+                if (widget.header != null) ...[
+                  SliverToBoxAdapter(child: widget.header!),
+                  const SliverToBoxAdapter(
+                    child: Divider(
+                      height: 1,
+                      indent: 16,
+                      endIndent: 16,
+                      color: _Sheet.line,
+                    ),
+                  ),
+                ],
+                if (_loading)
+                  const SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Center(
+                      child: SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: _Sheet.muted,
+                        ),
+                      ),
+                    ),
+                  )
+                else if (_comments.isEmpty)
+                  const SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'No comments yet',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            'Start the conversation.',
+                            style: TextStyle(color: _Sheet.muted, fontSize: 13),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                    sliver: SliverList.builder(
+                      itemCount: _comments.length,
+                      itemBuilder: (_, i) => _CommentRow(comment: _comments[i]),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          // Write one: your initial, a rounded dark field, and a send
+          // button that only lights up when there is something to send.
           Container(
-            padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-            decoration: BoxDecoration(
-              border: Border(
-                  top: BorderSide(
-                      color: cs.outline.withValues(alpha: 0.3), width: 0.5)),
+            padding: EdgeInsets.fromLTRB(
+              12,
+              8,
+              8,
+              8 + (bottomInset > 0 ? 0 : MediaQuery.of(context).padding.bottom),
+            ),
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: _Sheet.line)),
             ),
             child: Row(
               children: [
+                _CommentAvatar(name: me?.username ?? '?', size: 32),
+                const SizedBox(width: 10),
                 Expanded(
-                  child: TextField(
-                    controller: _ctrl,
-                    decoration: const InputDecoration(
-                      hintText: 'Add a comment...',
-                      border: InputBorder.none,
-                      isDense: true,
+                  child: Container(
+                    height: 40,
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    decoration: BoxDecoration(
+                      color: _Sheet.field,
+                      borderRadius: BorderRadius.circular(20),
                     ),
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _addComment(),
+                    alignment: Alignment.centerLeft,
+                    child: TextField(
+                      controller: _ctrl,
+                      style: const TextStyle(color: Colors.white, fontSize: 15),
+                      cursorColor: _Sheet.accent,
+                      decoration: const InputDecoration(
+                        hintText: 'Add a comment…',
+                        hintStyle: TextStyle(color: _Sheet.muted),
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        filled: false,
+                        isCollapsed: true,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _addComment(),
+                    ),
                   ),
                 ),
+                const SizedBox(width: 6),
                 IconButton(
-                  icon: Icon(Icons.send, color: cs.primary),
-                  onPressed: _addComment,
+                  tooltip: 'Post',
+                  onPressed: _ctrl.text.trim().isEmpty ? null : _addComment,
+                  icon: Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _ctrl.text.trim().isEmpty
+                          ? _Sheet.field
+                          : _Sheet.accent,
+                    ),
+                    alignment: Alignment.center,
+                    child: Icon(
+                      Icons.arrow_upward_rounded,
+                      size: 20,
+                      color: _ctrl.text.trim().isEmpty
+                          ? _Sheet.muted
+                          : Colors.white,
+                    ),
+                  ),
                 ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A round initial for someone in the comments.
+class _CommentAvatar extends StatelessWidget {
+  final String name;
+  final double size;
+
+  const _CommentAvatar({required this.name, this.size = 34});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: const BoxDecoration(
+        shape: BoxShape.circle,
+        color: Color(0xFF2C2C30),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        name.isEmpty ? '?' : name[0].toUpperCase(),
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: size * 0.4,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+/// One comment: who, how long ago, and what they said.
+class _CommentRow extends StatelessWidget {
+  final Map<String, dynamic> comment;
+
+  const _CommentRow({required this.comment});
+
+  @override
+  Widget build(BuildContext context) {
+    final name = comment['authorUsername'] as String? ?? '?';
+    final text = comment['text'] as String? ?? '';
+    final time =
+        _ChallengeCommentSheetState.timeAgo(comment['createdAt'] as String?);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 9),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _CommentAvatar(name: name),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: name,
+                        style: const TextStyle(
+                          color: _Sheet.muted,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (time.isNotEmpty)
+                        TextSpan(
+                          text: '  $time',
+                          style: const TextStyle(
+                            color: Color(0xFF636366),
+                            fontSize: 12,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  text,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14.5,
+                    height: 1.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The top of the comments sheet when it opens from a video's caption: who
+/// posted it and the caption in full.
+class CommentSheetCaption extends StatelessWidget {
+  final String username;
+  final String caption;
+  final String detail;
+
+  const CommentSheetCaption({
+    super.key,
+    required this.username,
+    required this.caption,
+    this.detail = '',
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _CommentAvatar(name: username, size: 36),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  username,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  caption,
+                  key: const ValueKey('full_caption'),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15.5,
+                    height: 1.35,
+                  ),
+                ),
+                if (detail.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    detail,
+                    style: const TextStyle(color: _Sheet.muted, fontSize: 12.5),
+                  ),
+                ],
               ],
             ),
           ),

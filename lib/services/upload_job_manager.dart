@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'package:myapp/models/challenge_model.dart';
+import 'package:myapp/services/own_uploads.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/media_upload_service.dart';
@@ -385,6 +386,9 @@ class UploadJobManager {
             message: 'Posted',
             result: challenge,
           ));
+      // Keep what went up, so it plays at once from your profile.
+      unawaited(OwnUploads.instance
+          .keep('challenge:${challenge.id}', job.sourcePath));
       _completedCtl.add(job);
       _scheduleAutoDismiss(job);
       await _removePersisted(job.id);
@@ -543,6 +547,9 @@ class UploadJobManager {
             message: 'Posted',
             result: challenge,
           ));
+      // Keep what went up, so it plays at once from your profile.
+      unawaited(OwnUploads.instance
+          .keep('challenge:${challenge.id}', job.sourcePath));
       _completedCtl.add(job);
       _scheduleAutoDismiss(job);
       await _removePersisted(job.id);
@@ -684,6 +691,8 @@ class UploadJobManager {
             message: 'Posted',
             result: response,
           ));
+      unawaited(OwnUploads.instance
+          .keep('response:${response.id}', job.sourcePath));
       _completedCtl.add(job);
       _scheduleAutoDismiss(job);
       await _removePersisted(job.id);

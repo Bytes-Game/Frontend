@@ -62,8 +62,30 @@ Map<String, dynamic> card(String outcome) => {
 
 late List<String> asked;
 
+/// Whether the battles come with their videos, as the server now sends.
+late bool withVideos;
+
+Map<String, dynamic> video(String id) => {
+  'id': id,
+  'creatorId': '5',
+  'creatorUsername': 'maya',
+  'creatorLeague': 'Silver',
+  'videoUrl': 'https://x/$id.mp4',
+  'prefix': 'who dances',
+  'subject': 'better',
+  'status': 'completed',
+  'visibility': 'arena',
+  'likes': 3,
+  'views': 40,
+  'responseCount': 1,
+  'topResponseId': '9$id',
+  'topResponseVideoUrl': 'https://x/r$id.mp4',
+  'createdAt': '2026-09-01T10:00:00Z',
+};
+
 void fakeServer() {
   asked = [];
+  withVideos = false;
   ApiService.useClient(
     MockClient((req) async {
       asked.add('${req.url.path}?${req.url.query}');
@@ -76,7 +98,10 @@ void fakeServer() {
             'tab': tab,
             'battles': [
               if (tab == 'lost') card('lost'),
-              if (tab == 'won') card('won'),
+              if (tab == 'won' && !withVideos) card('won'),
+              if (tab == 'won' && withVideos)
+                for (final id in ['70', '71'])
+                  {...card('won'), 'challengeId': id, 'video': video(id)},
               if (tab == 'live') card(''),
             ],
           }),
@@ -155,7 +180,8 @@ void main() {
   });
 
   group('battle tabs', () {
-    testWidgets('a lost battle says by how much and to whom', (t) async {
+    testWidgets('a lost battle is a video tile with the score, and one sent '
+        'without its video still opens the battle page', (t) async {
       final opened = <String>[];
       await t.pumpWidget(
         MaterialApp(
@@ -166,11 +192,38 @@ void main() {
       );
       await t.pumpAndSettle();
       expect(asked.single, contains('/api/v1/users/5/battles?tab=lost'));
-      expect(find.text('Lost 2–5 to @leo'), findsOneWidget);
-      expect(find.text('Lost by 3 votes.'), findsOneWidget);
-      expect(find.text('-16'), findsOneWidget);
+      expect(find.byKey(const ValueKey('battle_tile_70')), findsOneWidget);
+      expect(find.text('Lost 2–5 · −16'), findsOneWidget);
+      expect(find.text('who dances better'), findsOneWidget);
       await t.tap(find.text('who dances better'));
       expect(opened, ['70']);
+    });
+
+    testWidgets('a battle with its video plays this tab\'s videos, from the '
+        'one tapped', (t) async {
+      withVideos = true;
+      final played = <(List<String>, int)>[];
+      final opened = <String>[];
+      await t.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: BattlesTab(
+              userId: '5',
+              tab: 'won',
+              onOpen: opened.add,
+              onPlay: (videos, i) =>
+                  played.add(([for (final v in videos) v.id], i)),
+            ),
+          ),
+        ),
+      );
+      await t.pumpAndSettle();
+      expect(find.text('Won 5–2 · +16'), findsNWidgets(2));
+      expect(find.text('VS'), findsNWidgets(2), reason: 'both are battles');
+      await t.tap(find.byKey(const ValueKey('battle_tile_71')));
+      expect(opened, isEmpty, reason: 'it plays, not the battle page');
+      expect(played.single.$1, ['70', '71']);
+      expect(played.single.$2, 1);
     });
 
     testWidgets('a live battle says who is ahead and how long is left', (
@@ -184,21 +237,52 @@ void main() {
         ),
       );
       await t.pumpAndSettle();
-      expect(find.text('Ahead 5–2 vs @leo'), findsOneWidget);
-      expect(find.textContaining('left'), findsOneWidget);
+      expect(find.text('Ahead 5–2'), findsOneWidget);
+      expect(find.textContaining('d left'), findsOneWidget);
     });
 
-    test('the lesson from a loss is honest about what the server knows', () {
-      BattleCard lost(double mine, double theirs) => BattleCard(
+    test('the line on each tile', () {
+      BattleCard c({
+        String outcome = '',
+        String status = 'active',
+        bool leading = false,
+        DateTime? endsAt,
+        int rating = 0,
+      }) => BattleCard(
         challengeId: '1',
         title: 't',
-        outcome: 'lost',
-        myVotes: mine,
-        theirVotes: theirs,
+        outcome: outcome,
+        status: status,
+        myVotes: 4.5,
+        theirVotes: 3,
+        leading: leading,
+        endsAt: endsAt,
+        ratingChange: rating,
       );
-      expect(lossLesson(lost(4, 5)), 'Lost by 1 vote — that close.');
-      expect(lossLesson(lost(0, 3)), startsWith('No genuine votes counted'));
-      expect(lossLesson(lost(0, 0)), startsWith('Decided on likes and views'));
+      expect(battleBadge(c(status: 'open')).label, 'Open');
+      expect(battleBadge(c(outcome: 'lost', rating: -12)).label,
+          'Lost 4.5–3 · −12');
+      expect(battleBadge(c(outcome: 'draw')).label, 'Draw 4.5–3');
+      expect(
+        battleBadge(
+          c(endsAt: DateTime.now().subtract(const Duration(minutes: 1))),
+        ).label,
+        'Deciding 4.5–3',
+      );
+      final live = c(
+        leading: true,
+        endsAt: DateTime.now().add(const Duration(hours: 5, minutes: 1)),
+      );
+      expect(battleBadge(live).label, 'Ahead 4.5–3');
+      expect(battleTimeLeft(live), '5h left');
+      expect(
+        battleTimeLeft(
+          c(endsAt: DateTime.now().add(const Duration(days: 2, hours: 3))),
+        ),
+        '2d left',
+      );
+      expect(battleTimeLeft(c(outcome: 'won')), isNull);
+      expect(battleTimeLeft(c(status: 'open')), isNull);
     });
   });
 
@@ -345,13 +429,14 @@ void main() {
       await t.pumpAndSettle();
       expect(avatar().width, lessThan(before.width));
 
-      // The Lost tab lists the battle that was lost.
+      // The Lost tab shows the battle that was lost, as a video.
       // The tab strip scrolls sideways; bring the tab into view first.
       await t.ensureVisible(find.text('Lost 1'));
       await t.pumpAndSettle();
       await t.tap(find.text('Lost 1'));
       await t.pumpAndSettle();
-      expect(find.text('Lost 2–5 to @leo'), findsOneWidget);
+      expect(find.text('Lost 2–5 · −16'), findsOneWidget);
+      expect(find.byKey(const ValueKey('battle_tile_70')), findsOneWidget);
     });
   });
 }

@@ -1,14 +1,16 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' show ImageFilter, PointerDeviceKind;
+import 'dart:ui' show FontFeature, ImageFilter, PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:video_player/video_player.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/widgets/tag_suggestion_strip.dart';
+import 'package:myapp/widgets/create_burst.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
 import 'package:myapp/widgets/league_badge.dart' show leagueWash;
+import 'package:myapp/models/battle_model.dart' show BattleSide, BattleStandings;
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/challenge_detail_page.dart';
@@ -20,12 +22,17 @@ import 'package:myapp/services/connection_prewarm_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/feed_paging.dart';
 import 'package:myapp/services/network_quality_service.dart';
+import 'package:myapp/services/own_uploads.dart';
 import 'package:myapp/services/playback_reporter.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/widgets/feed_action_bar.dart'
-    show ChallengeCommentSheet, ChallengeShareSheet, showChallengeVoteDialog;
+    show
+        ChallengeCommentSheet,
+        ChallengeShareSheet,
+        CommentSheetCaption,
+        showChallengeVoteDialog;
 
 /// Which backend feed endpoint a SmartReelsFeed should pull from. Each one
 /// uses a meaningfully different ranking algorithm:
@@ -150,6 +157,14 @@ class SmartReelsFeed extends StatefulWidget {
   /// specific video while still allowing them to keep swiping vertically.
   final ChallengeModel? seedChallenge;
 
+  /// Play exactly these, in this order, and nothing else — a profile's
+  /// videos, opened from its grid. No page is asked of the server, so the
+  /// next swipe is the next video on that profile, not a recommendation.
+  final List<ChallengeModel>? playlist;
+
+  /// Where in [playlist] to open.
+  final int startIndex;
+
   /// Feeds that have had their fresh first page since the app opened.
   ///
   /// ════════════════════════════════════════════════════════════════════════
@@ -172,9 +187,41 @@ class SmartReelsFeed extends StatefulWidget {
   /// rebuilt on every tab switch and "since the app opened" is what matters.
   static final Set<FeedKind> _freshSinceOpen = <FeedKind>{};
 
+  /// For tests: what a reel of [c] would play — its video, the retry if
+  /// that fails, and the answer's video.
+  @visibleForTesting
+  static ({String video, String fallback, String answer})? debugPlaysFor(
+    ChallengeModel c,
+  ) {
+    final r = _ReelItem.fromChallengeModel(c);
+    if (r == null) return null;
+    return (
+      video: r.videoUrl,
+      fallback: r.fallbackVideoUrl,
+      answer: r.opponentVideoUrl,
+    );
+  }
+
+  /// For tests: the same, for a video as a feed page sends it.
+  @visibleForTesting
+  static ({String video, String fallback, String answer})? debugPlaysForEntry(
+    Map<String, dynamic> entry,
+  ) {
+    final r = _ReelItem.fromFeedEntry(entry);
+    if (r == null) return null;
+    return (
+      video: r.videoUrl,
+      fallback: r.fallbackVideoUrl,
+      answer: r.opponentVideoUrl,
+    );
+  }
+
   /// For tests: start as if the app had just opened.
   @visibleForTesting
-  static void debugForgetAppOpen() => _freshSinceOpen.clear();
+  static void debugForgetAppOpen() {
+    _freshSinceOpen.clear();
+    _ReelTileState._scores.clear();
+  }
 
   const SmartReelsFeed({
     super.key,
@@ -182,6 +229,8 @@ class SmartReelsFeed extends StatefulWidget {
     this.fallbackSessionId = '',
     this.kind = FeedKind.forYou,
     this.seedChallenge,
+    this.playlist,
+    this.startIndex = 0,
   });
 
   @override
@@ -355,7 +404,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _pageController = PageController(initialPage: 0);
+    _pageController = PageController(initialPage: _playlistStart());
     // Seed the tick at the current value so we don't trigger an immediate
     // refresh on the very first build (the initial _loadInitialPage call
     // below is already pulling page 1).
@@ -416,7 +465,30 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
 
   // ─── Pagination ──────────────────────────────────────────────────────
 
+  /// The reels of [SmartReelsFeed.playlist], and where the tapped one landed
+  /// among them — a video with nothing to play is left out, which moves
+  /// every one after it up by one.
+  (List<_ReelItem>, int) _playlistReels() {
+    final list = widget.playlist ?? const <ChallengeModel>[];
+    final reels = <_ReelItem>[];
+    var start = 0;
+    for (var i = 0; i < list.length; i++) {
+      final r = _ReelItem.fromChallengeModel(list[i]);
+      if (r == null) continue;
+      if (i <= widget.startIndex) start = reels.length;
+      reels.add(r);
+    }
+    return (reels, start);
+  }
+
+  int _playlistStart() =>
+      widget.playlist == null ? 0 : _playlistReels().$2;
+
   Future<void> _loadInitialPage({bool refresh = false}) async {
+    if (widget.playlist != null) {
+      _loadPlaylist(refresh: refresh);
+      return;
+    }
     // Seed-first: when a starting challenge was provided (search-result tap
     // path), prepend it before paginating so the user opens *on* the video
     // they tapped, not on whatever the explore feed serves first. Crucially,
@@ -538,6 +610,39 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
         ConnectionPrewarmService.instance.prewarmUrlOrigin(entry.videoUrl);
       }
     }
+  }
+
+  /// [SmartReelsFeed.playlist]: everything is already here. A refresh puts
+  /// the same list back from the top.
+  void _loadPlaylist({required bool refresh}) {
+    if (refresh) {
+      VideoPlayerService.instance.pauseAll();
+      for (final st in _playerStates.values) {
+        st.dispose();
+      }
+      _playerStates.clear();
+    }
+    final (reels, start) = _playlistReels();
+    setState(() {
+      _items
+        ..clear()
+        ..addAll(reels);
+      _currentIndex = refresh ? 0 : start;
+      _page = 1;
+      _hasMore = false;
+      _loadingFirstPage = false;
+      _currentItemStart = DateTime.now();
+    });
+    if (refresh && _pageController.hasClients) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_pageController.hasClients) _pageController.jumpToPage(0);
+      });
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _prefetchUpcomingVideos();
+      _playCurrent(waitForWarm: true);
+    });
   }
 
   Future<void> _loadNextPage({bool refresh = false}) async {
@@ -1966,6 +2071,38 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     );
   }
 
+  /// A short's "Accept challenge": the same Record / Upload pop-out as the
+  /// + button, rising out of the button, and then straight into accepting
+  /// on the challenge's page with the choice already made.
+  void _onAccept(int index, Offset anchor) {
+    if (index < 0 || index >= _items.length) return;
+    final item = _items[index];
+    if (item is! _ReelItem || item.id.isEmpty) return;
+    EventTracker.instance.trackTap(
+      target: 'reel_accept_challenge',
+      pageName: 'home_page',
+      params: {'contentId': item.id},
+    );
+    VideoPlayerService.instance.pauseAll();
+    CreateBurst.show(
+      context,
+      anchor: anchor,
+      fromHold: false,
+      title: 'Accept challenge',
+      anchorSize: const Size(34, 34),
+      anchorRadius: 17,
+      onChoose: (how) {
+        if (!mounted) return;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) =>
+                ChallengeDetailPage(challengeId: item.id, acceptWith: how),
+          ),
+        );
+      },
+    );
+  }
+
   void _onOpenDetail(int index) {
     if (index < 0 || index >= _items.length) return;
     final item = _items[index];
@@ -2007,7 +2144,16 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => ChallengeCommentSheet(challengeId: item.id),
+      // The full caption on top, then the comments: the same sheet whether
+      // it was opened from the caption or the comment button.
+      builder: (_) => ChallengeCommentSheet(
+        challengeId: item.id,
+        header: CommentSheetCaption(
+          username: item.creatorUsername,
+          caption: item.fullCaption,
+          detail: '${_ReelTileState._compact(item.views)} views',
+        ),
+      ),
     );
   }
 
@@ -2304,6 +2450,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                   onSave: () => _onSave(index),
                   onVote: () => _onVote(index),
                   onOpenDetail: () => _onOpenDetail(index),
+                  onAccept: (anchor) => _onAccept(index, anchor),
                   onDelete: () => _onDelete(index),
                   onNeedPlayer: () => _reopenPlayer(index),
                 );
@@ -2415,6 +2562,13 @@ class _ReelItem implements _FeedEntry {
   /// can count them for the side that was actually watched.
   final BattleFaceClock faces = BattleFaceClock();
 
+  /// The caption as shown: a challenge is a question, so it ends in "?".
+  String get fullCaption => caption.isEmpty ||
+          type != 'challenge' ||
+          caption.endsWith('?')
+      ? caption
+      : '$caption?';
+
   /// The heart's state and count for whichever side is on screen.
   bool get heartOn => faces.showingOpponent ? opponentLiked : isLiked;
   int get heartCount => faces.showingOpponent ? opponentLikes : likes;
@@ -2435,16 +2589,13 @@ class _ReelItem implements _FeedEntry {
   /// Local optimistic save state. Backend-truth is the response of
   /// ApiService.toggleSaveChallenge; we surface this immediately so the
   /// bookmark icon flips on tap without waiting for the round trip.
-  /// Always starts false — the feed payload doesn't carry per-user save
-  /// state today, and re-fetching the saves list per page would cost a
-  /// round trip per scroll. Live correctness can land later via a
-  /// `savedIds` set on the feed handler.
+  /// Starts from what the server says (the feed marks each video for the
+  /// person asking), then follows taps.
   bool isSaved = false;
 
-  /// Locally tracked "the user has voted on this battle" pair. Used to
-  /// switch the trophy icon to "voted (green)" and tag the post-vote
-  /// toast with the right username. Same per-session-only caveat as
-  /// [isSaved] above — the feed payload doesn't carry vote history yet.
+  /// "The user has voted on this battle", and for whom. Starts from the
+  /// server's record, like [isSaved], so a battle you voted in does not ask
+  /// you again.
   bool hasVoted = false;
   String votedFor = '';
 
@@ -2578,14 +2729,22 @@ class _ReelItem implements _FeedEntry {
               _coerceVariantsMap(c['topResponseVideoVariants']),
             )
           : null;
+      // One of your own, still on this phone from when you posted it: play
+      // that, and keep the server's copy as the retry. See OwnUploads.
+      final own = OwnUploads.instance.pathFor('challenge:${c['id']}');
+      final ownAnswer = hasOpponent
+          ? OwnUploads.instance.pathFor('response:${c['topResponseId']}')
+          : null;
       return _ReelItem(
         id: c['id']?.toString() ?? '',
         type: 'challenge',
-        videoUrl: chosenVideoUrl,
+        videoUrl: own ?? chosenVideoUrl,
         // Only meaningful when we chose HLS — if the manifest turns out
         // to be unreachable the player retries with the direct MP4.
         // Primary is MP4 now, so the manifest becomes the retry.
-        fallbackVideoUrl: mp4Url.isNotEmpty ? hlsUrl : '',
+        fallbackVideoUrl: own != null
+            ? chosenVideoUrl
+            : (mp4Url.isNotEmpty ? hlsUrl : ''),
         thumbnailUrl: (c['thumbnailUrl'] as String?) ?? '',
         caption: title,
         creatorId: (c['creatorId'] as String?) ?? '',
@@ -2594,9 +2753,12 @@ class _ReelItem implements _FeedEntry {
         opponentResponseId: (c['topResponseId'] as String?) ?? '',
         // Same MP4-first ordering as the challenger side, so a battle
         // side-switch is cache-warmable too.
-        opponentVideoUrl: opponentVariantPick?.isNotEmpty == true
-            ? opponentVariantPick!
-            : (opponentFallback.isNotEmpty ? opponentFallback : opponentHls),
+        opponentVideoUrl: ownAnswer ??
+            (opponentVariantPick?.isNotEmpty == true
+                ? opponentVariantPick!
+                : (opponentFallback.isNotEmpty
+                      ? opponentFallback
+                      : opponentHls)),
         opponentThumbnailUrl: (c['topResponseThumbnailUrl'] as String?) ?? '',
         opponentUsername: (c['topResponseUsername'] as String?) ?? '',
         opponentLeague: (c['topResponseLeague'] as String?) ?? '',
@@ -2607,11 +2769,17 @@ class _ReelItem implements _FeedEntry {
         // by the backend's populateChallengeCommentCounts so we don't
         // have to hit /challenges/{id} just to render the right number.
         comments: c['commentCount'] as int? ?? 0,
-        isLiked: false,
+        // What we have done to it, from the server. This was hard-wired to
+        // false, so a video you had liked came back with an empty heart.
+        isLiked: c['isLiked'] == true,
         // The server says whether it has shown us this one before. Absent
         // means fresh, which is the usual case.
         isRepeat: c['repeat'] as bool? ?? false,
-      );
+      )
+        ..isSaved = c['isSaved'] == true
+        ..hasVoted = c['hasVoted'] == true
+        ..votedFor = c['votedFor']?.toString() ?? ''
+        ..opponentLiked = c['topResponseLiked'] == true;
     }
     return null;
   }
@@ -2648,22 +2816,30 @@ class _ReelItem implements _FeedEntry {
         : null;
     final mp4Url = variantPick?.isNotEmpty == true ? variantPick! : c.videoUrl;
     final chosenVideoUrl = mp4Url.isNotEmpty ? mp4Url : c.hlsManifestUrl;
+    // Your own, from the phone, as in the feed parse above.
+    final own = OwnUploads.instance.pathFor('challenge:${c.id}');
+    final ownAnswer = hasOpponent
+        ? OwnUploads.instance.pathFor('response:${c.topResponseId}')
+        : null;
     return _ReelItem(
       id: c.id,
       type: 'challenge',
-      videoUrl: chosenVideoUrl,
-      fallbackVideoUrl: mp4Url.isNotEmpty ? c.hlsManifestUrl : '',
+      videoUrl: own ?? chosenVideoUrl,
+      fallbackVideoUrl: own != null
+          ? chosenVideoUrl
+          : (mp4Url.isNotEmpty ? c.hlsManifestUrl : ''),
       thumbnailUrl: c.thumbnailUrl ?? '',
       caption: c.title,
       creatorId: c.creatorId,
       creatorUsername: c.creatorUsername,
       creatorLeague: c.creatorLeague,
       opponentResponseId: c.topResponseId,
-      opponentVideoUrl: opponentVariantPick?.isNotEmpty == true
-          ? opponentVariantPick!
-          : (c.topResponseHlsManifestUrl.isNotEmpty
-                ? c.topResponseHlsManifestUrl
-                : c.topResponseVideoUrl),
+      opponentVideoUrl: ownAnswer ??
+          (opponentVariantPick?.isNotEmpty == true
+              ? opponentVariantPick!
+              : (c.topResponseHlsManifestUrl.isNotEmpty
+                    ? c.topResponseHlsManifestUrl
+                    : c.topResponseVideoUrl)),
       opponentThumbnailUrl: c.topResponseThumbnailUrl,
       opponentUsername: c.topResponseUsername,
       opponentLeague: c.topResponseLeague,
@@ -2671,8 +2847,12 @@ class _ReelItem implements _FeedEntry {
       likes: c.likes,
       views: c.views,
       comments: c.commentCount,
-      isLiked: false,
-    );
+      isLiked: c.isLiked,
+    )
+      ..isSaved = c.isSaved
+      ..hasVoted = c.hasVoted
+      ..votedFor = c.votedFor
+      ..opponentLiked = c.topResponseLiked;
   }
 }
 
@@ -2846,6 +3026,9 @@ class _ReelTile extends StatefulWidget {
   final VoidCallback onVote;
   final VoidCallback onOpenDetail;
 
+  /// Accept a short, from the button at [anchor] (its centre on screen).
+  final ValueChanged<Offset> onAccept;
+
   /// Owner-only delete. Confirms via dialog inside the parent state,
   /// then removes the reel in-place. Only invoked when [isOwner] is
   /// true.
@@ -2870,6 +3053,7 @@ class _ReelTile extends StatefulWidget {
     required this.onSave,
     required this.onVote,
     required this.onOpenDetail,
+    required this.onAccept,
     required this.onDelete,
     required this.onNeedPlayer,
   });
@@ -2965,11 +3149,51 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     // finger drags and animated via animateTo (which supplies its own
     // duration) on release, so no fixed duration is configured here.
     _cubeCtl = AnimationController(vsync: this, value: 0.0);
+    if (widget.isActive) _loadScore();
+  }
+
+  // ── The live score on a battle ─────────────────────────────────────────
+  // The same count the battle page shows (the server's, with the votes that
+  // do not count taken off), fetched when the battle comes on screen and
+  // kept for the app run, so scrolling back does not ask again. Refetched
+  // after a minute, and after you vote.
+  static final Map<String, (BattleStandings, DateTime)> _scores = {};
+  bool _scoreLoading = false;
+  bool _votedWhenScored = false;
+
+  BattleStandings? get _score => _scores[widget.item.id]?.$1;
+
+  Future<void> _loadScore({bool force = false}) async {
+    final item = widget.item;
+    if (!item.isBattle || item.id.isEmpty || _scoreLoading) return;
+    final had = _scores[item.id];
+    if (!force &&
+        had != null &&
+        DateTime.now().difference(had.$2) < const Duration(minutes: 1)) {
+      return;
+    }
+    _scoreLoading = true;
+    _votedWhenScored = item.hasVoted;
+    final got = await ApiService.getBattleStandings(item.id);
+    _scoreLoading = false;
+    if (!mounted) return;
+    if (got == null) {
+      debugPrint('[reel] battle ${item.id}: score could not be read; '
+          'the button shows no numbers');
+      setState(() {});
+      return;
+    }
+    setState(() => _scores[item.id] = (got, DateTime.now()));
   }
 
   @override
   void didUpdateWidget(covariant _ReelTile old) {
     super.didUpdateWidget(old);
+    if (widget.isActive && !old.isActive) _loadScore();
+    // A vote just landed: the score it changed is worth asking for again.
+    if (widget.item.hasVoted && !_votedWhenScored && widget.isActive) {
+      _loadScore(force: true);
+    }
     // Reset to the primary video whenever this tile loses focus, so the
     // user always re-enters a battle on the challenger's side. Avoids the
     // confusing "opponent video frozen + primary audio playing" race that
@@ -3806,6 +4030,29 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
           ),
         ),
 
+        // On a battle, a tab on the edge of the screen with the other
+        // person's picture and an arrow: tap it, or swipe that way, to see
+        // their video. Says "there is another side over here" without a
+        // line of text taking up the bottom of the screen.
+        if (item.isBattle)
+          Positioned(
+            top: MediaQuery.of(context).size.height * 0.40,
+            right: _showingOpponent ? null : 0,
+            left: _showingOpponent ? 0 : null,
+            child: _SideTab(
+              key: const ValueKey('battle_side_tab'),
+              username: _showingOpponent
+                  ? item.creatorUsername
+                  : item.opponentUsername,
+              league: _showingOpponent
+                  ? item.creatorLeague
+                  : item.opponentLeague,
+              onLeft: _showingOpponent,
+              nudge: widget.isActive,
+              onTap: () => _setShowOpponent(!_showingOpponent),
+            ),
+          ),
+
         // Bottom-left: creator + caption + optional "open" CTA.
         // Anchored just above the bar with a small breathing margin and
         // safe-area padding so the home indicator on iOS / nav-gesture hint
@@ -3846,31 +4093,33 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                   tag: isChallenge ? 'Open challenge' : null,
                 ),
               const SizedBox(height: 8),
-              // What: the challenge itself, the biggest words on screen.
+              // What: the challenge itself, the biggest words on screen. One
+              // line, cut short with "…" when it is longer; tap it for the
+              // whole of it, with the comments underneath.
               if (item.caption.isNotEmpty)
-                Text(
-                  item.caption.endsWith('?') || !isChallenge
-                      ? item.caption
-                      : '${item.caption}?',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    height: 1.25,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -0.2,
-                    shadows: _textShadow,
+                GestureDetector(
+                  key: const ValueKey('reel_caption'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap: widget.onComment,
+                  child: Text(
+                    item.fullCaption,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      height: 1.25,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
+                      shadows: _textShadow,
+                    ),
                   ),
                 ),
               const SizedBox(height: 4),
               // The small print, on one line. Views used to take a slot in
               // the button column, as if it were something to press.
               Text(
-                [
-                  '${_compact(item.views)} views',
-                  if (item.isBattle) 'Swipe to switch sides',
-                ].join('  ·  '),
+                '${_compact(item.views)} views',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
@@ -3891,17 +4140,34 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                 ),
               if (isChallenge) ...[
                 const SizedBox(height: 10),
-                _GlassPill(
-                  icon: item.isBattle
-                      ? Icons.sports_kabaddi_rounded
-                      : Icons.bolt_rounded,
-                  label: item.isBattle
-                      ? 'View battle'
-                      : widget.isOwner
-                          ? 'View challenge'
-                          : 'Take the challenge',
-                  onTap: widget.onOpenDetail,
-                ),
+                // A battle shows its score — the thing you want to know
+                // about it — and opens the battle page from there. A short
+                // offers to take it on. Your own short opens its page.
+                if (item.isBattle)
+                  _ScorePill(
+                    standings: _score,
+                    onTap: widget.onOpenDetail,
+                  )
+                else if (widget.isOwner)
+                  _GlassPill(
+                    icon: Icons.bolt_rounded,
+                    label: 'View challenge',
+                    onTap: widget.onOpenDetail,
+                  )
+                else
+                  Builder(
+                    builder: (pill) => _GlassPill(
+                      icon: Icons.bolt_rounded,
+                      label: 'Accept challenge',
+                      accent: true,
+                      onTap: () {
+                        final box = pill.findRenderObject()! as RenderBox;
+                        widget.onAccept(
+                          box.localToGlobal(box.size.center(Offset.zero)),
+                        );
+                      },
+                    ),
+                  ),
               ],
             ],
           ),
@@ -3953,6 +4219,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
               const SizedBox(height: 16),
               _Action(
                 icon: Icons.chat_bubble_rounded,
+                glyph: const _CommentGlyph(),
                 color: Colors.white,
                 // Hide the digit on 0 — looks intentional rather than
                 // "broken counter" for brand-new challenges.
@@ -4282,6 +4549,10 @@ class _ScrubTimeBadge extends StatelessWidget {
 /// boxes behind the icons: over a video they read as clutter.
 class _Action extends StatefulWidget {
   final IconData icon;
+
+  /// Drawn instead of [icon] when set — for a symbol the icon font does not
+  /// have (the comment bubble).
+  final Widget? glyph;
   final String label;
   final Color color;
   final String? tooltip;
@@ -4295,6 +4566,7 @@ class _Action extends StatefulWidget {
 
   const _Action({
     required this.icon,
+    this.glyph,
     required this.label,
     required this.color,
     this.tooltip,
@@ -4328,12 +4600,13 @@ class _ActionState extends State<_Action> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    Widget icon = Icon(
-      widget.icon,
-      color: widget.color,
-      size: 30,
-      shadows: const [Shadow(blurRadius: 10, color: Color(0x80000000))],
-    );
+    Widget icon = widget.glyph ??
+        Icon(
+          widget.icon,
+          color: widget.color,
+          size: 30,
+          shadows: const [Shadow(blurRadius: 10, color: Color(0x80000000))],
+        );
     if (widget.mirror) icon = Transform.flip(flipX: true, child: icon);
     final button = GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -4525,21 +4798,17 @@ class _ReelAvatar extends StatelessWidget {
   final String username;
   final String league;
   final double size;
-  final bool dim;
 
   const _ReelAvatar({
     required this.username,
     required this.league,
     this.size = 30,
-    this.dim = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final ring = league.isEmpty ? Colors.white54 : leagueWash(league);
-    return AnimatedOpacity(
-      duration: const Duration(milliseconds: 200),
-      opacity: dim ? 0.55 : 1,
+    return RepaintBoundary(
       child: Container(
         width: size,
         height: size,
@@ -4729,38 +4998,331 @@ class _MatchupSide extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _ReelAvatar(
-              username: username,
-              league: league,
-              size: 28,
-              dim: !active,
-            ),
+            _ReelAvatar(username: username, league: league, size: 28),
             const SizedBox(width: 6),
             Flexible(
               child: Text(
                 username,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
+                // Both names readable at all times; the one on screen is
+                // the bold one in the chip. Dimming the other made it look
+                // hidden.
                 style: TextStyle(
-                  color: active ? Colors.white : Colors.white60,
+                  color: active ? Colors.white : const Color(0xE6FFFFFF),
                   fontSize: 14,
-                  fontWeight: active ? FontWeight.w700 : FontWeight.w600,
+                  fontWeight: active ? FontWeight.w700 : FontWeight.w500,
                   shadows: _textShadow,
                 ),
               ),
             ),
             if (league.isNotEmpty) ...[
               const SizedBox(width: 5),
-              Opacity(
-                opacity: active ? 1 : 0.55,
-                child: LeagueEmblem(league: league, size: 14),
-              ),
+              LeagueEmblem(league: league, size: 14),
             ],
           ],
         ),
       ),
     );
   }
+}
+
+/// A battle's live score, as the button under the question: "12 – 9 · 2d
+/// left". The left number is the creator's and the right the answer's, the
+/// same order as the names above it. Tap for the battle page.
+class _ScorePill extends StatelessWidget {
+  final BattleStandings? standings;
+  final VoidCallback onTap;
+
+  const _ScorePill({required this.standings, required this.onTap});
+
+  static String _votes(double v) =>
+      v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
+
+  static String _left(BattleStandings st) {
+    if (st.over) {
+      final lead = st.sides.where((s) => s.leading).toList();
+      return lead.length == 1 ? '${lead.first.username} won' : 'Final';
+    }
+    final end = st.endsAt;
+    if (end == null) return 'Live';
+    final d = end.difference(DateTime.now());
+    if (d.inDays >= 1) return '${d.inDays}d left';
+    if (d.inHours >= 1) return '${d.inHours}h left';
+    return 'Ending soon';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final st = standings;
+    final creator = st?.creator;
+    BattleSide? answer;
+    if (st != null) {
+      for (final s in st.sides) {
+        if (!s.isCreator) {
+          answer = s;
+          break;
+        }
+      }
+    }
+    final hasScore = creator != null && answer != null;
+    TextStyle num(bool lead) => TextStyle(
+          color: lead ? Colors.white : Colors.white70,
+          fontSize: 15,
+          fontWeight: FontWeight.w800,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        );
+    return Semantics(
+      button: true,
+      label: 'Battle score',
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+          child: Material(
+            color: Colors.white.withValues(alpha: 0.16),
+            child: InkWell(
+              key: const ValueKey('battle_score'),
+              onTap: onTap,
+              child: Container(
+                height: 34,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.28),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.emoji_events_rounded,
+                      size: 16,
+                      color: _savedGold,
+                    ),
+                    const SizedBox(width: 7),
+                    if (hasScore) ...[
+                      Text(_votes(creator.votes), style: num(creator.leading)),
+                      const Text(
+                        '  –  ',
+                        style: TextStyle(color: Colors.white54, fontSize: 14),
+                      ),
+                      Text(_votes(answer.votes), style: num(answer.leading)),
+                      Flexible(
+                        child: Text(
+                          '  ·  ${_left(st!)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ] else
+                      // Before the score arrives, or if it could not be
+                      // read: still the way into the battle.
+                      const Text(
+                        'Score',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    const SizedBox(width: 2),
+                    const Icon(
+                      Icons.chevron_right_rounded,
+                      size: 18,
+                      color: Colors.white70,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The tab on the edge of a battle: the other person's picture and an arrow
+/// pointing in, on the side their video is. Tap it or swipe across to see
+/// them. While the battle is on screen it leans in a little now and then,
+/// which says "there is more over here" without any words.
+class _SideTab extends StatefulWidget {
+  final String username;
+  final String league;
+
+  /// On the left edge (the creator, while the answer is showing).
+  final bool onLeft;
+
+  /// Lean in now and then. Only on the battle that is on screen: every
+  /// tile animating at once would redraw pages nobody can see.
+  final bool nudge;
+  final VoidCallback onTap;
+
+  const _SideTab({
+    super.key,
+    required this.username,
+    required this.league,
+    required this.onLeft,
+    required this.nudge,
+    required this.onTap,
+  });
+
+  @override
+  State<_SideTab> createState() => _SideTabState();
+}
+
+class _SideTabState extends State<_SideTab>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _lean = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2600),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.nudge) _lean.repeat();
+  }
+
+  @override
+  void didUpdateWidget(_SideTab old) {
+    super.didUpdateWidget(old);
+    if (widget.nudge && !_lean.isAnimating) _lean.repeat();
+    if (!widget.nudge && _lean.isAnimating) {
+      _lean.stop();
+      _lean.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _lean.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final inward = widget.onLeft ? 1.0 : -1.0;
+    const r = Radius.circular(22);
+    return Tooltip(
+      message: 'See ${widget.username.isEmpty ? 'the other side' : widget.username}',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: AnimatedBuilder(
+          animation: _lean,
+          builder: (_, child) {
+            // A quick lean in and back, then a pause: the first fifth of
+            // each cycle.
+            final t = _lean.value;
+            final lean = t < 0.2 ? math.sin(t / 0.2 * math.pi) : 0.0;
+            return Transform.translate(
+              offset: Offset(inward * 6 * lean, 0),
+              child: child,
+            );
+          },
+          child: ClipRRect(
+            borderRadius: widget.onLeft
+                ? const BorderRadius.only(topRight: r, bottomRight: r)
+                : const BorderRadius.only(topLeft: r, bottomLeft: r),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+              child: Container(
+                padding: EdgeInsets.fromLTRB(
+                  widget.onLeft ? 6 : 8,
+                  6,
+                  widget.onLeft ? 8 : 6,
+                  6,
+                ),
+                color: Colors.black.withValues(alpha: 0.28),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (!widget.onLeft)
+                      const Icon(Icons.chevron_left_rounded,
+                          size: 20, color: Colors.white),
+                    _ReelAvatar(
+                      username: widget.username,
+                      league: widget.league,
+                      size: 30,
+                    ),
+                    if (widget.onLeft)
+                      const Icon(Icons.chevron_right_rounded,
+                          size: 20, color: Colors.white),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The comment symbol: a round speech bubble with a small tail, drawn as a
+/// line the same weight as the heart and the bookmark beside it, with the
+/// same soft shadow. The icon font's bubbles are square-cornered or filled
+/// with dots, and looked heavier than everything around them.
+class _CommentGlyph extends StatelessWidget {
+  const _CommentGlyph();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox(
+      width: 30,
+      height: 30,
+      child: CustomPaint(painter: _CommentBubblePainter()),
+    );
+  }
+}
+
+class _CommentBubblePainter extends CustomPainter {
+  const _CommentBubblePainter();
+
+  static Path bubble(Size size) {
+    final w = size.width, h = size.height;
+    // An oval with a short tail at its lower left, as one outline.
+    final oval = Rect.fromLTWH(w * 0.1, h * 0.12, w * 0.8, h * 0.66);
+    final path = Path()..addOval(oval);
+    final tail = Path()
+      ..moveTo(w * 0.24, h * 0.66)
+      ..lineTo(w * 0.14, h * 0.9)
+      ..lineTo(w * 0.42, h * 0.76)
+      ..close();
+    return Path.combine(PathOperation.union, path, tail);
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = bubble(size);
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = const Color(0x66000000)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.4
+        ..strokeJoin = StrokeJoin.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_CommentBubblePainter old) => false;
 }
 
 /// A slim frosted button on the video — "View battle", "Take the
@@ -4771,10 +5333,15 @@ class _GlassPill extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
 
+  /// Filled with the app's blue instead of frosted: the one thing on the
+  /// screen that asks you to do something.
+  final bool accent;
+
   const _GlassPill({
     required this.icon,
     required this.label,
     required this.onTap,
+    this.accent = false,
   });
 
   @override
@@ -4784,7 +5351,9 @@ class _GlassPill extends StatelessWidget {
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
         child: Material(
-          color: Colors.white.withValues(alpha: 0.16),
+          color: accent
+              ? AppTheme.primary
+              : Colors.white.withValues(alpha: 0.16),
           child: InkWell(
             onTap: onTap,
             child: Container(
@@ -4793,7 +5362,7 @@ class _GlassPill extends StatelessWidget {
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.28),
+                  color: Colors.white.withValues(alpha: accent ? 0.0 : 0.28),
                 ),
               ),
               child: Row(

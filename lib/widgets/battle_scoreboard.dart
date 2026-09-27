@@ -164,26 +164,25 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
     final canVote =
         widget.onVote != null && !s.over && !s.notStarted && !_viewerIsIn;
 
+    // A plain raised panel, the same as every other box on the battle page,
+    // rather than a tinted gradient.
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            cs.primary.withValues(alpha: 0.14),
-            cs.tertiary.withValues(alpha: 0.08),
-          ],
-        ),
-        border: Border.all(color: cs.primary.withValues(alpha: 0.25)),
+        color: const Color(0xFF1C1C1E),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.scoreboard_outlined, color: cs.primary, size: 22),
+              const Icon(
+                Icons.emoji_events_rounded,
+                color: Color(0xFFFFD60A),
+                size: 22,
+              ),
               const SizedBox(width: 8),
               Text('Live score', style: tt.titleMedium),
               const Spacer(),
@@ -361,7 +360,11 @@ class _SideRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
-    final accent = side.isCreator ? Colors.orange : Colors.lightBlue;
+    // The app's blue for the challenger, Apple's cyan for the answer: two
+    // sides you can tell apart without the orange that clashed with the
+    // rest of the app.
+    final accent =
+        side.isCreator ? const Color(0xFF0A84FF) : const Color(0xFF64D2FF);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(
@@ -423,11 +426,13 @@ class _SideRow extends StatelessWidget {
               Text('votes', style: tt.labelSmall),
               if (onVote != null) ...[
                 const SizedBox(width: 8),
-                FilledButton.tonal(
+                FilledButton(
                   onPressed: onVote,
                   style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF0A84FF),
+                    foregroundColor: Colors.white,
                     visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
                   ),
                   child: const Text('Vote'),
                 ),

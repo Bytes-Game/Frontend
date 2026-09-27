@@ -15,6 +15,7 @@ import 'package:myapp/services/connection_prewarm_service.dart';
 import 'package:myapp/services/device_capabilities.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/leftover_files.dart';
+import 'package:myapp/services/own_uploads.dart';
 import 'package:myapp/services/link_speed_store.dart';
 import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/services/video_cache_service.dart';
@@ -160,6 +161,10 @@ Future<void> main() async {
   // the pre-cache behaviour.
   // ignore: discarded_futures
   VideoCacheService.instance.init();
+  // Your own posts, kept on the phone so they open at once from your
+  // profile. Until this has read its list they play from the server.
+  // ignore: discarded_futures
+  OwnUploads.instance.init();
 
   // Crash + uncaught-error reporting via Sentry. The SDK installs:
   //   * FlutterError.onError handler   — catches framework errors

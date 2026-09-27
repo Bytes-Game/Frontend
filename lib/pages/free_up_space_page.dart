@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/leftover_files.dart';
+import 'package:myapp/services/own_uploads.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/video_cache_service.dart';
 
@@ -19,6 +20,9 @@ import 'package:myapp/services/video_cache_service.dart';
 ///   * Leftover recordings: copies that recording and posting leave behind.
 ///     Anything a post that has not finished still needs is kept. See
 ///     [LeftoverFiles].
+///   * Your posts: a copy of each video you posted lately, so it opens at
+///     once from your profile. Clearing them only means they play from the
+///     server again. See [OwnUploads].
 class FreeUpSpacePage extends StatefulWidget {
   const FreeUpSpacePage({super.key});
 
@@ -33,6 +37,7 @@ class _FreeUpSpacePageState extends State<FreeUpSpacePage>
 
   int? _savedVideos;
   LeftoverScan? _leftovers;
+  int? _ownPosts;
   bool _busy = false;
 
   @override
@@ -44,10 +49,12 @@ class _FreeUpSpacePageState extends State<FreeUpSpacePage>
   Future<void> _measure() async {
     final saved = await VideoCacheService.instance.bytesOnDisk();
     final left = await LeftoverFiles.instance.scan();
+    final own = await OwnUploads.instance.bytesOnDisk();
     if (!mounted) return;
     setState(() {
       _savedVideos = saved;
       _leftovers = left;
+      _ownPosts = own;
     });
   }
 
@@ -120,6 +127,18 @@ class _FreeUpSpacePageState extends State<FreeUpSpacePage>
                             'that has not finished.' : ''}',
               bytes: left?.freeable,
               onClear: () => _clear('leftovers', LeftoverFiles.instance.clear),
+            ),
+            const Divider(height: 0),
+            _row(
+              key: const Key('free_up_space_own_posts'),
+              icon: Icons.person_pin_outlined,
+              title: 'Your recent posts',
+              subtitle:
+                  'Copies of videos you posted, kept so they open instantly '
+                  'from your profile. Your posts stay up; they just load '
+                  'from the internet again.',
+              bytes: _ownPosts,
+              onClear: () => _clear('own_posts', OwnUploads.instance.clear),
             ),
           ],
         ),

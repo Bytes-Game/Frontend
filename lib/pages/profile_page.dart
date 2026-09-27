@@ -30,8 +30,7 @@ import 'package:myapp/widgets/battles_tab.dart';
 import 'package:myapp/widgets/create_burst.dart';
 import 'package:myapp/widgets/profile_arena_header.dart';
 import 'package:myapp/widgets/scroll_reveal.dart';
-import 'package:myapp/widgets/shimmer_loading.dart';
-import 'package:myapp/widgets/smart_reels_feed.dart';
+import 'package:myapp/widgets/video_grid_tile.dart';
 
 /// A profile built around the person's battles.
 ///
@@ -69,7 +68,7 @@ class ProfilePage extends StatefulWidget {
 class _ProfilePageState extends State<ProfilePage>
     with PageTracker<ProfilePage>, SingleTickerProviderStateMixin {
   // ── Data ───────────────────────────────────────────────────────────
-  List<Map<String, dynamic>> _savedChallenges = [];
+  List<ChallengeModel> _savedChallenges = [];
   List<ChallengeModel> _myChallenges = [];
   bool _isLoadingSaved = false;
   bool _isLoadingMyChallenges = false;
@@ -141,7 +140,10 @@ class _ProfilePageState extends State<ProfilePage>
     final saved = await ApiService.getSavedChallenges(widget.user.id);
     if (mounted) {
       setState(() {
-        _savedChallenges = saved;
+        _savedChallenges = [
+          for (final m in saved)
+            ChallengeModel.fromJson(m),
+        ];
         _isLoadingSaved = false;
       });
     }
@@ -247,32 +249,22 @@ class _ProfilePageState extends State<ProfilePage>
     _toast('Post deleted');
   }
 
-  /// Open a challenge in the full-screen reels viewer (explore feed
-  /// underneath as the continuation stream).
-  void _openChallengeReels(ChallengeModel c) {
-    final dp = Provider.of<DataProvider>(context, listen: false);
-    final viewerId = dp.user?.id ?? '';
+  /// Play [videos] from [index], full screen, and only them: the next
+  /// swipe is the next video on this tab of this profile, never one from
+  /// the recommendations. Same on every profile, yours or anyone's.
+  void _play(List<ChallengeModel> videos, int index, String tab) {
+    if (index < 0 || index >= videos.length) return;
     EventTracker.instance.trackTap(
       target: 'profile_open_post',
       pageName: pageName,
       params: {
-        'contentId': c.id,
+        'contentId': videos[index].id,
         'contentType': 'challenge',
         'profileUserId': widget.user.id,
+        'tab': tab,
       },
     );
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => Scaffold(
-          backgroundColor: Colors.black,
-          body: SmartReelsFeed(
-            userId: viewerId,
-            kind: FeedKind.explore,
-            seedChallenge: c,
-          ),
-        ),
-      ),
-    );
+    openVideoPlaylist(context, videos, index);
   }
 
   /// "Share profile" — copies the canonical profile URL to the
@@ -479,12 +471,6 @@ class _ProfilePageState extends State<ProfilePage>
     return '$n';
   }
 
-  String _formatViews(int n) {
-    if (n < 1000) return n.toString();
-    if (n < 1000000) return '${(n / 1000).toStringAsFixed(n < 10000 ? 1 : 0)}K';
-    return '${(n / 1000000).toStringAsFixed(n < 10000000 ? 1 : 0)}M';
-  }
-
   // ── Build ──────────────────────────────────────────────────────────
 
   @override
@@ -658,9 +644,11 @@ class _ProfilePageState extends State<ProfilePage>
           for (final t in const ['open', 'live', 'won', 'lost'])
             BattlesTab(
               userId: widget.user.id,
+              ownerName: widget.user.username,
               tab: t,
               isOwn: isOwn,
               onOpen: _openBattle,
+              onPlay: (videos, i) => _play(videos, i, t),
             ),
           // Liked reads the signed-in person's likes, so it is only
           // meaningful on their own profile.
@@ -700,17 +688,7 @@ class _ProfilePageState extends State<ProfilePage>
 
   Widget _buildPostsTab({required bool isOwn}) {
     if (_isLoadingMyChallenges) {
-      // SliverFillRemaining wrapper so the NestedScrollView still
-      // coordinates header collapse over the shimmer.
-      return const CustomScrollView(slivers: [
-        SliverFillRemaining(
-          hasScrollBody: false,
-          child: SizedBox(
-            height: 200,
-            child: ShimmerLoading(child: GridSkeleton()),
-          ),
-        ),
-      ]);
+      return const VideoGridPlaceholder();
     }
     if (_myChallenges.isEmpty) {
       return _EmptyTab(
@@ -722,25 +700,17 @@ class _ProfilePageState extends State<ProfilePage>
       );
     }
     return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 80),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        crossAxisSpacing: 4,
-        mainAxisSpacing: 4,
-        childAspectRatio: 9 / 16,
-      ),
+      padding: videoGridPadding,
+      gridDelegate: videoGridDelegate,
       itemCount: _myChallenges.length,
       itemBuilder: (_, i) {
         final c = _myChallenges[i];
-        return _GridTile(
-          thumbnailUrl: c.thumbnailUrl ?? '',
-          overlayCount: c.views,
-          overlayIcon: Icons.play_arrow_rounded,
-          formatCount: _formatViews,
-          onTap: () => _openChallengeReels(c),
+        return VideoGridTile(
+          key: ValueKey('short_tile_${c.id}'),
+          video: c,
+          onTap: () => _play(_myChallenges, i, 'shorts'),
           // Long-press is destructive for own posts only.
           onLongPress: isOwn ? () => _confirmDeletePost(c) : null,
-          fallbackIcon: Icons.videocam_outlined,
         );
       },
     );
@@ -748,15 +718,7 @@ class _ProfilePageState extends State<ProfilePage>
 
   Widget _buildSavedTab() {
     if (_isLoadingSaved) {
-      return const CustomScrollView(slivers: [
-        SliverFillRemaining(
-          hasScrollBody: false,
-          child: SizedBox(
-            height: 200,
-            child: ShimmerLoading(child: GridSkeleton()),
-          ),
-        ),
-      ]);
+      return const VideoGridPlaceholder();
     }
     if (_savedChallenges.isEmpty) {
       return const _EmptyTab(
@@ -766,24 +728,16 @@ class _ProfilePageState extends State<ProfilePage>
       );
     }
     return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 80),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        crossAxisSpacing: 4,
-        mainAxisSpacing: 4,
-        childAspectRatio: 9 / 16,
-      ),
+      padding: videoGridPadding,
+      gridDelegate: videoGridDelegate,
       itemCount: _savedChallenges.length,
       itemBuilder: (_, i) {
         final c = _savedChallenges[i];
-        final thumb = c['thumbnailUrl'] as String? ?? '';
-        final title = '${c['prefix'] ?? ''} ${c['subject'] ?? ''}'.trim();
-        return _GridTile(
-          thumbnailUrl: thumb,
-          captionOverlay: title,
-          topRightIcon: Icons.bookmark,
-          fallbackIcon: Icons.videocam_outlined,
-          onTap: () => _toast(title.isNotEmpty ? title : 'Saved video'),
+        return VideoGridTile(
+          key: ValueKey('saved_tile_${c.id}'),
+          video: c,
+          mark: Icons.bookmark_rounded,
+          onTap: () => _play(_savedChallenges, i, 'saved'),
         );
       },
     );
@@ -1243,118 +1197,6 @@ class _EmptyTab extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _GridTile extends StatelessWidget {
-  final String thumbnailUrl;
-  final IconData fallbackIcon;
-  final int? overlayCount;
-  final IconData? overlayIcon;
-  final String Function(int)? formatCount;
-  final String? captionOverlay;
-  final IconData? topRightIcon;
-  final VoidCallback? onTap;
-  final VoidCallback? onLongPress;
-
-  const _GridTile({
-    required this.thumbnailUrl,
-    required this.fallbackIcon,
-    this.overlayCount,
-    this.overlayIcon,
-    this.formatCount,
-    this.captionOverlay,
-    this.topRightIcon,
-    this.onTap,
-    this.onLongPress,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Pressable(
-      onTap: onTap,
-      onLongPress: onLongPress,
-      pressedScale: 0.97,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (thumbnailUrl.isNotEmpty)
-              Image.network(
-                thumbnailUrl,
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => Container(
-                  color: cs.surfaceContainerHighest,
-                  child: Icon(fallbackIcon,
-                      color: cs.onSurfaceVariant, size: 28),
-                ),
-              )
-            else
-              Container(
-                color: cs.surfaceContainerHighest,
-                child: Icon(fallbackIcon,
-                    color: cs.onSurfaceVariant, size: 28),
-              ),
-            if (topRightIcon != null)
-              Positioned(
-                top: 4,
-                right: 4,
-                child: Icon(topRightIcon, color: Colors.white, size: 18),
-              ),
-            if (overlayCount != null && overlayCount! > 0)
-              Positioned(
-                bottom: 4,
-                left: 4,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.5),
-                    borderRadius: BorderRadius.circular(AppTheme.radiusFull),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(overlayIcon ?? Icons.play_arrow_rounded,
-                          color: Colors.white, size: 12),
-                      const SizedBox(width: 2),
-                      Text(
-                        formatCount != null
-                            ? formatCount!(overlayCount!)
-                            : '$overlayCount',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            if (captionOverlay != null && captionOverlay!.isNotEmpty)
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: Container(
-                  padding: const EdgeInsets.all(4),
-                  color: Colors.black54,
-                  child: Text(
-                    captionOverlay!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        color: Colors.white, fontSize: 10),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
     );
   }
 }

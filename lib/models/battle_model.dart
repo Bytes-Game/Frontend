@@ -6,6 +6,8 @@
 /// winner when the time is up.
 library;
 
+import 'package:myapp/models/challenge_model.dart';
+
 /// Reads a number that may arrive as an int or a double.
 double _toDouble(Object? v) => v is num ? v.toDouble() : 0;
 int _toInt(Object? v) => v is num ? v.toInt() : 0;
@@ -151,6 +153,11 @@ class BattleCard {
   /// For a live battle: the owner is ahead right now.
   final bool leading;
 
+  /// The battle as a video to play: the same record every feed sends, with
+  /// its answer and the viewer's own likes and votes. Null from a server
+  /// that does not send it yet.
+  final ChallengeModel? video;
+
   const BattleCard({
     required this.challengeId,
     required this.title,
@@ -167,6 +174,7 @@ class BattleCard {
     this.opponent = '',
     this.ratingChange = 0,
     this.leading = false,
+    this.video,
   });
 
   factory BattleCard.fromJson(Map<String, dynamic> j) => BattleCard(
@@ -185,6 +193,9 @@ class BattleCard {
     opponent: '${j['opponent'] ?? ''}',
     ratingChange: _toInt(j['ratingChange']),
     leading: j['leading'] == true,
+    video: j['video'] is Map<String, dynamic>
+        ? ChallengeModel.fromJson(j['video'] as Map<String, dynamic>)
+        : null,
   );
 }
 
