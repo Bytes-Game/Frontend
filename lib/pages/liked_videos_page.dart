@@ -158,33 +158,36 @@ class _LikedVideosPageState extends State<LikedVideosPage>
       );
     }
 
-    return GridView.builder(
-      controller: _scroll,
-      padding: videoGridPadding,
-      gridDelegate: videoGridDelegate,
-      itemCount: _items.length + (_hasMore ? 1 : 0),
-      itemBuilder: (_, i) {
-        if (i >= _items.length) {
-          // Tail spinner slot — only painted when there's more to load.
-          return const Center(
-            child: Padding(
-              padding: EdgeInsets.all(16),
-              child: SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(strokeWidth: 2),
+    return PreloadVideoStarts(
+      videos: _items,
+      child: GridView.builder(
+        controller: _scroll,
+        padding: videoGridPadding,
+        gridDelegate: videoGridDelegate,
+        itemCount: _items.length + (_hasMore ? 1 : 0),
+        itemBuilder: (_, i) {
+          if (i >= _items.length) {
+            // Tail spinner slot — only painted when there's more to load.
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
               ),
-            ),
+            );
+          }
+          return VideoGridTile(
+            key: ValueKey('liked_tile_${_items[i].id}'),
+            video: _items[i],
+            mark: Icons.favorite_rounded,
+            markColor: const Color(0xFFFF3B5C),
+            onTap: () => _openItem(i),
           );
-        }
-        return VideoGridTile(
-          key: ValueKey('liked_tile_${_items[i].id}'),
-          video: _items[i],
-          mark: Icons.favorite_rounded,
-          markColor: const Color(0xFFFF3B5C),
-          onTap: () => _openItem(i),
-        );
-      },
+        },
+      ),
     );
   }
 }

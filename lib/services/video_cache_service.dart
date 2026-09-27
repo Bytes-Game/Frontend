@@ -1756,6 +1756,10 @@ class VideoCacheService {
   @visibleForTesting
   Set<String> get debugReady => _ready;
 
+  /// What the last [warm] asked for.
+  @visibleForTesting
+  Set<String> get debugWindow => _window;
+
   /// Downloads still unwinding. [clear] cancels them but cannot wait for
   /// them, so a test that measures concurrency has to let the previous
   /// one's downloads drain or it measures the leftovers too.

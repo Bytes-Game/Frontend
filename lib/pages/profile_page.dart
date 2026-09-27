@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -17,6 +20,7 @@ import 'package:myapp/pages/notification_settings_page.dart';
 import 'package:myapp/pages/preferences_pages.dart';
 import 'package:myapp/pages/static_content_pages.dart';
 import 'package:myapp/pages/two_factor_setup_page.dart';
+import 'package:myapp/pages/video_player_page.dart';
 import 'package:myapp/pages/watch_history_page.dart';
 import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/providers/data_provider.dart';
@@ -24,6 +28,7 @@ import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/create_flow.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
+import 'package:myapp/services/upload_job_manager.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/battle_record_panel.dart';
 import 'package:myapp/widgets/battles_tab.dart';
@@ -125,13 +130,39 @@ class _ProfilePageState extends State<ProfilePage>
     _fetchMyChallenges();
     _fetchRecord();
     if (isOwn) _fetchSavedChallenges();
+    if (isOwn) {
+      _posted = UploadJobManager.instance.onCompleted.listen(_onPosted);
+    }
   }
 
   @override
   void dispose() {
+    _posted?.cancel();
     _tabs.dispose();
     super.dispose();
   }
+
+  /// Your posts finishing, so each appears in Shorts the moment the server
+  /// has it — in place of its "Posting…" tile, not after a refresh.
+  StreamSubscription<UploadJob>? _posted;
+
+  void _onPosted(UploadJob job) {
+    final c = job.state.value.result;
+    if (!mounted || job.kind != UploadJobKind.challenge || c is! ChallengeModel) {
+      return;
+    }
+    setState(() {
+      if (!_myChallenges.any((x) => x.id == c.id)) {
+        _myChallenges = [c, ..._myChallenges];
+      }
+    });
+  }
+
+  /// Your posts on their way up: pressed Post, not finished yet.
+  static bool _isPosting(UploadJob j) =>
+      j.kind == UploadJobKind.challenge &&
+      j.postedAs != null &&
+      j.state.value.stage != UploadJobStage.done;
 
   // ── Network ────────────────────────────────────────────────────────
 
@@ -687,10 +718,30 @@ class _ProfilePageState extends State<ProfilePage>
   // ── Tab bodies ─────────────────────────────────────────────────────
 
   Widget _buildPostsTab({required bool isOwn}) {
-    if (_isLoadingMyChallenges) {
+    if (!isOwn) return _shortsGrid(isOwn: false, posting: const []);
+    // Your own: what you have posted, with anything still on its way up
+    // in front of it — the way TikTok shows a post the moment you press
+    // Post, not once the upload is over.
+    return ValueListenableBuilder<List<UploadJob>>(
+      valueListenable: UploadJobManager.instance.activeJobs,
+      builder: (_, jobs, _) => _shortsGrid(
+        isOwn: true,
+        posting: [
+          for (final j in jobs.reversed)
+            if (_isPosting(j)) j,
+        ],
+      ),
+    );
+  }
+
+  Widget _shortsGrid({
+    required bool isOwn,
+    required List<UploadJob> posting,
+  }) {
+    if (_isLoadingMyChallenges && posting.isEmpty) {
       return const VideoGridPlaceholder();
     }
-    if (_myChallenges.isEmpty) {
+    if (_myChallenges.isEmpty && posting.isEmpty) {
       return _EmptyTab(
         icon: Icons.videocam_outlined,
         title: isOwn ? 'No posts yet' : 'No posts',
@@ -699,20 +750,31 @@ class _ProfilePageState extends State<ProfilePage>
             : 'When @${widget.user.username} posts a video, it will appear here.',
       );
     }
-    return GridView.builder(
-      padding: videoGridPadding,
-      gridDelegate: videoGridDelegate,
-      itemCount: _myChallenges.length,
-      itemBuilder: (_, i) {
-        final c = _myChallenges[i];
-        return VideoGridTile(
-          key: ValueKey('short_tile_${c.id}'),
-          video: c,
-          onTap: () => _play(_myChallenges, i, 'shorts'),
-          // Long-press is destructive for own posts only.
-          onLongPress: isOwn ? () => _confirmDeletePost(c) : null,
-        );
-      },
+    return PreloadVideoStarts(
+      videos: _myChallenges,
+      child: GridView.builder(
+        padding: videoGridPadding,
+        gridDelegate: videoGridDelegate,
+        itemCount: posting.length + _myChallenges.length,
+        itemBuilder: (_, i) {
+          if (i < posting.length) {
+            return _PostingTile(
+              key: ValueKey('posting_tile_${posting[i].id}'),
+              job: posting[i],
+              username: widget.user.username,
+            );
+          }
+          final at = i - posting.length;
+          final c = _myChallenges[at];
+          return VideoGridTile(
+            key: ValueKey('short_tile_${c.id}'),
+            video: c,
+            onTap: () => _play(_myChallenges, at, 'shorts'),
+            // Long-press is destructive for own posts only.
+            onLongPress: isOwn ? () => _confirmDeletePost(c) : null,
+          );
+        },
+      ),
     );
   }
 
@@ -727,19 +789,22 @@ class _ProfilePageState extends State<ProfilePage>
         subtitle: 'Tap the bookmark icon on any video to save it here.',
       );
     }
-    return GridView.builder(
-      padding: videoGridPadding,
-      gridDelegate: videoGridDelegate,
-      itemCount: _savedChallenges.length,
-      itemBuilder: (_, i) {
-        final c = _savedChallenges[i];
-        return VideoGridTile(
-          key: ValueKey('saved_tile_${c.id}'),
-          video: c,
-          mark: Icons.bookmark_rounded,
-          onTap: () => _play(_savedChallenges, i, 'saved'),
-        );
-      },
+    return PreloadVideoStarts(
+      videos: _savedChallenges,
+      child: GridView.builder(
+        padding: videoGridPadding,
+        gridDelegate: videoGridDelegate,
+        itemCount: _savedChallenges.length,
+        itemBuilder: (_, i) {
+          final c = _savedChallenges[i];
+          return VideoGridTile(
+            key: ValueKey('saved_tile_${c.id}'),
+            video: c,
+            mark: Icons.bookmark_rounded,
+            onTap: () => _play(_savedChallenges, i, 'saved'),
+          );
+        },
+      ),
     );
   }
 
@@ -1197,6 +1262,147 @@ class _EmptyTab extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// One of your posts on its way up: first in Shorts from the moment you
+/// press Post, with how far along it is, and playable at once from the
+/// video on your phone — the upload does not have to finish first.
+class _PostingTile extends StatelessWidget {
+  final UploadJob job;
+  final String username;
+
+  const _PostingTile({super.key, required this.job, required this.username});
+
+  @override
+  Widget build(BuildContext context) {
+    final meta = job.postedAs;
+    final title = meta == null ? '' : '${meta.prefix} ${meta.subject}'.trim();
+    return ValueListenableBuilder<UploadJobState>(
+      valueListenable: job.state,
+      builder: (context, st, _) {
+        final failed = st.stage == UploadJobStage.failed;
+        final poster = job.posterPath;
+        final pct = (st.progress.clamp(0.0, 1.0) * 100).round();
+        return Pressable(
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) =>
+                  VideoPlayerPage(videoUrl: job.sourcePath, title: title),
+            ),
+          ),
+          pressedScale: 0.97,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (poster != null && File(poster).existsSync())
+                  Image.file(File(poster), fit: BoxFit.cover)
+                else
+                  const ColoredBox(color: Color(0xFF1C1C22)),
+                ColoredBox(color: Colors.black.withValues(alpha: 0.35)),
+                Positioned(
+                  top: 6,
+                  left: 6,
+                  right: 6,
+                  child: Row(
+                    children: [
+                      ArenaAvatar(name: username, size: 18),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          username,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Center(
+                  child: failed
+                      ? const Icon(Icons.error_outline_rounded,
+                          color: Colors.white, size: 30)
+                      : SizedBox(
+                          width: 38,
+                          height: 38,
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              CircularProgressIndicator(
+                                value: st.progress > 0 ? st.progress : null,
+                                strokeWidth: 3,
+                                color: Colors.white,
+                                backgroundColor: Colors.white24,
+                              ),
+                              Text(
+                                '$pct%',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                ),
+                Positioned(
+                  left: 8,
+                  right: 8,
+                  bottom: 7,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: failed
+                              ? const Color(0xFFD64545)
+                              : AppTheme.primary,
+                          borderRadius:
+                              BorderRadius.circular(AppTheme.radiusFull),
+                        ),
+                        child: Text(
+                          failed ? "Didn't post" : 'Posting…',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      if (title.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11.5,
+                            height: 1.2,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

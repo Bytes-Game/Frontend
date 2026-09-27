@@ -5,6 +5,7 @@ import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
+import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/shimmer_loading.dart';
 import 'package:myapp/widgets/smart_reels_feed.dart';
@@ -321,6 +322,66 @@ class VideoGridPlaceholder extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Fetches the opening second or two of the first videos in a grid as soon
+/// as the grid is on screen, so the one you tap starts at once.
+///
+/// This is what TikTok does on a profile. Your videos, like everyone's,
+/// play from the internet; they feel instant because the start of each was
+/// already fetched before you tapped. Here the grid used to fetch nothing
+/// until the tap, so every video on a profile started from a cold network.
+///
+/// Only the tab on screen asks — a tab's grid is only built while it is
+/// shown — and each new ask replaces the last, so moving to another tab
+/// moves the fetching with you.
+class PreloadVideoStarts extends StatefulWidget {
+  final List<ChallengeModel> videos;
+  final Widget child;
+
+  /// The first two rows.
+  static const int count = 6;
+
+  const PreloadVideoStarts({
+    super.key,
+    required this.videos,
+    required this.child,
+  });
+
+  @override
+  State<PreloadVideoStarts> createState() => _PreloadVideoStartsState();
+}
+
+class _PreloadVideoStartsState extends State<PreloadVideoStarts> {
+  String _asked = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _preload();
+  }
+
+  @override
+  void didUpdateWidget(PreloadVideoStarts old) {
+    super.didUpdateWidget(old);
+    _preload();
+  }
+
+  void _preload() {
+    final urls = [
+      for (final v in widget.videos.take(PreloadVideoStarts.count))
+        SmartReelsFeed.playbackUrlFor(v),
+    ].where((u) => u.isNotEmpty).toList();
+    // The same list again is not asked for again: asking restarts
+    // downloads, and a grid rebuilds far more often than its videos change.
+    final key = urls.join('|');
+    if (urls.isEmpty || key == _asked) return;
+    _asked = key;
+    VideoCacheService.instance.warm(urls);
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 /// Room at the bottom for the tab bar.

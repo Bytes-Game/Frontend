@@ -91,28 +91,31 @@ class _BattlesTabState extends State<BattlesTab>
     ];
     return RefreshIndicator(
       onRefresh: _load,
-      child: GridView.builder(
-        padding: videoGridPadding,
-        gridDelegate: videoGridDelegate,
-        itemCount: cards.length,
-        itemBuilder: (_, i) {
-          final card = cards[i];
-          final video = card.video;
-          return VideoGridTile(
-            key: ValueKey('battle_tile_${card.challengeId}'),
-            video: video ?? _stand(card),
-            badge: battleBadge(card),
-            trailing: battleTimeLeft(card),
-            onTap: () {
-              final play = widget.onPlay;
-              if (video != null && play != null) {
-                play(playable, playable.indexOf(video));
-              } else {
-                widget.onOpen(card.challengeId);
-              }
-            },
-          );
-        },
+      child: PreloadVideoStarts(
+        videos: playable,
+        child: GridView.builder(
+          padding: videoGridPadding,
+          gridDelegate: videoGridDelegate,
+          itemCount: cards.length,
+          itemBuilder: (_, i) {
+            final card = cards[i];
+            final video = card.video;
+            return VideoGridTile(
+              key: ValueKey('battle_tile_${card.challengeId}'),
+              video: video ?? _stand(card),
+              badge: battleBadge(card),
+              trailing: battleTimeLeft(card),
+              onTap: () {
+                final play = widget.onPlay;
+                if (video != null && play != null) {
+                  play(playable, playable.indexOf(video));
+                } else {
+                  widget.onOpen(card.challengeId);
+                }
+              },
+            );
+          },
+        ),
       ),
     );
   }
