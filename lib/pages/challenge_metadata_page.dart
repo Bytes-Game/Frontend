@@ -1,5 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:video_player/video_player.dart';
+
+import 'package:myapp/config/app_theme.dart';
 
 import 'package:myapp/config/constants.dart';
 import 'package:myapp/providers/data_provider.dart';
@@ -7,10 +12,15 @@ import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/upload_job_manager.dart';
+import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/suggest_field.dart';
 import 'package:myapp/widgets/tags_input.dart';
 
 /// Final step of the create-challenge flow.
+///
+/// At the top, a preview card: the clip playing beside the challenge's
+/// headline as people will see it, built live as the fields change, and
+/// tiltable in 3D. The Post button is pinned to the bottom of the screen.
 ///
 /// Form layout (top-to-bottom):
 ///   1. **Prefix** field — autocomplete against the curated template
@@ -295,120 +305,279 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
     return Scaffold(
       appBar: AppBar(
         elevation: 0,
-        title: const Text('Challenge details'),
+        centerTitle: false,
+        title: const Text('New challenge'),
       ),
-      body: SafeArea(
-        child: Form(
-          key: _formKey,
-          child: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              _section('Challenge'),
-              SuggestField<String>(
-                controller: _prefixCtl,
-                label: 'Prefix',
-                hint: 'Who is better at',
-                validator: _requiredText,
-                suggestions: _prefixSuggestions,
-                displayString: (s) => s,
-                buildRow: (s) => Text(s),
-                onQuery: _refreshPrefixSuggestions,
-              ),
-              const SizedBox(height: 12),
-              SuggestField<Map<String, dynamic>>(
-                controller: _subjectCtl,
-                label: 'Subject',
-                hint: 'pranks',
-                validator: _requiredText,
-                suggestions: _subjectSuggestions,
-                displayString: (m) => (m['subject'] as String?) ?? '',
-                buildRow: _subjectOptionTile,
-                onQuery: _refreshSubjectSuggestions,
-              ),
-              const SizedBox(height: 6),
-              _autoDetectHint(cs),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+          children: [
+            // What people will see, built live as you type. Drag it to
+            // tilt it.
+            _posterCard(),
+            const SizedBox(height: 22),
 
-              const SizedBox(height: 24),
-              _section('Visibility'),
-              _segmented(
-                cs: cs,
-                value: _visibility,
-                options: const [
-                  ('arena', 'Arena (everyone)'),
-                  ('friends', 'Friends only'),
-                ],
-                onChanged: (v) => setState(() => _visibility = v),
-              ),
-
-              const SizedBox(height: 24),
-              _section('Battle length'),
-              _segmented(
-                cs: cs,
-                value: _battleDays,
-                options: const [
-                  ('7', '1 week'),
-                  ('14', '2 weeks'),
-                  ('30', '30 days'),
-                ],
-                onChanged: (v) => setState(() => _battleDays = v),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Voting starts when someone accepts. You can make it longer '
-                'later, never shorter.',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: cs.onSurface.withValues(alpha: 0.6),
-                ),
-              ),
-
-              const SizedBox(height: 24),
-              _section('Category (optional)'),
-              _categoryDropdown(cs),
-
-              const SizedBox(height: 24),
-              _section('Tags (up to 8)'),
-              TagsInput(
-                selectedTags: _tags,
-                onChanged: (next) => setState(() {
-                  _tags
-                    ..clear()
-                    ..addAll(next);
-                }),
-                onQuery: _refreshTagSuggestions,
-                suggestions: _tagSuggestions,
-              ),
-
-              const SizedBox(height: 32),
-              FilledButton(
-                onPressed: _busy ? null : _submit,
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(52),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-                child: _busy
-                    ? SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: cs.onPrimary,
+            _section('Challenge'),
+            SuggestField<String>(
+              controller: _prefixCtl,
+              label: 'Prefix',
+              hint: 'Who is better at',
+              validator: _requiredText,
+              suggestions: _prefixSuggestions,
+              displayString: (s) => s,
+              buildRow: (s) => Text(s),
+              onQuery: _refreshPrefixSuggestions,
+            ),
+            // The common openings, one tap each.
+            if (_prefixSuggestions.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 34,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _prefixSuggestions.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 8),
+                  itemBuilder: (_, i) {
+                    final p = _prefixSuggestions[i];
+                    final chosen = _prefixCtl.text.trim() == p;
+                    return Pressable(
+                      onTap: () => setState(() => _prefixCtl.text = p),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: chosen ? kAccent : quietFill(context),
+                          borderRadius:
+                              BorderRadius.circular(AppTheme.radiusFull),
                         ),
-                      )
-                    : const Text(
-                        'Post Challenge',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
+                        child: Text(
+                          p,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: chosen ? Colors.white : cs.onSurface,
+                          ),
                         ),
                       ),
+                    );
+                  },
+                ),
               ),
-              const SizedBox(height: 24),
             ],
+            const SizedBox(height: 12),
+            SuggestField<Map<String, dynamic>>(
+              controller: _subjectCtl,
+              label: 'Subject',
+              hint: 'pranks',
+              validator: _requiredText,
+              suggestions: _subjectSuggestions,
+              displayString: (m) => (m['subject'] as String?) ?? '',
+              buildRow: _subjectOptionTile,
+              onQuery: _refreshSubjectSuggestions,
+            ),
+            const SizedBox(height: 8),
+            _autoDetectHint(cs),
+
+            _section('Who can see it'),
+            _choiceRow(
+              value: _visibility,
+              options: const [
+                ('arena', Icons.public_rounded, 'Everyone'),
+                ('friends', Icons.group_rounded, 'Friends only'),
+              ],
+              onChanged: (v) => setState(() => _visibility = v),
+            ),
+
+            _section('Battle length'),
+            _daysRow(),
+            const SizedBox(height: 8),
+            Text(
+              'Voting starts when someone accepts. You can make it longer '
+              'later, never shorter.',
+              style: TextStyle(fontSize: 12.5, color: quietText(context)),
+            ),
+
+            _section('Category (optional)'),
+            _categoryDropdown(cs),
+
+            _section('Tags (up to 8)'),
+            TagsInput(
+              selectedTags: _tags,
+              onChanged: (next) => setState(() {
+                _tags
+                  ..clear()
+                  ..addAll(next);
+              }),
+              onQuery: _refreshTagSuggestions,
+              suggestions: _tagSuggestions,
+            ),
+          ],
+        ),
+      ),
+      // Always in reach, however far down the form is scrolled.
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: SizedBox(
+            height: 52,
+            child: FilledButton(
+              onPressed: _busy ? null : _submit,
+              style: FilledButton.styleFrom(
+                backgroundColor: kAccent,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              child: _busy
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text(
+                      'Post Challenge',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+            ),
           ),
         ),
+      ),
+    );
+  }
+
+  /// The challenge as people will meet it: the clip playing beside the
+  /// headline, and who can see it and for how long. It changes as the
+  /// fields below change, and it tilts in 3D when dragged.
+  Widget _posterCard() {
+    final deep = Color.lerp(kAccent, Colors.black, 0.55)!;
+    final deeper = Color.lerp(kAccent, Colors.black, 0.86)!;
+    return TiltCard(
+      radius: 24,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [deep, deeper],
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: SizedBox(
+                width: 92,
+                height: 164,
+                child: _ClipPreview(path: widget.processedSourcePath),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: AnimatedBuilder(
+                animation: Listenable.merge([_prefixCtl, _subjectCtl]),
+                builder: (context, _) {
+                  final prefix = _prefixCtl.text.trim();
+                  final subject = _subjectCtl.text.trim();
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 4),
+                      const Text(
+                        'YOUR CHALLENGE',
+                        style: TextStyle(
+                          color: Colors.white54,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        prefix.isEmpty ? 'Who is better at' : prefix,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 16,
+                          height: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 160),
+                        child: Text(
+                          subject.isEmpty ? 'your subject?' : '$subject?',
+                          key: ValueKey(subject.isEmpty),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: subject.isEmpty
+                                ? Colors.white38
+                                : Colors.white,
+                            fontSize: 24,
+                            height: 1.15,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.4,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          _posterChip(
+                            _visibility == 'friends'
+                                ? Icons.group_rounded
+                                : Icons.public_rounded,
+                            _visibility == 'friends' ? 'Friends' : 'Everyone',
+                          ),
+                          _posterChip(
+                            Icons.timer_outlined,
+                            '$_battleDays-day battle',
+                          ),
+                        ],
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _posterChip(IconData icon, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: Colors.white),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -460,7 +629,7 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
           const SizedBox(width: 6),
           Expanded(
             child: Text(
-              'Energy is auto-detected from your subject + category.',
+              'Energy is worked out from your subject and category.',
               style: TextStyle(
                 fontSize: 12,
                 color: cs.onSurface.withValues(alpha: 0.55),
@@ -474,53 +643,150 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
 
   // ── Small chrome helpers ───────────────────────────────────────────
 
+  /// A small grey heading over each group, the way iPhone Settings does it.
   Widget _section(String label) {
-    final cs = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(4, 24, 4, 8),
       child: Text(
         label.toUpperCase(),
         style: TextStyle(
-          color: cs.onSurface.withValues(alpha: 0.78),
+          color: quietText(context),
           fontSize: 12,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w600,
           letterSpacing: 0.6,
         ),
       ),
     );
   }
 
-  Widget _segmented({
-    required ColorScheme cs,
+  /// Two or three choices side by side, the chosen one filled in.
+  Widget _choiceRow({
     required String value,
-    required List<(String, String)> options,
+    required List<(String, IconData, String)> options,
     required ValueChanged<String> onChanged,
   }) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: options.map((opt) {
-        final selected = opt.$1 == value;
-        return ChoiceChip(
-          label: Text(opt.$2),
-          selected: selected,
-          onSelected: (_) => onChanged(opt.$1),
-          selectedColor: cs.primary,
-          backgroundColor: cs.surfaceContainerHighest,
-          labelStyle: TextStyle(
-            color: selected ? cs.onPrimary : cs.onSurface,
-            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-          ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-            side: BorderSide(
-              color: selected
-                  ? Colors.transparent
-                  : cs.outlineVariant.withValues(alpha: 0.5),
+    final cs = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        for (var i = 0; i < options.length; i++) ...[
+          if (i > 0) const SizedBox(width: 8),
+          Expanded(
+            child: Pressable(
+              onTap: () => onChanged(options[i].$1),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                height: 46,
+                decoration: BoxDecoration(
+                  color: options[i].$1 == value ? kAccent : quietFill(context),
+                  borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      options[i].$2,
+                      size: 18,
+                      color: options[i].$1 == value
+                          ? Colors.white
+                          : cs.onSurface,
+                    ),
+                    const SizedBox(width: 6),
+                    // With large text on a narrow phone the label can be
+                    // wider than its half of the row: cut it short rather
+                    // than run past the edge.
+                    Flexible(
+                      child: Text(
+                        options[i].$3,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: options[i].$1 == value
+                              ? Colors.white
+                              : cs.onSurface,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
-        );
-      }).toList(),
+        ],
+      ],
+    );
+  }
+
+  /// How long the battle runs, as three tiles with the number large. The
+  /// chosen one lifts off the page.
+  Widget _daysRow() {
+    final cs = Theme.of(context).colorScheme;
+    const options = ['7', '14', '30'];
+    return Row(
+      children: [
+        for (var i = 0; i < options.length; i++) ...[
+          if (i > 0) const SizedBox(width: 10),
+          Expanded(
+            child: Pressable(
+              onTap: () => setState(() => _battleDays = options[i]),
+              // Only the lift springs past its mark and back. The colour
+              // and shadow must not: a shadow pushed past "none" has a
+              // blur below zero, which Flutter refuses to draw.
+              child: AnimatedSlide(
+                offset: Offset(0, _battleDays == options[i] ? -0.05 : 0),
+                duration: const Duration(milliseconds: 260),
+                curve: Curves.easeOutBack,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOutCubic,
+                  height: 78,
+                  decoration: BoxDecoration(
+                    color: _battleDays == options[i]
+                        ? kAccent
+                        : quietFill(context),
+                    borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+                    boxShadow: _battleDays == options[i]
+                        ? [
+                            BoxShadow(
+                              color: kAccent.withValues(alpha: 0.35),
+                              blurRadius: 16,
+                              offset: const Offset(0, 8),
+                            ),
+                          ]
+                        : null,
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        options[i],
+                        style: TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.w700,
+                          height: 1,
+                          color: _battleDays == options[i]
+                              ? Colors.white
+                              : cs.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'days',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: _battleDays == options[i]
+                              ? Colors.white70
+                              : quietText(context),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -538,10 +804,10 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
   /// evidence, not a gap that has to be filled.
   Widget _categoryDropdown(ColorScheme cs) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 14),
       decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
+        color: quietFill(context),
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
@@ -577,5 +843,93 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
   String? _requiredText(String? v) {
     if (v == null || v.trim().isEmpty) return 'Required';
     return null;
+  }
+}
+
+/// The clip itself, small, playing on a silent loop — so the preview card
+/// shows the video that is being posted, not a placeholder.
+///
+/// If the phone cannot open it here (it is still being written, or this
+/// is a build without a video player), the card shows a quiet film icon
+/// instead; nothing about posting depends on this preview.
+class _ClipPreview extends StatefulWidget {
+  final String path;
+  const _ClipPreview({required this.path});
+
+  @override
+  State<_ClipPreview> createState() => _ClipPreviewState();
+}
+
+class _ClipPreviewState extends State<_ClipPreview> {
+  VideoPlayerController? _c;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _open();
+  }
+
+  Future<void> _open() async {
+    final c = VideoPlayerController.file(File(widget.path));
+    try {
+      await c.initialize();
+      await c.setVolume(0);
+      await c.setLooping(true);
+      if (!mounted) {
+        await c.dispose();
+        return;
+      }
+      setState(() => _c = c);
+      await c.play();
+    } catch (e) {
+      // Say so: a preview that silently never appears looks like a slow one.
+      debugPrint('challenge details: clip preview could not open: $e');
+      // And let go of the half-opened player, or it holds a decoder for
+      // as long as the page is open.
+      c.dispose().catchError(
+        (Object e) =>
+            debugPrint('challenge details: clip preview close failed: $e'),
+      );
+      if (mounted) setState(() => _failed = true);
+    }
+  }
+
+  @override
+  void dispose() {
+    // ignore: discarded_futures
+    _c?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = _c;
+    if (c == null || !c.value.isInitialized) {
+      return ColoredBox(
+        color: Colors.black26,
+        child: Center(
+          child: _failed
+              ? const Icon(Icons.movie_outlined, color: Colors.white54, size: 30)
+              : const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white54,
+                  ),
+                ),
+        ),
+      );
+    }
+    return FittedBox(
+      fit: BoxFit.cover,
+      clipBehavior: Clip.hardEdge,
+      child: SizedBox(
+        width: c.value.size.width,
+        height: c.value.size.height,
+        child: VideoPlayer(c),
+      ),
+    );
   }
 }

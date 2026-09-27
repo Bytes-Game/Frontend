@@ -22,16 +22,28 @@ enum CreateChoice { record, upload }
 /// Letting go anywhere else leaves the burst open, so a hold that was only
 /// a hold does not throw the choice away. Tapping the dimmed background or
 /// the × closes it.
+///
+/// It opens upwards from a button at the bottom of the screen. From a
+/// button near the top it opens downwards instead, and from a button near
+/// a side it swings away from that side, so neither choice ends up off the
+/// edge of the screen.
 class CreateBurst {
   CreateBurst._();
 
-  /// Opens the burst at [anchor], the centre of the + button in global
-  /// coordinates. [onChoose] runs after the burst has closed.
+  /// Opens the burst at [anchor], the centre of the button that opened it,
+  /// in global coordinates. [onChoose] runs after the burst has closed.
+  ///
+  /// [title] is the line shown above the choices on a tap. [anchorSize] and
+  /// [anchorRadius] are the shape of that button, so the × that closes the
+  /// burst sits exactly on top of it.
   static CreateBurstHandle show(
     BuildContext context, {
     required Offset anchor,
     required bool fromHold,
     required void Function(CreateChoice) onChoose,
+    String title = 'Create a challenge',
+    Size anchorSize = const Size(44, 30),
+    double anchorRadius = 9,
   }) {
     final handle = CreateBurstHandle._();
     late final OverlayEntry entry;
@@ -39,6 +51,9 @@ class CreateBurst {
       builder: (_) => _BurstOverlay(
         anchor: anchor,
         fromHold: fromHold,
+        title: title,
+        anchorSize: anchorSize,
+        anchorRadius: anchorRadius,
         handle: handle,
         onDone: (choice) {
           entry.remove();
@@ -89,11 +104,11 @@ class _Choice {
   final IconData icon;
   final String label;
 
-  /// Direction from the + button, in degrees; -90 is straight up.
-  final double angle;
+  /// Which side of the fan it sits on: -1 on the left, 1 on the right.
+  final double side;
   final Color color;
 
-  const _Choice(this.value, this.icon, this.label, this.angle, this.color);
+  const _Choice(this.value, this.icon, this.label, this.side, this.color);
 }
 
 const _choices = [
@@ -101,14 +116,14 @@ const _choices = [
     CreateChoice.record,
     Icons.videocam_rounded,
     'Record',
-    -128,
+    -1,
     Color(0xFFFF453A),
   ),
   _Choice(
     CreateChoice.upload,
     Icons.photo_library_rounded,
     'Upload',
-    -52,
+    1,
     AppTheme.primary,
   ),
 ];
@@ -116,12 +131,18 @@ const _choices = [
 class _BurstOverlay extends StatefulWidget {
   final Offset anchor;
   final bool fromHold;
+  final String title;
+  final Size anchorSize;
+  final double anchorRadius;
   final CreateBurstHandle handle;
   final void Function(CreateChoice?) onDone;
 
   const _BurstOverlay({
     required this.anchor,
     required this.fromHold,
+    required this.title,
+    required this.anchorSize,
+    required this.anchorRadius,
     required this.handle,
     required this.onDone,
   });
@@ -144,6 +165,14 @@ class _BurstOverlayState extends State<_BurstOverlay>
   /// How close the finger must be to a choice to be "on" it.
   static const double _hitRadius = 50;
 
+  /// How far either side of the middle of the fan each choice sits, in
+  /// degrees.
+  static const double _spread = 38;
+
+  /// Which way the fan opens, in degrees: -90 is straight up, 90 straight
+  /// down. Worked out once the screen size is known.
+  double _facing = -90;
+
   int? _hovered;
   bool _closing = false;
 
@@ -154,16 +183,52 @@ class _BurstOverlayState extends State<_BurstOverlay>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _facing = _aim(MediaQuery.sizeOf(context), MediaQuery.paddingOf(context));
+  }
+
+  /// Up if there is room above the button, down if not. Then, if either
+  /// choice would land past the side of the screen, swing the fan away from
+  /// that side, a few degrees at a time, until both fit.
+  double _aim(Size screen, EdgeInsets pad) {
+    final roomAbove = widget.anchor.dy - pad.top;
+    final base = roomAbove < _reach + 130 ? 90.0 : -90.0;
+    bool fits(double facing) {
+      for (final c in _choices) {
+        final x = (widget.anchor + _offsetAt(facing, c.side, 1)).dx;
+        if (x < 58 || x > screen.width - 58) return false;
+      }
+      return true;
+    }
+
+    for (var turn = 0.0; turn <= 90; turn += 4) {
+      if (fits(base - turn)) return base - turn;
+      if (fits(base + turn)) return base + turn;
+    }
+    return base;
+  }
+
+  /// Where a choice sits relative to the button. Opening downwards, the
+  /// fan is mirrored so Record is still on the left.
+  Offset _offsetAt(double facing, double side, double t) {
+    final down = math.sin(facing * math.pi / 180) > 0;
+    final deg = facing + side * _spread * (down ? -1 : 1);
+    final a = deg * math.pi / 180;
+    return Offset(math.cos(a), math.sin(a)) * (_reach * t);
+  }
+
+  bool get _opensDown => math.sin(_facing * math.pi / 180) > 0;
+
+  @override
   void dispose() {
     widget.handle.removeListener(_onPointer);
     _open.dispose();
     super.dispose();
   }
 
-  Offset _centreOf(int i, double t) {
-    final a = _choices[i].angle * math.pi / 180;
-    return widget.anchor + Offset(math.cos(a), math.sin(a)) * (_reach * t);
-  }
+  Offset _centreOf(int i, double t) =>
+      widget.anchor + _offsetAt(_facing, _choices[i].side, t);
 
   int? _choiceAt(Offset p) {
     for (var i = 0; i < _choices.length; i++) {
@@ -220,15 +285,17 @@ class _BurstOverlayState extends State<_BurstOverlay>
                   ),
                 ),
               ),
-              // What to do, above the arc.
+              // What to do, just past the choices on the open side, and
+              // centred over them rather than over the screen, so it reads
+              // as part of the fan even when the fan has swung to one side.
               Positioned(
-                left: 0,
-                right: 0,
-                top: widget.anchor.dy - _reach - 104,
+                left: _titleLeft(MediaQuery.sizeOf(context).width),
+                width: _titleWidth,
+                top: _titleTop(),
                 child: Opacity(
                   opacity: t,
                   child: Text(
-                    widget.fromHold ? 'Slide to choose' : 'Create a challenge',
+                    widget.fromHold ? 'Slide to choose' : widget.title,
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       color: Colors.white,
@@ -240,20 +307,22 @@ class _BurstOverlayState extends State<_BurstOverlay>
                 ),
               ),
               for (var i = 0; i < _choices.length; i++) _buildChoice(i, fly),
-              // The + turns into a × that closes.
+              // The button turns into a × that closes.
               Positioned(
-                left: widget.anchor.dx - 22,
-                top: widget.anchor.dy - 15,
+                left: widget.anchor.dx - widget.anchorSize.width / 2,
+                top: widget.anchor.dy - widget.anchorSize.height / 2,
                 child: GestureDetector(
                   onTap: () => _finish(null),
                   child: Transform.rotate(
                     angle: t * math.pi / 4,
                     child: Container(
-                      width: 44,
-                      height: 30,
+                      width: widget.anchorSize.width,
+                      height: widget.anchorSize.height,
                       decoration: BoxDecoration(
                         color: Colors.white,
-                        borderRadius: BorderRadius.circular(9),
+                        borderRadius: BorderRadius.circular(
+                          widget.anchorRadius,
+                        ),
                       ),
                       alignment: Alignment.center,
                       child: const Icon(
@@ -270,6 +339,23 @@ class _BurstOverlayState extends State<_BurstOverlay>
         );
       },
     );
+  }
+
+  static const double _titleWidth = 220;
+
+  double _titleLeft(double screenWidth) {
+    final mid = (_centreOf(0, 1).dx + _centreOf(1, 1).dx) / 2;
+    return (mid - _titleWidth / 2).clamp(
+      8.0,
+      math.max(8.0, screenWidth - _titleWidth - 8),
+    );
+  }
+
+  /// Below the lower choice (circle and label) when the fan opens down;
+  /// above the higher one when it opens up.
+  double _titleTop() {
+    final a = _centreOf(0, 1).dy, b = _centreOf(1, 1).dy;
+    return _opensDown ? math.max(a, b) + 76 : math.min(a, b) - 96;
   }
 
   Widget _buildChoice(int i, double fly) {

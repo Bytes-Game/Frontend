@@ -8,7 +8,6 @@ import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/blocked_users_page.dart';
 import 'package:myapp/pages/challenge_detail_page.dart';
 import 'package:myapp/pages/chat_conversation_page.dart';
-import 'package:myapp/pages/create_challenge_page.dart';
 import 'package:myapp/pages/edit_profile_page.dart';
 import 'package:myapp/pages/followers_page.dart';
 import 'package:myapp/pages/following_page.dart';
@@ -22,11 +21,13 @@ import 'package:myapp/pages/watch_history_page.dart';
 import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/create_flow.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/battle_record_panel.dart';
 import 'package:myapp/widgets/battles_tab.dart';
+import 'package:myapp/widgets/create_burst.dart';
 import 'package:myapp/widgets/profile_arena_header.dart';
 import 'package:myapp/widgets/scroll_reveal.dart';
 import 'package:myapp/widgets/shimmer_loading.dart';
@@ -578,21 +579,32 @@ class _ProfilePageState extends State<ProfilePage>
                     ),
                   );
                 },
-                onChallenge: () {
+                onChallenge: (anchor) {
                   EventTracker.instance.trackTap(
                     target: 'profile_open_battle',
                     pageName: pageName,
                     params: {'targetUserId': widget.user.id},
                   );
-                  // The create-challenge flow doesn't yet accept a
-                  // pre-filled opponent — it lets the user open a
-                  // challenge that anyone can respond to. We open the
-                  // page directly; targeted-opponent deep-linking is a
-                  // future task. Toast so the user knows.
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const CreateChallengePage(),
-                    ),
+                  // The same Record / Upload pop-out as the + button,
+                  // rising out of the Battle button itself. It starts an
+                  // open challenge anyone can answer: naming this person
+                  // as the opponent is not built yet.
+                  CreateBurst.show(
+                    context,
+                    anchor: anchor,
+                    fromHold: false,
+                    title: 'Start a battle',
+                    anchorSize: const Size(44, 44),
+                    anchorRadius: 22,
+                    onChoose: (choice) {
+                      if (!mounted) return;
+                      switch (choice) {
+                        case CreateChoice.record:
+                          CreateFlow.record(context, from: 'profile_battle');
+                        case CreateChoice.upload:
+                          CreateFlow.upload(context, from: 'profile_battle');
+                      }
+                    },
                   );
                 },
                 compact: _compact,
@@ -925,7 +937,7 @@ class _ProfileHeader extends StatelessWidget {
   final VoidCallback onTapFollowing;
   final VoidCallback onFollowToggle;
   final VoidCallback onMessage;
-  final VoidCallback onChallenge;
+  final ValueChanged<Offset> onChallenge;
   final String Function(int) compact;
 
   const _ProfileHeader({
@@ -1058,7 +1070,10 @@ class _OtherActionRow extends StatelessWidget {
   final bool isFollowing;
   final VoidCallback onFollowToggle;
   final VoidCallback onMessage;
-  final VoidCallback onChallenge;
+
+  /// Gets the centre of the Battle button, so the pop-out can rise out of
+  /// it.
+  final ValueChanged<Offset> onChallenge;
 
   const _OtherActionRow({
     required this.isFollowing,
@@ -1121,11 +1136,16 @@ class _OtherActionRow extends StatelessWidget {
           onTap: onMessage,
         ),
         const SizedBox(width: AppTheme.space8),
-        IconBubble(
-          icon: Icons.bolt_rounded,
-          tooltip: 'Challenge to a battle',
-          size: 44,
-          onTap: onChallenge,
+        Builder(
+          builder: (bubble) => IconBubble(
+            icon: Icons.bolt_rounded,
+            tooltip: 'Challenge to a battle',
+            size: 44,
+            onTap: () {
+              final box = bubble.findRenderObject()! as RenderBox;
+              onChallenge(box.localToGlobal(box.size.center(Offset.zero)));
+            },
+          ),
         ),
       ],
     );
