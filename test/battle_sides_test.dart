@@ -283,7 +283,11 @@ void main() {
       expect(like, contains('item.faces.showingOpponent'));
       expect(like, contains('_likeAnswer(item)'));
       expect(code, contains('ApiService.likeResponse('));
-      expect(code, contains('item.heartOn ? Icons.favorite'));
+      // Either spelling of the heart, on one line or split over two.
+      expect(
+        code,
+        matches(RegExp(r'item\.heartOn\s*\?\s*Icons\.favorite')),
+      );
       expect(code, contains('_compact(item.heartCount)'));
     });
   });

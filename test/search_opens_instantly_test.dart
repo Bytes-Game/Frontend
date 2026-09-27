@@ -47,6 +47,9 @@ http.Response jsonBody(Object o) => http.Response.bytes(
 /// How many times the app asked the server for the grid.
 late int exploreAsks;
 
+/// The last grid request, to see whether it was a refresh.
+Uri? lastExploreAsk;
+
 /// The ids the server hands out next.
 late List<int> nextIds;
 
@@ -62,6 +65,7 @@ void fakeServer() {
       final p = req.url.path;
       if (p.contains('/feed/explore')) {
         exploreAsks++;
+        lastExploreAsk = req.url;
         final hold = holdExplore;
         if (hold != null) await hold.future;
         return jsonBody({
@@ -133,6 +137,27 @@ void main() {
     expect(find.text('Find people and battles'), findsNothing);
     await settle(t);
     expect(exploreAsks, 1, reason: 'a fresh list is not fetched again');
+  });
+
+  testWidgets('pulling the grid down asks for a refresh and shows the new '
+      'set', (t) async {
+    await t.pumpWidget(app(const SearchPage()));
+    await settle(t);
+    expect(tile(1), findsOneWidget);
+    expect(lastExploreAsk!.queryParameters['refresh'], isNull);
+
+    nextIds = [for (var i = 201; i <= 215; i++) i];
+    await t.fling(
+      find.byType(CustomScrollView).first,
+      const Offset(0, 400),
+      1200,
+    );
+    await settle(t);
+    await t.pump(const Duration(seconds: 1));
+    await settle(t);
+    expect(lastExploreAsk!.queryParameters['refresh'], 'true');
+    expect(tile(201), findsOneWidget);
+    expect(tile(1), findsNothing);
   });
 
   testWidgets('with nothing in hand yet it shows a loading grid, not the '

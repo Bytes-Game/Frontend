@@ -1341,11 +1341,14 @@ class ApiService {
   /// user follows. Returns the same JSON shape as the smart and explore feeds
   /// so the SmartReelsFeed widget can parse all three with one parser.
   static Future<Map<String, dynamic>> getFollowingFeedV2(
-      String userId, {int page = 1, int limit = 20}) async {
+      String userId, {int page = 1, int limit = 20, bool refresh = false}) async {
     try {
       final res = await _authHttp.get(Uri.parse(
         '$_base/api/v1/feed/following/v2?userId=$userId&page=$page&limit=$limit'
-        '$_deviceFitQuery',
+        '$_deviceFitQuery'
+        // Pull-to-refresh: the server resets this session's "already shown"
+        // counters so the page is not the same one again.
+        '${refresh ? '&refresh=true' : ''}',
       )).timeout(const Duration(seconds: 30));
       if (res.statusCode == 200) {
         final body = json.decode(res.body) as Map<String, dynamic>;
@@ -1790,17 +1793,74 @@ class ApiService {
 
   /// GET /api/v1/search/recent — the caller's own recent queries (the
   /// same list the For You ranker's search-affinity signal reads).
-  static Future<List<String>> getRecentSearches() async {
+  static Future<List<String>> getRecentSearches() async =>
+      (await getSearchHistory()).recent;
+
+  /// GET /api/v1/search/recent — what the search bar remembers: recent
+  /// searches, and the accounts opened from search, newest first.
+  static Future<({List<String> recent, List<UserModel> accounts})>
+      getSearchHistory() async {
     try {
       final res = await _authHttp.get(Uri.parse('$_base/api/v1/search/recent'));
       if (res.statusCode == 200) {
         final body = json.decode(res.body) as Map<String, dynamic>;
-        return (body['recent'] as List? ?? []).map((e) => e.toString()).toList();
+        return (
+          recent: (body['recent'] as List? ?? [])
+              .map((e) => e.toString())
+              .toList(),
+          accounts: (body['accounts'] as List? ?? [])
+              .whereType<Map<String, dynamic>>()
+              .map(UserModel.fromJson)
+              .toList(),
+        );
       }
-      return [];
-    } catch (_) {
-      return [];
+      debugPrint('[search] history answered ${res.statusCode}; '
+          'showing none');
+    } catch (e) {
+      debugPrint('[search] history could not be read: $e; showing none');
     }
+    return (recent: <String>[], accounts: <UserModel>[]);
+  }
+
+  /// POST /api/v1/search/recent/account — an account was opened from
+  /// search, so it goes to the top of the search history.
+  static Future<void> recordSearchedAccount(String userId) async {
+    try {
+      final res = await _authHttp.post(
+        Uri.parse('$_base/api/v1/search/recent/account'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'userId': userId}),
+      );
+      if (res.statusCode != 200) {
+        debugPrint('[search] remembering account $userId answered '
+            '${res.statusCode}; it will not be in the history');
+      }
+    } catch (e) {
+      debugPrint('[search] remembering account $userId failed: $e');
+    }
+  }
+
+  /// DELETE /api/v1/search/recent — take something out of the search
+  /// history: one search ([query]), one account ([userId]), or with
+  /// neither, everything. The server also stops using a deleted search to
+  /// shape the feed. Says whether it worked, so the page can put the entry
+  /// back rather than pretend.
+  static Future<bool> deleteSearchHistory({
+    String? query,
+    String? userId,
+  }) async {
+    final params = <String, String>{'q': ?query, 'userId': ?userId};
+    try {
+      final res = await _authHttp.delete(
+        Uri.parse('$_base/api/v1/search/recent')
+            .replace(queryParameters: params.isEmpty ? null : params),
+      );
+      if (res.statusCode == 200) return true;
+      debugPrint('[search] deleting from history answered ${res.statusCode}');
+    } catch (e) {
+      debugPrint('[search] deleting from history failed: $e');
+    }
+    return false;
   }
 
   /// GET /api/v1/search/trending — the platform's current top queries.

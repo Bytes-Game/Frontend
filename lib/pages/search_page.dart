@@ -104,6 +104,11 @@ class _SearchPageState extends State<SearchPage>
   // focus — the page itself opens straight onto videos.
   List<String> _recentSearches = [];
   List<String> _trendingSearches = [];
+
+  /// Accounts opened from search, newest first — part of the history, the
+  /// way they are in every app people know. Kept by the server so they
+  /// follow the account to another phone.
+  List<UserModel> _recentAccounts = [];
   bool _searchFocused = false;
 
   @override
@@ -148,14 +153,111 @@ class _SearchPageState extends State<SearchPage>
   }
 
   Future<void> _loadSearchSuggestions() async {
-    final recent = await ApiService.getRecentSearches();
+    final history = await ApiService.getSearchHistory();
     final trending = await ApiService.getTrendingSearches();
     if (mounted) {
       setState(() {
-        _recentSearches = recent;
+        _recentSearches = history.recent;
+        _recentAccounts = history.accounts;
         _trendingSearches = trending;
       });
     }
+  }
+
+  /// An account was opened from search: put it at the top of the history,
+  /// here at once and on the server for next time.
+  void _rememberAccount(UserModel user) {
+    final me = Provider.of<DataProvider>(context, listen: false).user?.id;
+    if (user.id == me) return;
+    setState(() {
+      _recentAccounts = [
+        user,
+        ..._recentAccounts.where((u) => u.id != user.id),
+      ].take(10).toList();
+    });
+    unawaited(ApiService.recordSearchedAccount(user.id));
+  }
+
+  void _openProfileFromSearch(UserModel user) {
+    _rememberAccount(user);
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ProfilePage(user: user, isEmbedded: false),
+      ),
+    );
+  }
+
+  /// Take one search out of the history. It goes at once; if the server
+  /// could not delete it, it comes back and says so, rather than
+  /// reappearing silently on the next visit.
+  Future<void> _forgetSearch(String q) async {
+    final before = _recentSearches;
+    setState(() => _recentSearches = [...before]..remove(q));
+    final ok = await ApiService.deleteSearchHistory(query: q);
+    if (!ok && mounted) {
+      setState(() => _recentSearches = before);
+      _couldNotDelete();
+    }
+  }
+
+  Future<void> _forgetAccount(UserModel user) async {
+    final before = _recentAccounts;
+    setState(() => _recentAccounts =
+        before.where((u) => u.id != user.id).toList());
+    final ok = await ApiService.deleteSearchHistory(userId: user.id);
+    if (!ok && mounted) {
+      setState(() => _recentAccounts = before);
+      _couldNotDelete();
+    }
+  }
+
+  Future<void> _clearHistory() async {
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear search history?'),
+        content: const Text(
+          'Your recent searches and the accounts you opened will be removed. '
+          'Your feed will stop using those searches too.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.error),
+            child: const Text('Clear all'),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    final searches = _recentSearches;
+    final accounts = _recentAccounts;
+    setState(() {
+      _recentSearches = [];
+      _recentAccounts = [];
+    });
+    final ok = await ApiService.deleteSearchHistory();
+    if (!ok && mounted) {
+      setState(() {
+        _recentSearches = searches;
+        _recentAccounts = accounts;
+      });
+      _couldNotDelete();
+    }
+  }
+
+  void _couldNotDelete() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Couldn't delete that. Check your connection and "
+            'try again.'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   @override
@@ -508,7 +610,6 @@ class _SearchPageState extends State<SearchPage>
   /// as a list, and what everyone is searching as chips. Tapping either runs
   /// it — the classic search entry.
   Widget _buildSuggestionsPanel() {
-    final cs = Theme.of(context).colorScheme;
     void run(String q, String kind) {
       EventTracker.instance.trackTap(
         target: 'search_suggestion_$kind',
@@ -519,7 +620,9 @@ class _SearchPageState extends State<SearchPage>
       _search(q);
     }
 
-    if (_recentSearches.isEmpty && _trendingSearches.isEmpty) {
+    final hasHistory =
+        _recentSearches.isNotEmpty || _recentAccounts.isNotEmpty;
+    if (!hasHistory && _trendingSearches.isEmpty) {
       return Padding(
         padding: const EdgeInsets.only(top: 48),
         child: Text(
@@ -533,35 +636,44 @@ class _SearchPageState extends State<SearchPage>
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.only(bottom: 24),
       children: [
-        if (_recentSearches.isNotEmpty) ...[
-          const SectionTitle(
+        if (hasHistory) ...[
+          SectionTitle(
             title: 'Recent',
-            padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
+            action: 'Clear all',
+            onAction: _clearHistory,
+            padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
           ),
+          // People first: an account you looked at is usually the thing
+          // you came back for.
+          for (final u in _recentAccounts.take(5))
+            _HistoryRow(
+              key: ValueKey('history_account_${u.id}'),
+              leading: ArenaAvatar(name: u.username, size: 36),
+              title: u.fullName.isNotEmpty ? u.fullName : u.username,
+              subtitle: u.fullName.isNotEmpty
+                  ? '@${u.username} · ${u.league}'
+                  : u.league,
+              locked: u.visibility == 'friends',
+              onTap: () => _openProfileFromSearch(u),
+              onRemove: () => _forgetAccount(u),
+            ),
           for (final q in _recentSearches.take(8))
-            InkWell(
-              onTap: () => run(q, 'recent'),
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                child: Row(
-                  children: [
-                    Icon(Icons.history_rounded,
-                        size: 20, color: quietText(context)),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        q,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 16, color: cs.onSurface),
-                      ),
-                    ),
-                    Icon(Icons.north_west_rounded,
-                        size: 18, color: quietText(context)),
-                  ],
+            _HistoryRow(
+              key: ValueKey('history_search_$q'),
+              leading: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: quietFill(context),
                 ),
+                alignment: Alignment.center,
+                child: Icon(Icons.history_rounded,
+                    size: 19, color: quietText(context)),
               ),
+              title: q,
+              onTap: () => run(q, 'recent'),
+              onRemove: () => _forgetSearch(q),
             ),
         ],
         if (_trendingSearches.isNotEmpty) ...[
@@ -904,11 +1016,7 @@ class _SearchPageState extends State<SearchPage>
     showProfileCard3D(
       context,
       user: user,
-      onOpenProfile: () => Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => ProfilePage(user: user, isEmbedded: false),
-        ),
-      ),
+      onOpenProfile: () => _openProfileFromSearch(user),
     );
   }
 
@@ -932,11 +1040,7 @@ class _SearchPageState extends State<SearchPage>
           position: position,
         );
         _lastQueryHadResultTap = true;
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => ProfilePage(user: user, isEmbedded: false),
-          ),
-        );
+        _openProfileFromSearch(user);
       },
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 12, 8),
@@ -1089,6 +1193,89 @@ class _SearchPageState extends State<SearchPage>
 
 /// Follow, in blue, or Following, in grey — the same pair everywhere a
 /// person is listed.
+/// One line of the search history: a picture or icon, what it was, and an
+/// × to take it out. Tap the row to search it again or open the account.
+class _HistoryRow extends StatelessWidget {
+  final Widget leading;
+  final String title;
+  final String? subtitle;
+  final bool locked;
+  final VoidCallback onTap;
+  final VoidCallback onRemove;
+
+  const _HistoryRow({
+    super.key,
+    required this.leading,
+    required this.title,
+    this.subtitle,
+    this.locked = false,
+    required this.onTap,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 6, 4, 6),
+        child: Row(
+          children: [
+            leading,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 15.5,
+                            fontWeight: subtitle == null
+                                ? FontWeight.w400
+                                : FontWeight.w600,
+                            color: cs.onSurface,
+                          ),
+                        ),
+                      ),
+                      if (locked) ...[
+                        const SizedBox(width: 4),
+                        Icon(Icons.lock_rounded,
+                            size: 12, color: quietText(context)),
+                      ],
+                    ],
+                  ),
+                  if (subtitle != null)
+                    Text(
+                      subtitle!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          TextStyle(fontSize: 12.5, color: quietText(context)),
+                    ),
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: 'Remove from history',
+              onPressed: onRemove,
+              icon: Icon(Icons.close_rounded,
+                  size: 19, color: quietText(context)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _FollowButton extends StatelessWidget {
   final bool following;
   final VoidCallback onTap;
