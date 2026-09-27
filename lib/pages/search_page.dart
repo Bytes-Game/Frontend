@@ -11,6 +11,7 @@ import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/explore_grid_cache.dart';
 import 'package:myapp/widgets/profile_card_3d.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/pages/search_reels_viewer_page.dart';
@@ -53,7 +54,19 @@ class _SearchPageState extends State<SearchPage>
   // Empty-state grid feed. Backed by /api/v1/feed/explore — same algorithm
   // as the Explore tab (see architectural note above). We render only the
   // challenge-typed entries so the grid stays a pure video surface.
+  //
+  // Starts from whatever the app already has (see ExploreGridCache), so the
+  // page opens with its videos rather than empty.
   List<ChallengeModel> _exploreChallenges = [];
+
+  /// Asking the server for the grid right now. With nothing in hand yet the
+  /// page shows a grid of placeholders, not the "nothing here" screen: an
+  /// answer that has not arrived is not an empty answer.
+  bool _exploreLoading = false;
+
+  /// The grid's scroll position, so a list that arrives late can tell
+  /// whether it may replace the one on screen. See _loadExploreChallenges.
+  final _gridScroll = ScrollController();
   bool _loading = false;
   bool _hasSearched = false;
 
@@ -114,7 +127,16 @@ class _SearchPageState extends State<SearchPage>
     _focusNode.addListener(() {
       if (mounted) setState(() => _searchFocused = _focusNode.hasFocus);
     });
-    _loadExploreChallenges();
+    // The videos from last time, or from the prefetch that ran after the
+    // app opened, go up at once. Only a missing or old list is asked for
+    // again, and an old one stays on screen while it is.
+    final cache = ExploreGridCache.instance;
+    _exploreChallenges = cache.items;
+    debugPrint(
+      '[search_page] opened with ${_exploreChallenges.length} videos '
+      'already in hand${cache.isStale ? '; fetching a fresh list' : ''}',
+    );
+    if (cache.isStale) _loadExploreChallenges();
     _loadSearchSuggestions();
   }
 
@@ -146,6 +168,7 @@ class _SearchPageState extends State<SearchPage>
       );
     }
     _previewCoord.dispose();
+    _gridScroll.dispose();
     _tabCtrl.dispose();
     _searchCtrl.dispose();
     _focusNode.dispose();
@@ -167,25 +190,29 @@ class _SearchPageState extends State<SearchPage>
   /// the user watched 30 videos — and stamping them as watched is what let a
   /// couple of visits mark the entire catalog as seen, which then pushed every
   /// other feed surface onto already-watched content.
+  ///
+  /// The list itself is fetched and kept by ExploreGridCache, so it outlives
+  /// this page. See there for why.
   Future<void> _loadExploreChallenges({bool refresh = false}) async {
-    debugPrint('[search_page] _loadExploreChallenges(refresh: $refresh) fired');
     final dp = Provider.of<DataProvider>(context, listen: false);
     final userId = dp.user?.id ?? '';
-    final list = await ApiService.getExploreChallenges(
-      userId, limit: 30, refresh: refresh, markShown: false);
-    debugPrint('[search_page] got ${list.length} explore items back');
-    if (mounted) {
-      setState(() => _exploreChallenges = list);
-    }
-    // Fallback: if Explore came back empty (cold platform / first user),
-    // fall through to the legacy arena-trending list so the grid is never
-    // dead. This shouldn't happen at scale but is cheap insurance.
-    if (list.isEmpty) {
-      final fallback = await ApiService.getArenaChallenges();
-      if (mounted && _exploreChallenges.isEmpty) {
-        setState(() => _exploreChallenges = fallback);
+    // Set directly, not through setState: this also runs from initState,
+    // before the first build, which draws it anyway.
+    _exploreLoading = true;
+    final list = await ExploreGridCache.instance.load(userId, refresh: refresh);
+    if (!mounted) return;
+    setState(() {
+      _exploreLoading = false;
+      if (list.isEmpty) return;
+      // A new list replaces the one on screen only if nobody has started
+      // looking through it yet. Swapping the tiles under someone who has
+      // scrolled down to one would take it away mid-look; the new list is
+      // kept, and it is what the next visit opens with.
+      final atTop = !_gridScroll.hasClients || _gridScroll.offset < 8;
+      if (refresh || _exploreChallenges.isEmpty || atTop) {
+        _exploreChallenges = list;
       }
-    }
+    });
   }
 
   void _onSearchChanged(String query) {
@@ -418,6 +445,9 @@ class _SearchPageState extends State<SearchPage>
   /// Pre-search body: a grid of videos to discover, straight under the
   /// search bar.
   Widget _buildEmptyStateGrid(ColorScheme cs) {
+    if (_exploreChallenges.isEmpty && _exploreLoading) {
+      return const _GridPlaceholder();
+    }
     if (_exploreChallenges.isEmpty) {
       // Even with nothing loaded, the user should still be able to pull to
       // retry. Wrap the empty-state in a ListView with always-scrollable
@@ -443,6 +473,7 @@ class _SearchPageState extends State<SearchPage>
     return RefreshIndicator(
       onRefresh: () => _loadExploreChallenges(refresh: true),
       child: CustomScrollView(
+        controller: _gridScroll,
         physics: const AlwaysScrollableScrollPhysics(),
         slivers: [
           // Straight onto the videos: no title, no rows above them.
@@ -1865,10 +1896,29 @@ class _PreviewableTileState extends State<_PreviewableTile> {
             children: [
               // Thumbnail (always present — instant tile content while video
               // buffers, and the only thing visible for non-active tiles).
+              //
+              // Decoded at the tile's size, and under the same name the
+              // background prefetch used, so a picture it already fetched
+              // is shown at once instead of downloaded again. Until one
+              // arrives the tile shows its colour, not a black hole.
               if (hasThumbnail)
-                Image.network(
-                  ch.thumbnailUrl!,
+                Image(
+                  image: ExploreGridCache.posterImage(ch.thumbnailUrl!),
                   fit: BoxFit.cover,
+                  frameBuilder: (context, child, frame, sync) {
+                    if (sync) return child;
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        _gradientBg(context),
+                        AnimatedOpacity(
+                          opacity: frame == null ? 0 : 1,
+                          duration: const Duration(milliseconds: 180),
+                          child: child,
+                        ),
+                      ],
+                    );
+                  },
                   errorBuilder: (_, _, _) => _gradientBg(context),
                 )
               else
@@ -2040,6 +2090,29 @@ class _PreviewableTileState extends State<_PreviewableTile> {
     if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
     if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}K';
     return '$n';
+  }
+}
+
+/// What the grid looks like before its videos arrive: the same three
+/// columns of tall tiles, shimmering, so the page reads as loading rather
+/// than as having nothing to show.
+class _GridPlaceholder extends StatelessWidget {
+  const _GridPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return ShimmerLoading(
+      child: GridView.builder(
+        physics: const NeverScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(12, 2, 12, 24),
+        gridDelegate: _SearchPageState._gridDelegate,
+        itemCount: 12,
+        itemBuilder: (_, _) => const SkeletonBone(
+          height: double.infinity,
+          borderRadius: AppTheme.radiusMd,
+        ),
+      ),
+    );
   }
 }
 

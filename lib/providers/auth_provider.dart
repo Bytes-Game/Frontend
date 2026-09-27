@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/session_store.dart';
+import 'package:myapp/services/explore_grid_cache.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/providers/theme_provider.dart';
@@ -205,6 +206,8 @@ class AuthProvider with ChangeNotifier {
     // should start with the app's space back, not with what the last
     // person watched.
     unawaited(VideoCacheService.instance.clear());
+    // And the Search grid kept between visits: it was picked for them.
+    ExploreGridCache.instance.clear();
     _isAuthenticated = false;
     _needsOnboarding = false;
     notifyListeners();

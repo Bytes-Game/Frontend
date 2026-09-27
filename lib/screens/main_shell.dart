@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/explore_grid_cache.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/pages/home_page.dart';
 import 'package:myapp/pages/chat_list_page.dart';
@@ -45,6 +48,15 @@ class _MainShellState extends State<MainShell> {
   final _plusKey = GlobalKey();
   CreateBurstHandle? _burst;
 
+  /// Fetches Search's videos in the background, once Home has had its
+  /// turn. See [prefetchDelay].
+  Timer? _searchPrefetch;
+
+  /// How long after the app opens Search's videos are fetched. Home is
+  /// what is on screen, and its first videos come first: this waits until
+  /// they have had the connection to themselves.
+  static const prefetchDelay = Duration(seconds: 3);
+
   @override
   void initState() {
     super.initState();
@@ -54,6 +66,21 @@ class _MainShellState extends State<MainShell> {
       pageName: 'home_tab',
       params: {'tabIndex': 0, 'tabLabel': _tabLabels[0]},
     );
+    // Get Search's grid ready before anyone opens it, so the first visit
+    // opens on videos instead of waiting for the server.
+    _searchPrefetch = Timer(prefetchDelay, () {
+      if (!mounted) return;
+      final dp = Provider.of<DataProvider>(context, listen: false);
+      unawaited(
+        ExploreGridCache.instance.prefetch(context, dp.user?.id ?? ''),
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchPrefetch?.cancel();
+    super.dispose();
   }
 
   void _onDestination(int index) {
