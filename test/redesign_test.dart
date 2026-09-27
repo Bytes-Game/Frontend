@@ -23,6 +23,7 @@ import 'package:myapp/pages/search_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/explore_grid_cache.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/create_burst.dart';
@@ -163,6 +164,8 @@ void main() {
   setUp(() {
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
     ReelDiagnostics.instance.debugReset();
+    // Search keeps its grid between visits; each test starts without one.
+    ExploreGridCache.instance.clear();
     fakeServer();
   });
   tearDown(() => ApiService.useClient(http.Client()));
