@@ -139,10 +139,66 @@ void main() {
       expect(res?['likes'], 3);
     });
 
-    test('making a battle longer sends the days', () async {
-      await ApiService.extendBattle(challengeId: '7', days: 14);
-      expect(sent.single.url.path, '/api/v1/challenges/7/battle-length');
-      expect(json.decode(sent.single.body), {'days': 14});
+    test('a share names the video on screen, and brings back the total', () async {
+      answer = (_) => http.Response('{"shares": 5}', 200);
+      final total = await ApiService.shareChallenge(
+        challengeId: '7',
+        responseId: '12',
+      );
+      expect(sent.single.url.path, '/api/v1/challenges/share');
+      expect(json.decode(sent.single.body), {
+        'challengeId': '7',
+        'responseId': '12',
+      });
+      expect(total, 5);
+      // The creator's video: no responseId.
+      await ApiService.shareChallenge(challengeId: '7');
+      expect(json.decode(sent.last.body), {'challengeId': '7'});
+    });
+
+    test('who liked, voted or shared, split by video', () async {
+      answer = (_) => http.Response(
+        json.encode({
+          'sides': [
+            {
+              'username': 'maya',
+              'role': 'creator',
+              'people': [
+                {'userId': '5', 'username': 'sam', 'at': ''},
+              ],
+            },
+            {
+              'username': 'leo',
+              'role': 'responder',
+              'responseId': '12',
+              'people': [],
+            },
+          ],
+        }),
+        200,
+      );
+      final sides = await ApiService.getPeople('7', 'likes');
+      expect(sent.single.url.path, '/api/v1/challenges/7/people');
+      expect(sent.single.url.queryParameters['what'], 'likes');
+      expect(sides!.map((s) => s.username), ['maya', 'leo']);
+      expect(sides.first.people.single.username, 'sam');
+      expect(sides.last.responseId, '12');
+      expect(sides.last.isCreator, isFalse);
+    });
+
+    test('a view on a battle says how long each video was on screen', () async {
+      answer = (_) => http.Response('{}', 201);
+      await ApiService.recordWatchEvent(
+        userId: 'u',
+        contentId: '7',
+        contentType: 'challenge',
+        watchTime: 4000,
+        sides: {'responseId': '12', 'creatorMs': 3000, 'opponentMs': 1000},
+      );
+      final body = json.decode(sent.single.body) as Map<String, dynamic>;
+      expect(body['creatorMs'], 3000);
+      expect(body['opponentMs'], 1000);
+      expect(body['responseId'], '12');
     });
   });
 
@@ -163,7 +219,8 @@ void main() {
             'username': 'maya',
             'role': 'creator',
             'responseId': '',
-            'votes': 4.5,
+            'votes': 6,
+            'countedVotes': 4.5,
             'rawVotes': 6,
             'removedVotes': 1,
             'likes': 9,
@@ -178,6 +235,7 @@ void main() {
             'role': 'responder',
             'responseId': '12',
             'votes': 3,
+            'countedVotes': 3,
             'rawVotes': 3,
             'removedVotes': 0,
             'likes': 4,
@@ -190,7 +248,15 @@ void main() {
         'removed': {'voted without watching': 1},
       });
       expect(s.sides, hasLength(2));
-      expect(s.creator?.votes, 4.5);
+      // What people see, and what decides it.
+      expect(s.creator?.votes, 6);
+      expect(s.creator?.countedVotes, 4.5);
+      expect(s.countedDiffers, isTrue);
+      // The totals the battle page shows.
+      expect(s.totalVotes, 9);
+      expect(s.totalLikes, 13);
+      expect(s.totalViews, 51);
+      expect(s.totalShares, 3);
       expect(s.creator?.leading, isTrue);
       expect(s.sides[1].responseId, '12');
       expect(s.sides[1].views, 21);

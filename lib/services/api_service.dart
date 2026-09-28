@@ -1052,11 +1052,6 @@ class ApiService {
         }),
       );
       if (res.statusCode == 200) return const ActionResult(true);
-      // One vote per battle: the server names the side it is on.
-      final already = res.headers['x-your-vote'] ?? '';
-      if (res.statusCode == 409 && already.isNotEmpty) {
-        return ActionResult.alreadyVoted(already);
-      }
       if (res.statusCode >= 400 && res.statusCode < 500) {
         final why = res.body.trim();
         return ActionResult(false, why.isEmpty ? 'Vote not counted.' : why);
@@ -1084,26 +1079,30 @@ class ApiService {
     }
   }
 
-  /// POST /api/v1/challenges/{id}/battle-length -> the creator makes their
-  /// battle run longer. Never shorter, and never past 30 days; the server
-  /// says so in [ActionResult.message] when it refuses.
-  static Future<ActionResult> extendBattle({
+  /// POST /api/v1/challenges/share -> someone shared a video: the
+  /// creator's, or with [responseId] an answer's. Counted once per person
+  /// per video. Returns the battle's new share total, or null.
+  static Future<int?> shareChallenge({
     required String challengeId,
-    required int days,
+    String responseId = '',
   }) async {
     try {
       final res = await _authHttp.post(
-        Uri.parse('$_base/api/v1/challenges/$challengeId/battle-length'),
+        Uri.parse('$_base/api/v1/challenges/share'),
         headers: {'Content-Type': 'application/json'},
-        body: json.encode({'days': days}),
+        body: json.encode({
+          'challengeId': challengeId,
+          if (responseId.isNotEmpty) 'responseId': responseId,
+        }),
       );
-      if (res.statusCode == 200) return const ActionResult(true);
-      final why = res.body.trim();
-      return ActionResult(false,
-          why.isEmpty || res.statusCode >= 500 ? 'Could not change the length.' : why);
+      if (res.statusCode == 200) {
+        final n = (json.decode(res.body) as Map<String, dynamic>)['shares'];
+        if (n is num) return n.toInt();
+      }
     } catch (_) {
-      return const ActionResult(false, 'Could not change the length.');
+      // Logged by _AuthHttp; the share itself still happens.
     }
+    return null;
   }
 
   /// POST /api/v1/challenges/responses/like -> like, or un-like, the ANSWER
@@ -1172,12 +1171,16 @@ class ApiService {
   // —— Watch Events ————————————————————————————————————————————————
 
   /// POST /api/v1/watch -> record a watch event
+  /// [sides], on a battle, says how long each video was on screen —
+  /// {creatorMs, opponentMs, responseId} — so the view counts for the
+  /// videos actually watched, not the whole card.
   static Future<bool> recordWatchEvent({
     required String userId,
     required String contentId,
     required String contentType,
     required int watchTime,
     bool completed = false,
+    Map<String, dynamic>? sides,
   }) async {
     try {
       final res = await _authHttp.post(
@@ -1189,6 +1192,7 @@ class ApiService {
           'contentType': contentType,
           'watchTime': watchTime,
           'completed': completed,
+          ...?sides,
         }),
       );
       return res.statusCode == 201;
@@ -1852,43 +1856,28 @@ class ApiService {
 
   // —— Push notifications ————————————————————————————————————————————
 
-  /// GET /api/v1/challenges/{id}/voters — who voted for whom. The server
-  /// answers only the battle's own players; null for anyone else, or when
-  /// it could not be read.
-  static Future<List<VoterSide>?> getVoters(String challengeId) async {
+  /// GET /api/v1/challenges/{id}/people?what=likes|votes|shares — who
+  /// liked each video, who voted for whom, or who shared, split by video.
+  /// The server answers only the people in the video; null for anyone
+  /// else, or when it could not be read.
+  static Future<List<PeopleSide>?> getPeople(
+    String challengeId,
+    String what,
+  ) async {
     try {
-      final res = await _authHttp
-          .get(Uri.parse('$_base/api/v1/challenges/$challengeId/voters'));
+      final res = await _authHttp.get(
+        Uri.parse('$_base/api/v1/challenges/$challengeId/people?what=$what'),
+      );
       if (res.statusCode == 200) {
         final body = json.decode(res.body) as Map<String, dynamic>;
         return (body['sides'] as List? ?? [])
             .whereType<Map<String, dynamic>>()
-            .map(VoterSide.fromJson)
+            .map(PeopleSide.fromJson)
             .toList();
       }
-      debugPrint('[voters] $challengeId answered ${res.statusCode}');
+      debugPrint('[people] $what on $challengeId answered ${res.statusCode}');
     } catch (e) {
-      debugPrint('[voters] $challengeId could not be read: $e');
-    }
-    return null;
-  }
-
-  /// GET /api/v1/challenges/{id}/likers — who liked it. Only for whoever
-  /// posted it; null for anyone else.
-  static Future<List<PersonAt>?> getLikers(String challengeId) async {
-    try {
-      final res = await _authHttp
-          .get(Uri.parse('$_base/api/v1/challenges/$challengeId/likers'));
-      if (res.statusCode == 200) {
-        final body = json.decode(res.body) as Map<String, dynamic>;
-        return (body['likers'] as List? ?? [])
-            .whereType<Map<String, dynamic>>()
-            .map(PersonAt.fromJson)
-            .toList();
-      }
-      debugPrint('[likers] $challengeId answered ${res.statusCode}');
-    } catch (e) {
-      debugPrint('[likers] $challengeId could not be read: $e');
+      debugPrint('[people] $what on $challengeId could not be read: $e');
     }
     return null;
   }

@@ -5,29 +5,73 @@ import 'package:myapp/services/api_service.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
 
-/// "Who voted" for the two players in a battle: one tab per side, the
-/// people who voted for that side, newest first.
+/// The lists behind the counts: who liked, who voted for whom, who shared.
+enum PeopleList { likes, votes, shares }
+
+extension on PeopleList {
+  String get what => name;
+
+  String title(int n) => switch (this) {
+    PeopleList.likes => 'Liked by $n',
+    PeopleList.votes => n == 1 ? '1 vote' : '$n votes',
+    PeopleList.shares => 'Shared by $n',
+  };
+
+  String empty(String username) => switch (this) {
+    PeopleList.likes => 'No likes for $username yet.',
+    PeopleList.votes => 'No votes for $username yet.',
+    PeopleList.shares => 'Nobody has shared $username\'s video yet.',
+  };
+}
+
+/// Who liked, voted or shared — opened by tapping the number under the
+/// button, as on Instagram.
 ///
-/// Nobody is told when a vote comes in — that would be a ping for every
-/// vote on a live battle. This is where the players look instead.
-Future<void> showVoters(BuildContext context, String challengeId) {
+/// One tab per video on a battle (the creator's and the answer), opening on
+/// [startOnAnswer]'s; a single list on a short. Only the people in the
+/// video are shown it; nobody is told when a vote or like comes in, so this
+/// is where they look instead.
+Future<void> showPeople(
+  BuildContext context,
+  String challengeId,
+  PeopleList list, {
+  bool startOnAnswer = false,
+}) {
   return _sheet(
     context,
-    FutureBuilder<List<VoterSide>?>(
-      future: ApiService.getVoters(challengeId),
+    FutureBuilder<List<PeopleSide>?>(
+      future: ApiService.getPeople(challengeId, list.what),
       builder: (context, snap) {
         if (snap.connectionState != ConnectionState.done) {
           return const _Loading();
         }
         final sides = snap.data;
-        if (sides == null) {
-          return const _Note("Couldn't load the votes. Try again in a moment.");
+        if (sides == null || sides.isEmpty) {
+          return const _Note("Couldn't load the list. Try again in a moment.");
         }
+        final total = sides.fold(0, (a, s) => a + s.people.length);
+        if (sides.length == 1) {
+          final only = sides.first;
+          return Column(
+            children: [
+              _Title(list.title(total)),
+              const Divider(height: 1, color: Colors.white12),
+              Expanded(
+                child: _People(
+                  people: only.people,
+                  empty: list.empty(only.username),
+                ),
+              ),
+            ],
+          );
+        }
+        final answerAt = sides.indexWhere((s) => !s.isCreator);
         return DefaultTabController(
           length: sides.length,
+          initialIndex: startOnAnswer && answerAt > 0 ? answerAt : 0,
           child: Column(
             children: [
-              const _Title('Who voted'),
+              _Title(list.title(total)),
               TabBar(
                 indicatorColor: Colors.white,
                 labelColor: Colors.white,
@@ -36,8 +80,8 @@ Future<void> showVoters(BuildContext context, String challengeId) {
                 tabs: [
                   for (final s in sides)
                     Tab(
-                      key: ValueKey('voters_tab_${s.username}'),
-                      text: '${s.username} · ${s.voters.length}',
+                      key: ValueKey('people_tab_${s.username}'),
+                      text: '${s.username} · ${s.people.length}',
                     ),
                 ],
               ),
@@ -45,43 +89,12 @@ Future<void> showVoters(BuildContext context, String challengeId) {
                 child: TabBarView(
                   children: [
                     for (final s in sides)
-                      _People(
-                        people: s.voters,
-                        empty: 'No votes for ${s.username} yet.',
-                      ),
+                      _People(people: s.people, empty: list.empty(s.username)),
                   ],
                 ),
               ),
             ],
           ),
-        );
-      },
-    ),
-  );
-}
-
-/// "Who liked" a video, for whoever posted it.
-Future<void> showLikers(BuildContext context, String challengeId) {
-  return _sheet(
-    context,
-    FutureBuilder<List<PersonAt>?>(
-      future: ApiService.getLikers(challengeId),
-      builder: (context, snap) {
-        if (snap.connectionState != ConnectionState.done) {
-          return const _Loading();
-        }
-        final people = snap.data;
-        if (people == null) {
-          return const _Note("Couldn't load the likes. Try again in a moment.");
-        }
-        return Column(
-          children: [
-            _Title('Liked by ${people.length}'),
-            const Divider(height: 1, color: Colors.white12),
-            Expanded(
-              child: _People(people: people, empty: 'No likes yet.'),
-            ),
-          ],
         );
       },
     ),

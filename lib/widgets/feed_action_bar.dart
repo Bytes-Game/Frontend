@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:myapp/models/battle_model.dart' show alreadyVotedText;
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
@@ -150,13 +149,6 @@ class _FeedActionBarState extends State<FeedActionBar> {
 
   void _onVote(String responseId, String username) async {
     final dp = Provider.of<DataProvider>(context, listen: false);
-    // One vote each.
-    if (_voted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text(alreadyVotedText)),
-      );
-      return;
-    }
     final before = (_voted, _votedFor);
     setState(() {
       _voted = true;
@@ -452,9 +444,8 @@ Future<void> showChallengeVoteDialog({
 }) {
   // A sheet from the bottom with the two people side by side, rather than a
   // dialog of two orange and blue outlined buttons stacked with "VS" between
-  // them. The one you already voted for is marked. There is one vote each,
-  // so the feed does not open this once you have voted; if something does,
-  // it says "Your vote", not "Change your vote".
+  // them. The one you already voted for is marked, so changing your mind is
+  // one tap on the other.
   final creator = creatorUsername.isEmpty ? 'Creator' : creatorUsername;
   final opponent = opponentUsername.isEmpty ? 'Opponent' : opponentUsername;
   return showModalBottomSheet<void>(
@@ -482,7 +473,7 @@ Future<void> showChallengeVoteDialog({
             ),
             const SizedBox(height: 16),
             Text(
-              voted ? 'Your vote' : 'Who did it better?',
+              voted ? 'Change your vote' : 'Who did it better?',
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 19,
@@ -627,12 +618,16 @@ class _VoteSide extends StatelessWidget {
                       color: picked ? const Color(0xFF30D158) : Colors.white,
                     ),
                     const SizedBox(width: 6),
-                    Text(
-                      picked ? 'Your vote' : 'Vote',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.w600,
+                    Flexible(
+                      child: Text(
+                        picked ? 'Your vote' : 'Vote',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ],
@@ -1127,12 +1122,14 @@ class ChallengeShareSheet extends StatelessWidget {
         .where((u) => u.id != (dp.user?.id ?? ''))
         .toList();
 
-    return Container(
+    // A Material, not a coloured box: the rows below paint their tap ink on
+    // the nearest Material, and a coloured box between them hid it (debug
+    // builds stop on it).
+    return Material(
+      color: Theme.of(context).scaffoldBackgroundColor,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      child: SizedBox(
       height: MediaQuery.of(context).size.height * 0.55,
-      decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      ),
       child: Column(
         children: [
           // Handle
@@ -1211,6 +1208,7 @@ class ChallengeShareSheet extends StatelessWidget {
                   ),
           ),
         ],
+      ),
       ),
     );
   }

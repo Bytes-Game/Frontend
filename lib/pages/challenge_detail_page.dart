@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:file_picker/file_picker.dart';
 import 'dart:async';
 
@@ -17,10 +18,9 @@ import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/upload_job_manager.dart';
 import 'package:myapp/models/battle_model.dart' show ActionResult, BattleStandings;
 import 'package:myapp/config/app_theme.dart';
-import 'package:myapp/config/constants.dart' show ContentCategories;
 import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
 import 'package:myapp/widgets/feed_action_bar.dart'
-    show ChallengeCommentSheet, CommentSheetCaption;
+    show ChallengeCommentSheet, ChallengeShareSheet, CommentSheetCaption;
 import 'package:myapp/widgets/league_badge.dart' show leagueWash;
 import 'package:myapp/widgets/people_list_sheet.dart';
 import 'package:myapp/widgets/video_grid_tile.dart' show openVideoPlaylist;
@@ -135,13 +135,11 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
   Future<void> _loadExtras() async {
     final id = widget.challengeId;
     final comments = await ApiService.getChallengeComments(id);
-    final standings = _responses.isEmpty
-        ? null
-        : await ApiService.getBattleStandings(id);
+    final standings = await ApiService.getBattleStandings(id);
     if (!mounted) return;
     setState(() {
       _comments = comments;
-      _standings = standings;
+      if (standings != null) _standings = standings;
     });
   }
 
@@ -244,6 +242,41 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
       final n = res['likes'];
       if (n is int) _likes = n;
     });
+    _refreshStandings();
+  }
+
+  /// Likes on every video in the battle. The creator's comes from this
+  /// page's own heart, so a tap shows at once; the answers' from the live
+  /// score.
+  int _totalLikes(ChallengeModel c) {
+    final answers = _standings?.sides
+            .where((x) => !x.isCreator)
+            .fold<int>(0, (a, x) => a + x.likes) ??
+        0;
+    return _likes + answers;
+  }
+
+  /// Share the challenge: the share sheet, and the share counted.
+  Future<void> _share() async {
+    final c = _challenge;
+    if (c == null) return;
+    EventTracker.instance.trackShare(contentId: c.id, contentType: 'challenge');
+    // ignore: discarded_futures
+    ApiService.shareChallenge(challengeId: c.id).then((_) {
+      if (mounted) _refreshStandings();
+    });
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => ChallengeShareSheet(challenge: c),
+    );
+  }
+
+  /// The live score again, quietly, for the totals.
+  Future<void> _refreshStandings() async {
+    final st = await ApiService.getBattleStandings(widget.challengeId);
+    if (mounted && st != null) setState(() => _standings = st);
   }
 
   /// Sends a vote and says how it went. The score box shows the vote the
@@ -583,54 +616,29 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                                 ? 'Only friends'
                                 : 'Public',
                           ),
-                          if (ContentCategories.isRealAnswer(c.category))
-                            _Chip(
-                              icon: Icons.local_offer_rounded,
-                              label: c.category[0].toUpperCase() +
-                                  c.category.substring(1),
-                            ),
                         ],
                       ),
                       const SizedBox(height: 16),
+                      // Every number is a total across the players, from
+                      // the same live score the rows below show, so the two
+                      // always agree. Tap a number for who — for the
+                      // people in the video.
                       _StatsBar(
                         liked: _liked,
-                        likes: _likes,
-                        views: c.views,
-                        comments: _comments.length,
-                        answers: _responses.length,
+                        likes: _totalLikes(c),
+                        comments: math.max(_comments.length, c.commentCount),
+                        shares: _standings?.totalShares ?? c.shareCount,
+                        votes: isBattle
+                            ? (_standings?.totalVotes ?? c.voteCount)
+                            : null,
+                        views: _standings?.totalViews ?? c.views,
                         onLike: dp.user == null ? null : _like,
                         onComments: _openComments,
+                        onShare: dp.user == null ? null : _share,
+                        onWho: isPlayer
+                            ? (list) => showPeople(context, c.id, list)
+                            : null,
                       ),
-                      // Who liked it (its poster) and who voted for whom
-                      // (the battle's two players). Nobody is pinged per
-                      // vote; this is where they look instead.
-                      if (isOwner || (isBattle && isPlayer)) ...[
-                        const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            if (isOwner)
-                              Expanded(
-                                child: _ListButton(
-                                  key: const ValueKey('who_liked'),
-                                  icon: Icons.favorite_rounded,
-                                  label: 'Who liked',
-                                  onTap: () => showLikers(context, c.id),
-                                ),
-                              ),
-                            if (isOwner && isBattle && isPlayer)
-                              const SizedBox(width: 8),
-                            if (isBattle && isPlayer)
-                              Expanded(
-                                child: _ListButton(
-                                  key: const ValueKey('who_voted'),
-                                  icon: Icons.how_to_vote_rounded,
-                                  label: 'Who voted',
-                                  onTap: () => showVoters(context, c.id),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ],
                       if (c.status == 'open' && !isOwner) ...[
                         const SizedBox(height: 16),
                         Builder(
@@ -685,6 +693,11 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                           viewerId: dp.user?.id,
                           onVote: dp.user == null ? null : _vote,
                           refreshToken: _scoreVersion,
+                          // One count on the page: the totals above follow
+                          // the rows below, votes included.
+                          onStandings: (st) {
+                            if (mounted) setState(() => _standings = st);
+                          },
                         ),
                       ],
                       const SizedBox(height: 20),
@@ -1130,52 +1143,6 @@ class _Pill extends StatelessWidget {
 // Under the title
 // ----------------------------------------------------------------------------
 
-/// A small dark button opening one of the people lists.
-class _ListButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  const _ListButton({
-    super.key,
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: _surface,
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: onTap,
-        child: SizedBox(
-          height: 44,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 17, color: Colors.white),
-              const SizedBox(width: 8),
-              Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(width: 4),
-              const Icon(Icons.chevron_right_rounded,
-                  size: 18, color: _muted),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _Chip extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -1256,95 +1223,152 @@ class _StatusChip extends StatelessWidget {
   }
 }
 
-/// Likes, views, comments and answers on one bar. The heart and the
-/// comments are buttons; the others are counts.
+/// Likes, comments, shares, votes and views on one bar — each a total
+/// across the players, the same numbers as the live score's rows and as the
+/// reel.
+///
+/// As on Instagram, the icon does the thing (like, comment, share) and the
+/// number opens who did it — for the people in the video ([onWho]); for
+/// everyone else the number is only a number.
 class _StatsBar extends StatelessWidget {
   final bool liked;
   final int likes;
-  final int views;
   final int comments;
-  final int answers;
+  final int shares;
+
+  /// Null on a challenge nobody has answered: there is nothing to vote on.
+  final int? votes;
+  final int views;
   final VoidCallback? onLike;
   final VoidCallback onComments;
+  final VoidCallback? onShare;
+  final void Function(PeopleList list)? onWho;
 
   const _StatsBar({
     required this.liked,
     required this.likes,
-    required this.views,
     required this.comments,
-    required this.answers,
+    required this.shares,
+    required this.votes,
+    required this.views,
     required this.onLike,
     required this.onComments,
+    required this.onShare,
+    required this.onWho,
   });
 
   @override
   Widget build(BuildContext context) {
     Widget cell({
+      required String name,
       required IconData icon,
-      required String value,
+      required int value,
       required String label,
       Color color = Colors.white,
       VoidCallback? onTap,
+      PeopleList? who,
       String? tooltip,
     }) {
-      final body = InkWell(
+      final open = who == null || onWho == null ? onTap : () => onWho!(who);
+      final iconPart = InkWell(
+        key: ValueKey('stat_icon_$name'),
         onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
+        customBorder: const CircleBorder(),
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
+          padding: const EdgeInsets.all(4),
+          child: Icon(icon, size: 22, color: color),
+        ),
+      );
+      return Expanded(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
           child: Column(
             children: [
-              Icon(icon, size: 22, color: color),
-              const SizedBox(height: 4),
-              Text(
-                value,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
+              tooltip == null
+                  ? iconPart
+                  : Tooltip(message: tooltip, child: iconPart),
+              InkWell(
+                key: ValueKey('stat_count_$name'),
+                onTap: open,
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: Column(
+                    children: [
+                      Text(
+                        _ChallengeDetailPageState._compact(value),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Text(
+                        label,
+                        style: const TextStyle(color: _muted, fontSize: 11.5),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-              Text(label, style: const TextStyle(color: _muted, fontSize: 11.5)),
             ],
           ),
         ),
       );
-      return Expanded(
-        child: tooltip == null ? body : Tooltip(message: tooltip, child: body),
-      );
     }
 
-    String n(int v) => _ChallengeDetailPageState._compact(v);
+    final v = votes;
     return Container(
+      key: const ValueKey('stats_bar'),
       decoration: BoxDecoration(
         color: _surface,
         borderRadius: BorderRadius.circular(18),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 2),
       child: Row(
         children: [
           cell(
+            name: 'likes',
             icon: liked
                 ? Icons.favorite_rounded
                 : Icons.favorite_border_rounded,
-            value: n(likes),
+            value: likes,
             label: 'Likes',
             color: liked ? const Color(0xFFFF375F) : Colors.white,
             onTap: onLike,
+            who: PeopleList.likes,
             tooltip: liked ? 'Unlike' : 'Like',
           ),
-          cell(icon: Icons.visibility_outlined, value: n(views), label: 'Views'),
           cell(
+            name: 'comments',
             icon: Icons.chat_bubble_outline_rounded,
-            value: n(comments),
+            value: comments,
             label: 'Comments',
             onTap: onComments,
             tooltip: 'Comments',
           ),
           cell(
-            icon: Icons.people_alt_outlined,
-            value: n(answers),
-            label: answers == 1 ? 'Answer' : 'Answers',
+            name: 'shares',
+            icon: Icons.reply_rounded,
+            value: shares,
+            label: 'Shares',
+            onTap: onShare,
+            who: PeopleList.shares,
+            tooltip: 'Share',
+          ),
+          if (v != null)
+            cell(
+              name: 'votes',
+              icon: Icons.how_to_vote_rounded,
+              value: v,
+              label: 'Votes',
+              who: PeopleList.votes,
+            ),
+          cell(
+            name: 'views',
+            icon: Icons.visibility_outlined,
+            value: views,
+            label: 'Views',
           ),
         ],
       ),

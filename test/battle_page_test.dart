@@ -39,6 +39,11 @@ Map<String, dynamic> challengeJson({required bool open, bool liked = false}) =>
       'category': 'dance',
       'likes': 1280,
       'views': 18400,
+      'commentCount': 3,
+      // A moment older than the live score below (21 and 42): the page
+      // shows the live score's, the same as the rows under it.
+      'voteCount': 20,
+      'shareCount': 40,
       'isLiked': liked,
       'createdAt': '2026-09-20T10:00:00Z',
     };
@@ -51,6 +56,9 @@ late bool refuseLikes;
 /// vote waits on [voteGate] when one is set.
 late int detailCalls;
 late List<String> votesSent;
+
+/// Which lists (likes, votes, shares) the page asked for.
+late List<String> peopleAsked;
 Completer<void>? voteGate;
 
 void fakeServer({required bool open, bool liked = false}) {
@@ -58,6 +66,7 @@ void fakeServer({required bool open, bool liked = false}) {
   refuseLikes = false;
   detailCalls = 0;
   votesSent = [];
+  peopleAsked = [];
   voteGate = null;
   ApiService.useClient(
     MockClient((req) async {
@@ -101,10 +110,15 @@ void fakeServer({required bool open, bool liked = false}) {
               .add(const Duration(days: 2, hours: 3))
               .toIso8601String(),
           'participants': [
+            // The same numbers as the challenge above: 1280 + 940 likes,
+            // 6300 + 12100 = 18400 views, 30 + 12 shares, 12 + 9 votes.
             {
               'username': 'maya',
               'role': 'creator',
               'votes': 12,
+              'likes': 1280,
+              'views': 6300,
+              'shares': 30,
               'leading': true,
             },
             {
@@ -112,6 +126,9 @@ void fakeServer({required bool open, bool liked = false}) {
               'role': 'responder',
               'responseId': '77',
               'votes': 9,
+              'likes': 940,
+              'views': 12100,
+              'shares': 12,
             },
           ],
         };
@@ -119,31 +136,33 @@ void fakeServer({required bool open, bool liked = false}) {
         votesSent.add(req.body);
         await voteGate?.future;
         body = {'voted': true, 'votes': []};
-      } else if (p.endsWith('/voters')) {
+      } else if (p.endsWith('/people')) {
+        peopleAsked.add(req.url.queryParameters['what'] ?? '');
+        final what = req.url.queryParameters['what'];
+        List<Map<String, String>> who(List<String> names) => [
+          for (final n in names) {'userId': n, 'username': n, 'at': ''},
+        ];
         body = {
           'sides': [
             {
               'username': 'maya',
               'role': 'creator',
-              'voters': [
-                {'userId': '31', 'username': 'sam', 'at': ''},
-              ],
+              'people': who(switch (what) {
+                'votes' => ['sam'],
+                'likes' => ['nina'],
+                _ => ['kai'],
+              }),
             },
             {
               'username': 'leo_beats',
               'role': 'responder',
               'responseId': '77',
-              'voters': [
-                {'userId': '32', 'username': 'priya', 'at': ''},
-                {'userId': '33', 'username': 'omar', 'at': ''},
-              ],
+              'people': who(switch (what) {
+                'votes' => ['priya', 'omar'],
+                'likes' => ['zoe', 'ada', 'lu'],
+                _ => [],
+              }),
             },
-          ],
-        };
-      } else if (p.endsWith('/likers')) {
-        body = {
-          'likers': [
-            {'userId': '34', 'username': 'nina', 'at': ''},
           ],
         };
       } else if (p.endsWith('/challenges/like')) {
@@ -270,13 +289,15 @@ void main() {
       'back', (t) async {
     await openPage(t, open: false, liked: true);
     expect(find.byTooltip('Unlike'), findsOneWidget);
-    expect(find.text('1.3K'), findsOneWidget);
+    // Likes on both videos: 1280 + 940.
+    expect(find.text('2.2K'), findsOneWidget);
 
     refuseLikes = true;
     await t.tap(find.byTooltip('Unlike'));
     await settle(t);
     expect(likeCalls, 1);
     expect(find.byTooltip('Unlike'), findsOneWidget, reason: 'put back');
+    expect(find.text('2.2K'), findsOneWidget);
     expect(find.textContaining("Couldn't update your like"), findsOneWidget);
   });
 
@@ -284,10 +305,25 @@ void main() {
     t,
   ) async {
     await openPage(t, open: false);
-    expect(find.text('Likes'), findsOneWidget);
-    expect(find.text('Views'), findsOneWidget);
-    expect(find.text('18.4K'), findsOneWidget);
+    // Every number is a total across both players — the same as the live
+    // score's rows below add up to.
+    String count(String name) => t
+        .widget<Text>(
+          find.descendant(
+            of: find.byKey(ValueKey('stat_count_$name')),
+            matching: find.byType(Text),
+          ).first,
+        )
+        .data!;
+    expect(count('likes'), '2.2K', reason: '1280 + 940');
+    expect(count('comments'), '3');
+    expect(count('shares'), '42', reason: '30 + 12');
+    expect(count('votes'), '21', reason: '12 + 9');
+    expect(count('views'), '18.4K', reason: '6300 + 12100');
     expect(find.text('Answer'), findsWidgets);
+    // No category tag, and the tags that stay are still there.
+    expect(find.text('Dance'), findsNothing);
+    expect(find.text('Public'), findsOneWidget);
     expect(find.textContaining('first!'), findsOneWidget);
     expect(find.textContaining('so good'), findsOneWidget);
     expect(
@@ -321,10 +357,19 @@ void main() {
     await t.ensureVisible(vote);
     await t.tap(vote);
     await t.pump();
-    // Still waiting on the server, and it already shows.
+    // Still waiting on the server, and it already shows — in the score
+    // box, and in the page's total above it.
     expect(votesSent, hasLength(1));
     expect(find.byKey(const ValueKey('your_vote')), findsOneWidget);
     expect(find.text('13'), findsOneWidget, reason: "maya's 12 + this vote");
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('stat_count_votes')),
+        matching: find.text('22'),
+      ),
+      findsOneWidget,
+      reason: 'the total moves with it: 21 + 1',
+    );
     voteGate!.complete();
     await settle(t);
     expect(
@@ -332,47 +377,60 @@ void main() {
       before,
       reason: 'reloading the whole page after a vote is what made it slow',
     );
-    // A second try says so, and sends nothing.
+    // A tap on it says how to change it, and sends nothing.
     await t.tap(find.byKey(const ValueKey('your_vote')));
     await t.pump();
-    expect(find.textContaining('You already voted'), findsOneWidget);
+    expect(find.textContaining('To change it, tap Vote'), findsOneWidget);
     expect(votesSent, hasLength(1));
   });
 
-  testWidgets('the players can see who voted for whom; the poster who '
-      'liked it', (t) async {
-    // The creator: both lists.
-    await openPage(t, open: false, me: '9');
-    expect(find.byKey(const ValueKey('who_liked')), findsOneWidget);
-    await t.ensureVisible(find.byKey(const ValueKey('who_voted')));
-    await t.tap(find.byKey(const ValueKey('who_voted')));
-    await settle(t);
-    expect(find.text('maya · 1'), findsOneWidget);
-    expect(find.text('leo_beats · 2'), findsOneWidget);
-    expect(find.text('sam'), findsOneWidget);
-    await t.tap(find.text('leo_beats · 2'));
-    await settle(t);
-    expect(find.text('priya'), findsOneWidget);
-    expect(find.text('omar'), findsOneWidget);
-    await t.tapAt(const Offset(20, 40));
-    await settle(t);
+  testWidgets('the people in the battle tap a number to see who: who '
+      'voted for whom, who liked, who shared', (t) async {
+    for (final me in ['9', '8']) {
+      // The creator, then the answerer.
+      await openPage(t, open: false, me: me);
+      expect(find.byKey(const ValueKey('who_voted')), findsNothing);
+      expect(find.byKey(const ValueKey('who_liked')), findsNothing);
 
-    await t.tap(find.byKey(const ValueKey('who_liked')));
-    await settle(t);
-    expect(find.text('Liked by 1'), findsOneWidget);
-    expect(find.text('nina'), findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('stat_count_votes')));
+      await settle(t);
+      expect(find.text('3 votes'), findsOneWidget);
+      expect(find.text('maya · 1'), findsOneWidget);
+      expect(find.text('leo_beats · 2'), findsOneWidget);
+      expect(find.text('sam'), findsOneWidget);
+      await t.tap(find.text('leo_beats · 2'));
+      await settle(t);
+      expect(find.text('priya'), findsOneWidget);
+      expect(find.text('omar'), findsOneWidget);
+      await t.tapAt(const Offset(20, 40));
+      await settle(t);
+
+      await t.tap(find.byKey(const ValueKey('stat_count_likes')));
+      await settle(t);
+      expect(find.text('Liked by 4'), findsOneWidget);
+      expect(find.text('nina'), findsOneWidget);
+      await t.tapAt(const Offset(20, 40));
+      await settle(t);
+
+      await t.tap(find.byKey(const ValueKey('stat_count_shares')));
+      await settle(t);
+      expect(find.text('Shared by 1'), findsOneWidget);
+      expect(find.text('kai'), findsOneWidget);
+      await t.tapAt(const Offset(20, 40));
+      await settle(t);
+      expect(peopleAsked, ['votes', 'likes', 'shares']);
+    }
   });
 
-  testWidgets('the answerer sees who voted, not who liked', (t) async {
-    await openPage(t, open: false, me: '8');
-    expect(find.byKey(const ValueKey('who_voted')), findsOneWidget);
-    expect(find.byKey(const ValueKey('who_liked')), findsNothing);
-  });
-
-  testWidgets('anyone else sees neither', (t) async {
+  testWidgets('anyone else sees the numbers, and a tap on one opens no list', (
+    t,
+  ) async {
     await openPage(t, open: false, me: '1');
-    expect(find.byKey(const ValueKey('who_voted')), findsNothing);
-    expect(find.byKey(const ValueKey('who_liked')), findsNothing);
+    expect(find.byKey(const ValueKey('stats_bar')), findsOneWidget);
+    await t.tap(find.byKey(const ValueKey('stat_count_votes')));
+    await settle(t);
+    expect(peopleAsked, isEmpty);
+    expect(find.text('3 votes'), findsNothing);
     // The page itself is there.
     expect(find.byKey(const ValueKey('card_creator')), findsOneWidget);
   });
