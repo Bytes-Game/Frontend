@@ -7,23 +7,23 @@ import 'package:myapp/services/api_service.dart';
 
 /// The live score of one battle.
 ///
-/// Who is ahead on genuine votes, then likes, views and shares; how long
-/// voting has left; how many votes did not count and why; a vote button for
-/// each side; and, for the person who posted the challenge, a way to make
-/// the battle run longer.
+/// Each player's votes, likes, views and shares — the same numbers every
+/// other screen shows — how long voting has left, and a vote button for each
+/// side. When some votes don't count (people who never watched, throwaway
+/// accounts), it says so, with the score that decides the winner.
 ///
-/// The numbers are the server's own count (GET /challenges/{id}/standings),
-/// the same one that decides the winner when time is up. Nothing here is
-/// worked out on the phone.
+/// The numbers are the server's own (GET /challenges/{id}/standings).
+/// Nothing here is worked out on the phone, apart from showing a vote the
+/// moment it is tapped.
 class BattleScoreboard extends StatefulWidget {
   final String challengeId;
 
   /// The signed-in person, or null.
   final String? viewerId;
 
-  /// Casts a vote and says how it went. For the creator's side it is called
-  /// with the challenge's own id, as every vote dialog in the app does. Null
-  /// hides the buttons.
+  /// Casts a vote — or moves it — and says how it went. For the creator's
+  /// side it is called with the challenge's own id, as every vote dialog in
+  /// the app does. Null hides the buttons.
   ///
   /// The scoreboard does not wait for it: the vote shows the moment it is
   /// tapped, and is taken back only if the server turns it down.
@@ -32,12 +32,17 @@ class BattleScoreboard extends StatefulWidget {
   /// Change this to make the scoreboard load again — after a vote, say.
   final int refreshToken;
 
+  /// Each fresh count, as it arrives — so the page around it can show the
+  /// same totals, votes included, rather than a count of its own.
+  final void Function(BattleStandings standings)? onStandings;
+
   const BattleScoreboard({
     super.key,
     required this.challengeId,
     this.viewerId,
     this.onVote,
     this.refreshToken = 0,
+    this.onStandings,
   });
 
   @override
@@ -48,16 +53,16 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
   BattleStandings? _standings;
   bool _loading = true;
   bool _failed = false;
-  bool _extending = false;
   Timer? _tick;
 
   /// The side this person voted for: "creator", an answer's id, or empty.
   /// Set the moment they tap, before the server has answered.
   String _yourVote = '';
 
-  /// The side given one extra vote on screen while the server catches up.
-  /// Cleared when a fresh count comes in, which has the vote in it.
-  String _counting = '';
+  /// Votes shown on top of the server's count while it catches up: +1 on
+  /// the side just voted for, -1 on the side the vote moved from. Cleared
+  /// when a fresh count comes in, which has the vote in it.
+  Map<String, int> _pending = const {};
   bool _sending = false;
 
   @override
@@ -95,9 +100,16 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
       if (s != null) {
         _standings = s;
         if (s.yourVote.isNotEmpty) _yourVote = s.yourVote;
-        if (!_sending) _counting = '';
+        if (!_sending) _pending = const {};
       }
     });
+    if (s != null) widget.onStandings?.call(s);
+  }
+
+  /// The page's totals follow what this shows, the vote on screen included.
+  void _tellPage() {
+    final s = _standings;
+    if (s != null) widget.onStandings?.call(s.withVotesMoved(_pending));
   }
 
   static String _sideKey(BattleSide side) =>
@@ -112,20 +124,24 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
   }
 
   /// A tap on Vote. It shows at once — the button turns into "Your vote"
-  /// and the count goes up by one — and the server is told after. Waiting
-  /// for the server first, then reloading the whole page, is what made the
-  /// button feel like it did nothing.
+  /// and the count goes up by one, and down by one on the side the vote
+  /// came from — and the server is told after. Waiting for the server
+  /// first, then reloading the whole page, is what made voting feel like
+  /// it did nothing.
+  ///
+  /// One vote each, and it can be moved: voting for the other side moves
+  /// it there.
   Future<void> _cast(BattleSide side) async {
-    if (_yourVote.isNotEmpty || _sending) {
-      _say(alreadyVotedText);
-      return;
-    }
+    if (_sending) return;
     final key = _sideKey(side);
+    if (key == _yourVote) return;
+    final before = _yourVote;
     setState(() {
       _yourVote = key;
-      _counting = key;
+      _pending = {key: 1, if (before.isNotEmpty) before: -1};
       _sending = true;
     });
+    _tellPage();
     final res = await widget.onVote!(
       side.isCreator ? widget.challengeId : side.responseId,
     );
@@ -133,65 +149,24 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
     setState(() {
       _sending = false;
       if (!res.ok) {
-        _counting = '';
-        // Already voted: show the vote they have. Anything else: take it
-        // back so they can try again.
-        _yourVote = res.alreadyVoted ? res.yourVote : '';
+        // Taken back, so they can try again.
+        _pending = const {};
+        _yourVote = before;
       }
     });
-    if (!res.ok) _say(res.message);
+    if (!res.ok) {
+      _tellPage();
+      _say(res.message);
+      return;
+    }
     // The server's own count, quietly, once it has the vote.
-    if (res.ok || res.alreadyVoted) _load();
+    _load();
   }
 
   bool get _viewerIsIn =>
       widget.viewerId != null &&
       (_standings?.sides.any((s) => s.userId == widget.viewerId) ?? false);
 
-  bool get _viewerIsCreator =>
-      widget.viewerId != null && _standings?.creator?.userId == widget.viewerId;
-
-  Future<void> _extend() async {
-    final s = _standings;
-    if (s == null) return;
-    final choices = [14, 21, 30].where((d) => d > s.battleDays).toList();
-    if (choices.isEmpty) return;
-    final days = await showModalBottomSheet<int>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const ListTile(
-              title: Text('Make the battle longer'),
-              subtitle: Text('It can be made longer, never shorter.'),
-            ),
-            for (final d in choices)
-              ListTile(
-                leading: const Icon(Icons.more_time),
-                title: Text('$d days in total'),
-                subtitle: Text('${d - s.battleDays} more days'),
-                onTap: () => Navigator.pop(ctx, d),
-              ),
-          ],
-        ),
-      ),
-    );
-    if (days == null || !mounted) return;
-    setState(() => _extending = true);
-    final res = await ApiService.extendBattle(
-      challengeId: widget.challengeId,
-      days: days,
-    );
-    if (!mounted) return;
-    setState(() => _extending = false);
-    if (!res.ok) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(res.message)));
-    }
-    _load();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -222,11 +197,10 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
     }
 
     double shown(BattleSide side) =>
-        side.votes + (_counting == _sideKey(side) ? 1 : 0);
+        side.votes + (_pending[_sideKey(side)] ?? 0);
     final total = s.sides.fold<double>(0, (a, b) => a + shown(b));
     final canVote =
         widget.onVote != null && !s.over && !s.notStarted && !_viewerIsIn;
-    final voted = _yourVote.isNotEmpty;
 
     // A plain raised panel, the same as every other box on the battle page,
     // rather than a tinted gradient.
@@ -276,9 +250,14 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
                 share: total > 0 ? shown(side) / total : 0,
                 decided: s.resolved,
                 yours: _yourVote == _sideKey(side),
-                // One vote each: once it is cast, no side offers another.
-                onVote: canVote && !voted ? () => _cast(side) : null,
-                onYours: canVote ? () => _say(alreadyVotedText) : null,
+                // One vote each; voting for the other side moves it.
+                onVote: canVote ? () => _cast(side) : null,
+                onYours: canVote
+                    ? () => _say(
+                        'This is your vote. To change it, tap Vote on the '
+                        'other side.',
+                      )
+                    : null,
               ),
           if (s.resolved) ...[
             const SizedBox(height: 4),
@@ -290,32 +269,30 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
               style: tt.bodySmall,
             ),
           ],
-          if (s.removedTotal > 0) ...[
+          // The numbers above are every vote cast. When some don't count
+          // toward the winner, say so, with the score that does.
+          if (s.countedDiffers) ...[
             const SizedBox(height: 8),
             InkWell(
+              key: const ValueKey('counted_score'),
               onTap: () => _showRemoved(s),
               child: Row(
                 children: [
                   Icon(Icons.shield_outlined, size: 16, color: cs.secondary),
                   const SizedBox(width: 6),
-                  Text(
-                    '${s.removedTotal} ${s.removedTotal == 1 ? 'vote' : 'votes'} '
-                    "didn't count. Why?",
-                    style: tt.bodySmall?.copyWith(
-                      color: cs.secondary,
-                      fontWeight: FontWeight.w600,
+                  Expanded(
+                    child: Text(
+                      'Counting genuine votes only: '
+                      '${s.sides.map((x) => '${x.username} ${votesText(x.countedVotes)}').join(' – ')}. '
+                      'Why?',
+                      style: tt.bodySmall?.copyWith(
+                        color: cs.secondary,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ],
               ),
-            ),
-          ],
-          if (_viewerIsCreator && !s.over && s.battleDays < 30) ...[
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              onPressed: _extending ? null : _extend,
-              icon: const Icon(Icons.more_time, size: 18),
-              label: const Text('Make it longer'),
             ),
           ],
         ],
@@ -370,9 +347,15 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
               ),
               const SizedBox(height: 6),
               const Text(
-                'Only genuine votes decide a battle. These were taken off:',
+                'Every vote shows in the count, but only genuine votes '
+                'decide who wins. These did not count:',
               ),
               const SizedBox(height: 10),
+              if (s.removed.isEmpty)
+                const Text(
+                  'Votes from very new accounts count as half until the '
+                  'account has been around for a while.',
+                ),
               for (final e in s.removed.entries)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 3),

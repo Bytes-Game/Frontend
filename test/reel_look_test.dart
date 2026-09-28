@@ -32,8 +32,12 @@ Map<String, dynamic> battle() => {
   'subject': 'dance on a moving bus',
   'status': 'active',
   'likes': 1280,
-  'comments': 46,
+  'commentCount': 46,
   'views': 18400,
+  // The same numbers the live score below adds up to.
+  'voteCount': 21,
+  'shareCount': 42,
+  'saveCount': 7,
   'createdAt': '2026-09-20T10:00:00Z',
   'responseCount': 1,
   'topResponseId': '77',
@@ -75,8 +79,18 @@ bool answerLeads = false;
 /// When true the battle is over and decided.
 bool decided = false;
 
+/// Lists asked for (likes, votes, shares) and shares sent.
+List<String> peopleAsked = [];
+List<Map<String, dynamic>> sharesSent = [];
+
+/// Views the app reported.
+List<Map<String, dynamic>> watchesSent = [];
+
 void fakeServer(Map<String, dynamic> first) {
   lastVote = null;
+  peopleAsked = [];
+  sharesSent = [];
+  watchesSent = [];
   standingsAsked = 0;
   refuseComments = false;
   posted = [];
@@ -106,6 +120,42 @@ void fakeServer(Map<String, dynamic> first) {
       }
       if (req.url.path.endsWith('/challenges/vote')) {
         lastVote = json.decode(req.body) as Map<String, dynamic>;
+      }
+      if (req.url.path.endsWith('/people')) {
+        peopleAsked.add(req.url.queryParameters['what'] ?? '');
+        return http.Response(
+          json.encode({
+            'sides': [
+              {
+                'username': 'maya',
+                'role': 'creator',
+                'people': [
+                  {'userId': '31', 'username': 'nina', 'at': ''},
+                ],
+              },
+              {
+                'username': 'leo_beats',
+                'role': 'responder',
+                'responseId': '77',
+                'people': [
+                  {'userId': '32', 'username': 'zoe', 'at': ''},
+                ],
+              },
+            ],
+          }),
+          200,
+        );
+      }
+      if (req.url.path.endsWith('/watch')) {
+        watchesSent.add(json.decode(req.body) as Map<String, dynamic>);
+        return http.Response('{}', 201);
+      }
+      if (req.url.path.endsWith('/challenges/share')) {
+        sharesSent.add(json.decode(req.body) as Map<String, dynamic>);
+        return http.Response('{"shares": 43}', 200);
+      }
+      if (req.url.path.endsWith('/save')) {
+        return http.Response('{"saved": true}', 200);
       }
       if (req.url.path.endsWith('/comments') && req.method == 'GET') {
         return http.Response.bytes(
@@ -151,6 +201,9 @@ void fakeServer(Map<String, dynamic> first) {
                   'username': 'maya',
                   'role': 'creator',
                   'votes': 12,
+                  'likes': 1280,
+                  'views': 6300,
+                  'shares': 30,
                   'leading': !answerLeads,
                   'rank': answerLeads ? 2 : 1,
                 },
@@ -159,6 +212,9 @@ void fakeServer(Map<String, dynamic> first) {
                   'role': 'responder',
                   'responseId': '77',
                   'votes': answerLeads ? 14 : 9,
+                  'likes': 940,
+                  'views': 12100,
+                  'shares': 12,
                   'leading': answerLeads,
                   'rank': answerLeads ? 1 : 2,
                 },
@@ -192,6 +248,8 @@ Future<void> openReel(
   WidgetTester t,
   Map<String, dynamic> first, {
   ChallengeModel? seed,
+  String meId = '1',
+  String meName = 'me',
 }) async {
   t.view.physicalSize = const Size(400, 860);
   t.view.devicePixelRatio = 1;
@@ -201,8 +259,8 @@ Future<void> openReel(
   final dp = DataProvider()
     ..setUser(
       UserModel(
-        id: '1',
-        username: 'me',
+        id: meId,
+        username: meName,
         wins: 0,
         losses: 0,
         followersCount: 0,
@@ -237,6 +295,92 @@ void main() {
     SmartReelsFeed.debugForgetAppOpen();
     answerLeads = false;
     decided = false;
+  });
+
+  // A few frames: the list's answer arrives between them, not inside one.
+  Future<void> settleSheet(WidgetTester t) async {
+    for (var i = 0; i < 8; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+  }
+
+  String count(WidgetTester t, String name) =>
+      t.widget<Text>(find.byKey(ValueKey('count_$name'))).data!;
+
+  group('a number under every button', () {
+    testWidgets('votes, likes, comments, shares and saves — the same '
+        'numbers as the live score', (t) async {
+      await openReel(t, battle());
+      expect(count(t, 'votes'), '21', reason: '12 + 9');
+      expect(count(t, 'likes'), '1.3K', reason: "maya's side, on screen");
+      expect(count(t, 'comments'), '46');
+      expect(count(t, 'shares'), '42', reason: '30 + 12');
+      expect(count(t, 'saves'), '7');
+      await closeReel(t);
+    });
+
+    testWidgets('when the live score comes in, the reel follows it', (
+      t,
+    ) async {
+      // The feed says 5 votes and 2 shares; the live score says 21 and 42.
+      await openReel(t, {...battle(), 'voteCount': 5, 'shareCount': 2});
+      expect(standingsAsked, 1);
+      expect(count(t, 'votes'), '21');
+      expect(count(t, 'shares'), '42');
+      await closeReel(t);
+    });
+
+    testWidgets('saving and sharing move their numbers', (t) async {
+      await openReel(t, battle());
+      await t.tap(find.byTooltip('Save'));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(count(t, 'saves'), '8');
+      await t.tap(find.byTooltip('Share'));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(sharesSent.single, {'challengeId': '1'}, reason: "maya's video");
+      expect(count(t, 'shares'), '43', reason: "the server's total");
+      await t.pump(const Duration(seconds: 3));
+      await closeReel(t);
+    });
+
+    testWidgets('for the people in the battle, a number opens who', (
+      t,
+    ) async {
+      // The answerer.
+      await openReel(t, battle(), meId: '8', meName: 'leo_beats');
+      await t.tap(find.byKey(const ValueKey('count_likes')));
+      await settleSheet(t);
+      expect(peopleAsked, ['likes']);
+      expect(find.text('Liked by 2'), findsOneWidget);
+      expect(find.text('nina'), findsOneWidget);
+      await t.tapAt(const Offset(20, 40));
+      await settleSheet(t);
+
+      await t.tap(find.byKey(const ValueKey('count_votes')));
+      await settleSheet(t);
+      expect(peopleAsked, ['likes', 'votes']);
+      expect(find.text('maya · 1'), findsOneWidget);
+      await t.tapAt(const Offset(20, 40));
+      await settleSheet(t);
+
+      await t.tap(find.byKey(const ValueKey('count_shares')));
+      await settleSheet(t);
+      expect(peopleAsked, ['likes', 'votes', 'shares']);
+      await t.tapAt(const Offset(20, 40));
+      await settleSheet(t);
+      await closeReel(t);
+    });
+
+    testWidgets('for anyone else, a number is only a number', (t) async {
+      await openReel(t, battle());
+      await t.tap(find.byKey(const ValueKey('count_likes')));
+      await t.pump(const Duration(milliseconds: 400));
+      expect(peopleAsked, isEmpty);
+      expect(find.textContaining('Liked by'), findsNothing);
+      // The number is part of the heart then: a tap likes.
+      expect(find.byTooltip('Unlike'), findsOneWidget);
+      await closeReel(t);
+    });
   });
   tearDown(() => ApiService.useClient(http.Client()));
 
@@ -360,6 +504,15 @@ void main() {
         reason: 'the side on screen',
       );
       expect(standingsAsked, 1, reason: 'asked once, shared');
+      // The view is the answer's: it was the video on screen.
+      await t.pump(const Duration(seconds: 2));
+      final view = watchesSent.firstWhere(
+        (w) => w['contentId'] == '1',
+        orElse: () => const {},
+      );
+      expect(view['responseId'], '77');
+      expect(view['opponentMs'], 1500);
+      expect(view['creatorMs'], 0);
       // And the other side is one tap away, as ever.
       await t.tap(find.byKey(const ValueKey('matchup_challenger')));
       await t.pump(const Duration(milliseconds: 700));
@@ -433,19 +586,20 @@ void main() {
     expect(find.text('leo_beats'), findsWidgets);
     await t.pump(const Duration(seconds: 5));
 
-    // One vote each: a second tap says who you voted for, opens nothing
-    // and sends nothing.
+    // Changing your mind: the sheet again, and the other side moves it.
     lastVote = null;
     await t.tap(find.byTooltip('You voted'));
     for (var i = 0; i < 6; i++) {
       await t.pump(const Duration(milliseconds: 100));
     }
-    expect(
-      find.text('You voted for leo_beats. Everyone gets one vote.'),
-      findsOneWidget,
-    );
-    expect(find.byKey(const ValueKey('vote_creator')), findsNothing);
-    expect(lastVote, isNull);
+    expect(find.text('Change your vote'), findsOneWidget);
+    await t.tap(find.byKey(const ValueKey('vote_creator')));
+    for (var i = 0; i < 6; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    expect(lastVote?['side'], 'creator');
+    expect(find.text('Vote moved to maya.'), findsOneWidget);
+    expect(find.byTooltip('You voted'), findsOneWidget);
     await t.pump(const Duration(seconds: 5));
     await closeReel(t);
   });

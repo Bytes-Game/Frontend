@@ -25,9 +25,14 @@ class BattleSide {
   /// The answer's id. Empty for the creator's side.
   final String responseId;
 
-  /// Genuine votes, after the fake ones are taken off. Can be a half: a vote
-  /// from a very new account counts half.
+  /// Every vote cast for this side. With [likes], [views] and [shares], the
+  /// same numbers every other screen shows.
   final double votes;
+
+  /// The votes that decide the battle: votes from people who never watched,
+  /// or from throwaway accounts, taken off; a vote from a very new account
+  /// counts half. Only differs from [votes] when some did not count.
+  final double countedVotes;
   final int rawVotes;
   final int removedVotes;
   final int likes;
@@ -42,6 +47,7 @@ class BattleSide {
     required this.role,
     this.responseId = '',
     this.votes = 0,
+    this.countedVotes = 0,
     this.rawVotes = 0,
     this.removedVotes = 0,
     this.likes = 0,
@@ -59,6 +65,8 @@ class BattleSide {
     role: '${j['role'] ?? ''}',
     responseId: '${j['responseId'] ?? ''}',
     votes: _toDouble(j['votes']),
+    // A server from before the two sets sent the counted ones as "votes".
+    countedVotes: _toDouble(j['countedVotes'] ?? j['votes']),
     rawVotes: _toInt(j['rawVotes']),
     removedVotes: _toInt(j['removedVotes']),
     likes: _toInt(j['likes']),
@@ -113,6 +121,51 @@ class BattleStandings {
   }
 
   int get removedTotal => removed.values.fold(0, (a, b) => a + b);
+
+  /// Everything added up across the players — what the battle page shows
+  /// as its totals, so they always match the rows of the live score.
+  int get totalVotes => sides.fold(0, (a, s) => a + s.votes.round());
+  int get totalLikes => sides.fold(0, (a, s) => a + s.likes);
+  int get totalViews => sides.fold(0, (a, s) => a + s.views);
+  int get totalShares => sides.fold(0, (a, s) => a + s.shares);
+
+  /// Some votes did not count, so the score that decides the battle is not
+  /// the one on show.
+  bool get countedDiffers => sides.any((s) => s.countedVotes != s.votes);
+
+  /// This count with votes moved on screen before the server has them:
+  /// [delta] by side — "creator", or an answer's id.
+  BattleStandings withVotesMoved(Map<String, int> delta) {
+    if (delta.isEmpty) return this;
+    return BattleStandings(
+      challengeId: challengeId,
+      status: status,
+      battleDays: battleDays,
+      acceptedAt: acceptedAt,
+      endsAt: endsAt,
+      resolved: resolved,
+      removed: removed,
+      yourVote: yourVote,
+      sides: [
+        for (final s in sides)
+          BattleSide(
+            userId: s.userId,
+            username: s.username,
+            role: s.role,
+            responseId: s.responseId,
+            votes: s.votes + (delta[s.isCreator ? 'creator' : s.responseId] ?? 0),
+            countedVotes: s.countedVotes,
+            rawVotes: s.rawVotes,
+            removedVotes: s.removedVotes,
+            likes: s.likes,
+            views: s.views,
+            shares: s.shares,
+            rank: s.rank,
+            leading: s.leading,
+          ),
+      ],
+    );
+  }
 
   factory BattleStandings.fromJson(Map<String, dynamic> j) => BattleStandings(
     challengeId: '${j['challengeId'] ?? ''}',
@@ -281,25 +334,8 @@ class BattlesPage {
 class ActionResult {
   final bool ok;
   final String message;
-
-  /// Set only when a vote was turned down because this person already voted
-  /// in the battle: the side their one vote is on ("creator", or an answer's
-  /// id). Empty in every other case.
-  final String yourVote;
-
-  const ActionResult(this.ok, [this.message = '']) : yourVote = '';
-
-  const ActionResult.alreadyVoted(this.yourVote)
-    : ok = false,
-      message = alreadyVotedText;
-
-  bool get alreadyVoted => yourVote.isNotEmpty;
+  const ActionResult(this.ok, [this.message = '']);
 }
-
-/// What someone sees when they try to vote twice in one battle. Said as a
-/// fact, not as an error — nothing went wrong.
-const alreadyVotedText =
-    'You already voted in this battle. Everyone gets one vote.';
 
 /// Where a rating sits on the league ladder.
 ///
@@ -374,25 +410,31 @@ class PersonAt {
   );
 }
 
-/// One side of a battle and the people who voted for it. Only the battle's
-/// own players are sent these.
-class VoterSide {
+/// One video — the creator's, or an answer — and the people on a list for
+/// it: who liked it, voted for it, or shared it. Only the people in the
+/// video are sent these.
+class PeopleSide {
   final String username;
 
   /// "creator" or "responder".
   final String role;
-  final List<PersonAt> voters;
+  final String responseId;
+  final List<PersonAt> people;
 
-  const VoterSide({
+  const PeopleSide({
     required this.username,
     required this.role,
-    this.voters = const [],
+    this.responseId = '',
+    this.people = const [],
   });
 
-  factory VoterSide.fromJson(Map<String, dynamic> j) => VoterSide(
+  bool get isCreator => role == 'creator';
+
+  factory PeopleSide.fromJson(Map<String, dynamic> j) => PeopleSide(
     username: '${j['username'] ?? ''}',
     role: '${j['role'] ?? ''}',
-    voters: (j['voters'] as List? ?? const [])
+    responseId: '${j['responseId'] ?? ''}',
+    people: (j['people'] as List? ?? const [])
         .whereType<Map<String, dynamic>>()
         .map(PersonAt.fromJson)
         .toList(),

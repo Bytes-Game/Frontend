@@ -10,7 +10,9 @@ import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
 import 'package:myapp/widgets/league_badge.dart' show leagueWash;
 import 'package:myapp/models/battle_model.dart'
-    show BattleSide, BattleStandings, alreadyVotedText;
+    show BattleSide, BattleStandings;
+import 'package:myapp/widgets/people_list_sheet.dart'
+    show PeopleList, showPeople;
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/challenge_detail_page.dart';
@@ -1109,7 +1111,23 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       if (item is _ReelItem && item.type == 'challenge' && item.id.isNotEmpty) {
         final dp = _cachedDp;
         final userId = dp?.user?.id ?? '';
-        if (userId.isNotEmpty && _watchEventRecorded.add(item.id)) {
+        // A battle is sent every time, with how long each video was on
+        // screen: someone who turns to the other video after the first
+        // 1.5 seconds has watched a second video, and that is a view of it
+        // too. The server counts each person once a day per video, so
+        // sending again adds nothing it should not.
+        final firstTime = _watchEventRecorded.add(item.id);
+        if (userId.isNotEmpty && item.isBattle && !firstTime) {
+          ApiService.recordWatchEvent(
+            userId: userId,
+            contentId: item.id,
+            contentType: item.type,
+            watchTime: watched,
+            completed: totalMs > 0 && watched >= (totalMs * 0.9),
+            sides: details,
+          );
+        }
+        if (userId.isNotEmpty && firstTime) {
           // Set.add returns true only when the id is brand-new for
           // this session — that's our dedup gate against the 1.5s
           // safety-net timer in _scheduleInitialWatchEvent. Either
@@ -1126,6 +1144,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
             contentType: item.type,
             watchTime: watched,
             completed: totalMs > 0 && watched >= (totalMs * 0.9),
+            sides: details,
           );
           // Optimistic local bump so the right-rail number ticks
           // immediately. Cap to once-per-session-per-item by piggybacking
@@ -1303,12 +1322,24 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       if (!_watchEventRecorded.add(item.id)) return;
       // Fire-and-forget. Exactly one watch_events row per reel-view
       // — whichever path fires first wins, the other one no-ops.
+      //
+      // On a battle it says which video it was: the one on screen, which
+      // since battles open on whoever is ahead may be the answer. Without
+      // that the view went to the creator whichever video was watched.
+      final onAnswer = item.isBattle && item.faces.showingOpponent;
       ApiService.recordWatchEvent(
         userId: userId,
         contentId: item.id,
         contentType: item.type,
         watchTime: 1500,
         completed: false,
+        sides: item.isBattle
+            ? {
+                'responseId': item.opponentResponseId,
+                'creatorMs': onAnswer ? 0 : 1500,
+                'opponentMs': onAnswer ? 1500 : 0,
+              }
+            : null,
       );
     });
   }
@@ -2002,6 +2033,16 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       contentType: item.type,
       metadata: item.sideDetails,
     );
+    // Counted once per person per video, for the video on screen; the
+    // number under the button is the server's total.
+    final onAnswer = item.isBattle && item.faces.showingOpponent;
+    // ignore: discarded_futures
+    ApiService.shareChallenge(
+      challengeId: item.id,
+      responseId: onAnswer ? item.opponentResponseId : '',
+    ).then((total) {
+      if (total != null && mounted) setState(() => item.shareCount = total);
+    });
     // The share sheet expects a full ChallengeModel — we synthesize one
     // from the lighter _ReelItem since that's all the feed payload
     // gives us. Only the fields the share UI reads (id, title, video
@@ -2046,16 +2087,6 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       _toast('Sign in to vote');
       return;
     }
-    // One vote each. A battle you already voted in says so — with who you
-    // voted for — rather than opening the sheet to vote again.
-    if (item.hasVoted) {
-      _toast(
-        item.votedFor.isEmpty
-            ? alreadyVotedText
-            : 'You voted for ${item.votedFor}. Everyone gets one vote.',
-      );
-      return;
-    }
     EventTracker.instance.trackTap(
       target: 'reel_open_vote_dialog',
       pageName: 'home_page',
@@ -2071,10 +2102,14 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       voted: item.hasVoted,
       votedFor: item.votedFor,
       onVote: (responseId, username) async {
-        // Optimistic UI flip so the trophy icon turns green and the
-        // label switches to the picked side immediately.
+        // Already their vote: nothing to do.
+        if (item.hasVoted && item.votedFor == username) return;
+        // Optimistic: the button turns green and the count moves at once.
+        // A first vote adds one; moving a vote adds none.
+        final before = (item.hasVoted, item.votedFor, item.voteCount);
         if (mounted) {
           setState(() {
+            if (!item.hasVoted) item.voteCount++;
             item.hasVoted = true;
             item.votedFor = username;
           });
@@ -2085,30 +2120,21 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
           voterId: userId,
         );
         if (!mounted) return;
-        if (res.alreadyVoted) {
-          // Voted before, perhaps on another phone: keep it marked, on the
-          // side it is really on.
-          setState(() {
-            item.hasVoted = true;
-            item.votedFor = res.yourVote == 'creator'
-                ? item.creatorUsername
-                : res.yourVote == item.opponentResponseId
-                ? item.opponentUsername
-                : '';
-          });
-          _toast(res.message);
-        } else if (!res.ok) {
+        if (!res.ok) {
           // Roll back the optimistic flip on a failed vote so the
           // user can retry instead of believing their vote landed —
           // and say why, when the server said: "This battle has
           // ended." is not something a retry fixes.
           setState(() {
-            item.hasVoted = false;
-            item.votedFor = '';
+            item.hasVoted = before.$1;
+            item.votedFor = before.$2;
+            item.voteCount = before.$3;
           });
           _toast(res.message);
         } else {
-          _toast('Voted for $username!');
+          _toast(
+            before.$1 ? 'Vote moved to $username.' : 'Voted for $username!',
+          );
         }
       },
     );
@@ -2128,15 +2154,24 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       return;
     }
     EventTracker.instance.trackSave(contentId: item.id, contentType: item.type);
-    setState(() => item.isSaved = !item.isSaved);
+    final was = item.isSaved;
+    setState(() {
+      item.isSaved = !was;
+      item.saveCount = math.max(0, item.saveCount + (was ? -1 : 1));
+    });
     final result = await ApiService.toggleSaveChallenge(
       userId: userId,
       challengeId: item.id,
     );
     if (!mounted) return;
     if (result != null) {
+      final saved = result['saved'] == true;
       setState(() {
-        item.isSaved = result['saved'] == true;
+        // The server's answer, with the count moved to match it.
+        if (saved != item.isSaved) {
+          item.saveCount = math.max(0, item.saveCount + (saved ? 1 : -1));
+        }
+        item.isSaved = saved;
       });
       _toast(item.isSaved ? 'Saved to collection' : 'Removed from saved');
     }
@@ -2647,6 +2682,13 @@ class _ReelItem implements _FeedEntry {
   int comments;
   bool isLiked;
 
+  /// Votes cast, people who shared, people who saved — the numbers under
+  /// those buttons. From the server with the video, the same as every other
+  /// screen, and brought up to date from the live score on a battle.
+  int voteCount = 0;
+  int shareCount = 0;
+  int saveCount = 0;
+
   /// The answer's own likes, and whether we have liked it. On a battle the
   /// heart likes whichever side is on screen — the creator's challenge or
   /// the answer — and shows that side's count. Before this every like went
@@ -2889,7 +2931,10 @@ class _ReelItem implements _FeedEntry {
         ..isSaved = c['isSaved'] == true
         ..hasVoted = c['hasVoted'] == true
         ..votedFor = c['votedFor']?.toString() ?? ''
-        ..opponentLiked = c['topResponseLiked'] == true;
+        ..opponentLiked = c['topResponseLiked'] == true
+        ..voteCount = (c['voteCount'] as num?)?.toInt() ?? 0
+        ..shareCount = (c['shareCount'] as num?)?.toInt() ?? 0
+        ..saveCount = (c['saveCount'] as num?)?.toInt() ?? 0;
     }
     return null;
   }
@@ -2962,7 +3007,10 @@ class _ReelItem implements _FeedEntry {
       ..isSaved = c.isSaved
       ..hasVoted = c.hasVoted
       ..votedFor = c.votedFor
-      ..opponentLiked = c.topResponseLiked;
+      ..opponentLiked = c.topResponseLiked
+      ..voteCount = c.voteCount
+      ..shareCount = c.shareCount
+      ..saveCount = c.saveCount;
   }
 }
 
@@ -3362,6 +3410,24 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   /// Who is ahead in the live score: "creator", "answer", or "".
   String get _leader => _BattleScores.leaderOf(widget.item.id);
 
+  /// Opens who liked, voted or shared — for the people in the video: who
+  /// posted it, and on a battle who answered. Null for everyone else, whose
+  /// number is then only a number. Opens on the side on screen.
+  VoidCallback? _who(PeopleList list) {
+    final me = Provider.of<DataProvider>(context, listen: false).user;
+    final item = widget.item;
+    if (me == null || item.id.isEmpty || item.type != 'challenge') return null;
+    final inIt = item.creatorId == me.id ||
+        (item.isBattle && item.opponentUsername == me.username);
+    if (!inIt) return null;
+    return () => showPeople(
+      context,
+      item.id,
+      list,
+      startOnAnswer: item.isBattle && _showingOpponent,
+    );
+  }
+
   Future<void> _loadScore({bool force = false}) async {
     final item = widget.item;
     if (!item.isBattle || item.id.isEmpty || _scoreLoading) return;
@@ -3374,6 +3440,14 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     if (got == null) {
       debugPrint('[reel] battle ${item.id}: score could not be read; '
           'the button shows no numbers');
+    } else {
+      // The same numbers as the battle page: votes, shares and views are
+      // the live score's totals. (Likes stay with the heart, which keeps
+      // its own count per side, from the same source.)
+      item
+        ..voteCount = got.totalVotes
+        ..shareCount = got.totalShares
+        ..views = got.totalViews;
     }
     setState(() {});
   }
@@ -4450,11 +4524,16 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                 _OwnerMenuButton(onDelete: widget.onDelete),
                 const SizedBox(height: 10),
               ],
+              // A number under every button, as on Instagram. The icon does
+              // the thing; the number, for the people in the video, opens
+              // who did it — who liked this side, who voted for whom, who
+              // shared. Everyone else sees the numbers only.
               if (item.isBattle) ...[
                 _VoteAction(
                   hasVoted: item.hasVoted,
-                  votedFor: item.votedFor,
+                  count: item.voteCount,
                   onTap: widget.onVote,
+                  onCountTap: _who(PeopleList.votes),
                 ),
                 const SizedBox(height: 16),
               ],
@@ -4464,18 +4543,19 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                     : Icons.favorite_border_rounded,
                 color: item.heartOn ? _heartRed : Colors.white,
                 label: _compact(item.heartCount),
+                countKey: 'count_likes',
                 tooltip: item.heartOn ? 'Unlike' : 'Like',
                 active: item.heartOn,
                 onTap: widget.onLike,
+                onLabelTap: _who(PeopleList.likes),
               ),
               const SizedBox(height: 16),
               _Action(
                 icon: Icons.chat_bubble_rounded,
                 glyph: const _CommentGlyph(),
                 color: Colors.white,
-                // Hide the digit on 0 — looks intentional rather than
-                // "broken counter" for brand-new challenges.
-                label: item.comments > 0 ? _compact(item.comments) : '',
+                label: _compact(item.comments),
+                countKey: 'count_comments',
                 tooltip: 'Comments',
                 onTap: widget.onComment,
               ),
@@ -4484,9 +4564,11 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                 icon: Icons.reply_rounded,
                 mirror: true,
                 color: Colors.white,
-                label: 'Share',
+                label: _compact(item.shareCount),
+                countKey: 'count_shares',
                 tooltip: 'Share',
                 onTap: widget.onShare,
+                onLabelTap: _who(PeopleList.shares),
               ),
               const SizedBox(height: 16),
               _Action(
@@ -4494,7 +4576,8 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                     ? Icons.bookmark_rounded
                     : Icons.bookmark_border_rounded,
                 color: item.isSaved ? _savedGold : Colors.white,
-                label: item.isSaved ? 'Saved' : 'Save',
+                label: _compact(item.saveCount),
+                countKey: 'count_saves',
                 tooltip: item.isSaved ? 'Saved' : 'Save',
                 active: item.isSaved,
                 onTap: widget.onSave,
@@ -4816,6 +4899,13 @@ class _Action extends StatefulWidget {
   final bool active;
   final VoidCallback? onTap;
 
+  /// The number under the icon as its own button — who liked, who shared.
+  /// Null: the number is part of the icon's button.
+  final VoidCallback? onLabelTap;
+
+  /// Key on the number, for finding it.
+  final String? countKey;
+
   const _Action({
     required this.icon,
     this.glyph,
@@ -4825,6 +4915,8 @@ class _Action extends StatefulWidget {
     this.mirror = false,
     this.active = false,
     this.onTap,
+    this.onLabelTap,
+    this.countKey,
   });
 
   @override
@@ -4885,28 +4977,54 @@ class _ActionState extends State<_Action> with SingleTickerProviderStateMixin {
                 child: icon,
               ),
             ),
-            // Skip the label slot entirely when the caller passes an empty
-            // string, so a button with nothing to count takes less room.
-            if (widget.label.isNotEmpty) ...[
+            // With its own button, the number is drawn below, outside this
+            // one.
+            if (widget.label.isNotEmpty && widget.onLabelTap == null) ...[
               const SizedBox(height: 3),
-              Text(
-                widget.label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  shadows: _textShadow,
-                ),
-              ),
+              _label(),
             ],
           ],
         ),
       ),
     );
     final tip = widget.tooltip;
-    return tip == null ? button : Tooltip(message: tip, child: button);
+    final withTip = tip == null ? button : Tooltip(message: tip, child: button);
+    if (widget.onLabelTap == null || widget.label.isEmpty) return withTip;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        withTip,
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onLabelTap,
+          child: SizedBox(
+            width: 56,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 3, bottom: 2),
+              child: _label(),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _label() {
+    return Text(
+      widget.label,
+      key: widget.countKey == null
+          ? null
+          : ValueKey<String>(widget.countKey!),
+      textAlign: TextAlign.center,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 11.5,
+        fontWeight: FontWeight.w600,
+        shadows: _textShadow,
+      ),
+    );
   }
 }
 
@@ -4956,17 +5074,46 @@ class _OwnerMenuButton extends StatelessWidget {
 /// the name you picked under it, so you remember at a glance.
 class _VoteAction extends StatelessWidget {
   final bool hasVoted;
-  final String votedFor;
+
+  /// Votes cast in the battle, both sides.
+  final int count;
   final VoidCallback onTap;
+
+  /// Who voted for whom — for the people in the battle. Null: the number
+  /// is part of the vote button.
+  final VoidCallback? onCountTap;
 
   const _VoteAction({
     required this.hasVoted,
-    required this.votedFor,
+    required this.count,
     required this.onTap,
+    this.onCountTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final button = _button();
+    if (onCountTap == null) return button;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        button,
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onCountTap,
+          child: SizedBox(
+            width: 64,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: 2),
+              child: _count(),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _button() {
     return Tooltip(
       message: hasVoted ? 'You voted' : 'Vote',
       child: GestureDetector(
@@ -5006,27 +5153,29 @@ class _VoteAction extends StatelessWidget {
                   size: 24,
                 ),
               ),
-              const SizedBox(height: 4),
-              // Truncated, so a long name cannot push the column into the
-              // video.
-              Text(
-                hasVoted ? (votedFor.isEmpty ? 'Voted' : votedFor) : 'Vote',
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  shadows: _textShadow,
-                ),
-              ),
+              if (onCountTap == null) ...[
+                const SizedBox(height: 4),
+                _count(),
+              ],
             ],
           ),
         ),
       ),
     );
   }
+
+  Widget _count() => Text(
+    _ReelTileState._compact(count),
+    key: const ValueKey('count_votes'),
+    textAlign: TextAlign.center,
+    maxLines: 1,
+    style: const TextStyle(
+      color: Colors.white,
+      fontSize: 11.5,
+      fontWeight: FontWeight.w600,
+      shadows: _textShadow,
+    ),
+  );
 }
 
 class _PauseBadge extends StatelessWidget {

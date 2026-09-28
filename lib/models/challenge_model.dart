@@ -38,6 +38,13 @@ class ChallengeModel {
   /// Defaults to 0 for legacy payloads / endpoints that haven't started
   /// shipping it; readers should treat 0 as "unknown / hide the count".
   final int commentCount;
+
+  /// Votes cast, people who shared, people who saved. The server fills these
+  /// with the comment count on every video it sends, so every screen shows
+  /// the same numbers.
+  final int voteCount;
+  final int shareCount;
+  final int saveCount;
   final String createdAt;
   final String expiresAt;
   final int responseCount;
@@ -100,6 +107,9 @@ class ChallengeModel {
   required this.likes,
   required this.views,
   this.commentCount = 0,
+  this.voteCount = 0,
+  this.shareCount = 0,
+  this.saveCount = 0,
   required this.createdAt,
   this.expiresAt = '',
   required this.responseCount,
@@ -157,6 +167,9 @@ class ChallengeModel {
       likes: json['likes'] ?? 0,
       views: json['views'] ?? 0,
       commentCount: json['commentCount'] ?? 0,
+      voteCount: (json['voteCount'] as num?)?.toInt() ?? 0,
+      shareCount: (json['shareCount'] as num?)?.toInt() ?? 0,
+      saveCount: (json['saveCount'] as num?)?.toInt() ?? 0,
       createdAt: json['createdAt'] ?? '',
       expiresAt: json['expiresAt'] ?? '',
       responseCount: json['responseCount'] ?? 0,
