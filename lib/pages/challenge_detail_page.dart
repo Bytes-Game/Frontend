@@ -15,7 +15,7 @@ import 'package:myapp/widgets/battle_scoreboard.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/upload_job_manager.dart';
-import 'package:myapp/models/battle_model.dart' show BattleStandings;
+import 'package:myapp/models/battle_model.dart' show ActionResult, BattleStandings;
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/config/constants.dart' show ContentCategories;
 import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
@@ -246,28 +246,39 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     });
   }
 
-  Future<void> _vote(String responseId) async {
-    if (_challenge == null) return;
-    final dp = Provider.of<DataProvider>(context, listen: false);
+  /// Sends a vote and says how it went. The score box shows the vote the
+  /// moment it is tapped and does not wait for this. It used to reload the
+  /// whole page after every vote, which is why voting felt slow.
+  Future<ActionResult> _vote(String responseId) async {
+    final c = _challenge;
+    final user = Provider.of<DataProvider>(context, listen: false).user;
+    if (c == null || user == null) {
+      return const ActionResult(false, 'Sign in to vote.');
+    }
     EventTracker.instance.trackTap(
       target: 'challenge_vote',
       pageName: 'challenge_detail_page',
-      params: {
-        'challengeId': _challenge!.id,
-        'responseId': responseId,
-      },
+      params: {'challengeId': c.id, 'responseId': responseId},
     );
-    final res = await ApiService.voteChallenge(
-      challengeId: _challenge!.id,
+    return ApiService.voteChallenge(
+      challengeId: c.id,
       responseId: responseId,
-      voterId: dp.user!.id,
+      voterId: user.id,
     );
-    if (!res.ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(res.message), duration: const Duration(seconds: 3)),
-      );
-    }
-    _load(); // refresh to show updated votes
+  }
+
+  /// A vote from the "More answers" list, which has no score box of its
+  /// own: say how it went, and bring the score box up to date.
+  Future<void> _voteFromList(String responseId) async {
+    final res = await _vote(responseId);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(res.ok ? 'Vote counted.' : res.message),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+    setState(() => _scoreVersion++);
   }
 
   /// Owner-only destructive action. Confirms via dialog, calls the
@@ -692,7 +703,7 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                                 response: r,
                                 onWatch: () => _watch(answer: true),
                                 onVote: c.status == 'active'
-                                    ? () => _vote(r.id)
+                                    ? () => _voteFromList(r.id)
                                     : null,
                               ),
                             ),

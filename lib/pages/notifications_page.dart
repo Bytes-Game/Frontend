@@ -125,7 +125,7 @@ class _NotificationsPageState extends State<NotificationsPage>
             title: 'Nothing yet',
             subtitle:
                 'When someone follows you, challenges you or accepts '
-                'your challenge, you will see it here.',
+                'your challenge, or you win a battle, you will see it here.',
           ),
         ],
       );
@@ -199,6 +199,9 @@ class _Heading extends StatelessWidget {
       );
     case 'battle_started':
       return (icon: Icons.emoji_events_rounded, color: const Color(0xFFE0A800));
+    // A battle you won. Green, the colour the app gives a winner everywhere.
+    case 'battle_won':
+      return (icon: Icons.emoji_events_rounded, color: const Color(0xFF30D158));
     case 'like':
       return (icon: Icons.favorite_rounded, color: const Color(0xFFFF375F));
     case 'comment':

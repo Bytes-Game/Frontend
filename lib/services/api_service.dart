@@ -1052,6 +1052,11 @@ class ApiService {
         }),
       );
       if (res.statusCode == 200) return const ActionResult(true);
+      // One vote per battle: the server names the side it is on.
+      final already = res.headers['x-your-vote'] ?? '';
+      if (res.statusCode == 409 && already.isNotEmpty) {
+        return ActionResult.alreadyVoted(already);
+      }
       if (res.statusCode >= 400 && res.statusCode < 500) {
         final why = res.body.trim();
         return ActionResult(false, why.isEmpty ? 'Vote not counted.' : why);

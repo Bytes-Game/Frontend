@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:myapp/models/battle_model.dart' show alreadyVotedText;
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
@@ -149,6 +150,13 @@ class _FeedActionBarState extends State<FeedActionBar> {
 
   void _onVote(String responseId, String username) async {
     final dp = Provider.of<DataProvider>(context, listen: false);
+    // One vote each.
+    if (_voted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text(alreadyVotedText)),
+      );
+      return;
+    }
     final before = (_voted, _votedFor);
     setState(() {
       _voted = true;
@@ -444,8 +452,9 @@ Future<void> showChallengeVoteDialog({
 }) {
   // A sheet from the bottom with the two people side by side, rather than a
   // dialog of two orange and blue outlined buttons stacked with "VS" between
-  // them. The one you already voted for is marked, so changing your mind is
-  // one tap on the other.
+  // them. The one you already voted for is marked. There is one vote each,
+  // so the feed does not open this once you have voted; if something does,
+  // it says "Your vote", not "Change your vote".
   final creator = creatorUsername.isEmpty ? 'Creator' : creatorUsername;
   final opponent = opponentUsername.isEmpty ? 'Opponent' : opponentUsername;
   return showModalBottomSheet<void>(
@@ -473,7 +482,7 @@ Future<void> showChallengeVoteDialog({
             ),
             const SizedBox(height: 16),
             Text(
-              voted ? 'Change your vote' : 'Who did it better?',
+              voted ? 'Your vote' : 'Who did it better?',
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 19,

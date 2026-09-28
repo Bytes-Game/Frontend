@@ -19,6 +19,7 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
+import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
 import 'package:myapp/widgets/smart_reels_feed.dart';
 
 Map<String, dynamic> battle() => {
@@ -67,6 +68,12 @@ List<String> posted = [];
 
 /// The body of the last vote the app sent.
 Map<String, dynamic>? lastVote;
+
+/// When true the answer is ahead in the live score, 14 to 12.
+bool answerLeads = false;
+
+/// When true the battle is over and decided.
+bool decided = false;
 
 void fakeServer(Map<String, dynamic> first) {
   lastVote = null;
@@ -130,7 +137,8 @@ void fakeServer(Map<String, dynamic> first) {
           utf8.encode(
             json.encode({
               'challengeId': '1',
-              'status': 'active',
+              'status': decided ? 'completed' : 'active',
+              'resolved': decided,
               'battleDays': 7,
               'acceptedAt': DateTime.now()
                   .subtract(const Duration(days: 1))
@@ -143,13 +151,16 @@ void fakeServer(Map<String, dynamic> first) {
                   'username': 'maya',
                   'role': 'creator',
                   'votes': 12,
-                  'leading': true,
+                  'leading': !answerLeads,
+                  'rank': answerLeads ? 2 : 1,
                 },
                 {
                   'username': 'leo_beats',
                   'role': 'responder',
                   'responseId': '77',
-                  'votes': 9,
+                  'votes': answerLeads ? 14 : 9,
+                  'leading': answerLeads,
+                  'rank': answerLeads ? 1 : 2,
                 },
               ],
             }),
@@ -222,7 +233,11 @@ Future<void> closeReel(WidgetTester t) async {
 }
 
 void main() {
-  setUp(SmartReelsFeed.debugForgetAppOpen);
+  setUp(() {
+    SmartReelsFeed.debugForgetAppOpen();
+    answerLeads = false;
+    decided = false;
+  });
   tearDown(() => ApiService.useClient(http.Client()));
 
   testWidgets('a battle names both people at the top, under the tabs, with '
@@ -260,25 +275,105 @@ void main() {
     await closeReel(t);
   });
 
-  testWidgets('the one ahead wears the trophy', (t) async {
+  testWidgets('while it runs, the names carry no trophy, no shield and no '
+      'mark', (t) async {
     await openReel(t, battle());
     await t.pump(const Duration(milliseconds: 300));
+    // The names are there, and maya is ahead 12 to 9...
+    expect(find.text('maya'), findsOneWidget);
+    expect(find.text('leo_beats'), findsOneWidget);
+    expect(find.text('12'), findsOneWidget);
+    // ...and nothing beside either name says so.
+    for (final side in ['matchup_challenger', 'matchup_opponent']) {
+      final names = find.byKey(ValueKey(side));
+      expect(names, findsOneWidget);
+      expect(
+        find.descendant(of: names, matching: find.byType(Icon)),
+        findsNothing,
+        reason: 'no trophy by $side',
+      );
+      expect(
+        find.descendant(of: names, matching: find.byType(LeagueEmblem)),
+        findsNothing,
+        reason: 'no league shield by $side (maya is Gold, leo Silver)',
+      );
+    }
+    expect(find.byKey(const ValueKey('matchup_winner')), findsNothing);
+    await closeReel(t);
+  });
+
+  testWidgets('once decided, a green bar under the winner\'s name and '
+      'nothing on the other', (t) async {
+    decided = true;
+    answerLeads = true;
+    await openReel(t, battle());
+    for (var i = 0; i < 10; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    final bar = find.descendant(
+      of: find.byKey(const ValueKey('matchup_opponent')),
+      matching: find.byKey(const ValueKey('matchup_winner')),
+    );
+    expect(bar, findsOneWidget, reason: 'leo won 14 to 12');
+    final border =
+        (t.widget<Container>(bar).decoration! as BoxDecoration).border!
+            as Border;
+    expect(border.bottom.color, const Color(0xFF30D158));
+    expect(
+      find.descendant(of: bar, matching: find.text('leo_beats')),
+      findsOneWidget,
+      reason: 'the bar is under the name',
+    );
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('matchup_challenger')),
-        matching: find.byKey(const ValueKey('matchup_leading')),
-      ),
-      findsOneWidget,
-      reason: 'maya leads 12 to 9',
-    );
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('matchup_opponent')),
-        matching: find.byKey(const ValueKey('matchup_leading')),
+        matching: find.byKey(const ValueKey('matchup_winner')),
       ),
       findsNothing,
     );
+    expect(find.byType(LeagueEmblem), findsNothing);
     await closeReel(t);
+  });
+
+  group('a battle opens on whoever is ahead', () {
+    testWidgets('the answer ahead: it opens on the answer, straight there', (
+      t,
+    ) async {
+      answerLeads = true;
+      await openReel(t, battle());
+      // Past the wait for the video to be ready, which comes first.
+      for (var i = 0; i < 10; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+      // The answer's side: its likes on the heart, and its name lit.
+      expect(find.text('940'), findsOneWidget, reason: "leo's likes");
+      expect(find.text('1.3K'), findsNothing);
+      final lit = t.widget<Text>(
+        find.descendant(
+          of: find.byKey(const ValueKey('matchup_opponent')),
+          matching: find.text('leo_beats'),
+        ),
+      );
+      expect(
+        lit.style!.fontWeight,
+        FontWeight.w800,
+        reason: 'the side on screen',
+      );
+      expect(standingsAsked, 1, reason: 'asked once, shared');
+      // And the other side is one tap away, as ever.
+      await t.tap(find.byKey(const ValueKey('matchup_challenger')));
+      await t.pump(const Duration(milliseconds: 700));
+      expect(find.text('1.3K'), findsOneWidget);
+      await closeReel(t);
+    });
+
+    testWidgets('the challenger ahead: it opens on the challenger, as '
+        'before', (t) async {
+      await openReel(t, battle());
+      expect(find.text('1.3K'), findsOneWidget, reason: "maya's likes");
+      expect(find.text('940'), findsNothing);
+      await closeReel(t);
+    });
   });
 
   testWidgets('tapping the other name switches to their side', (t) async {
@@ -336,6 +431,21 @@ void main() {
     expect(lastVote?['responseId'], '77');
     expect(find.byTooltip('You voted'), findsOneWidget);
     expect(find.text('leo_beats'), findsWidgets);
+    await t.pump(const Duration(seconds: 5));
+
+    // One vote each: a second tap says who you voted for, opens nothing
+    // and sends nothing.
+    lastVote = null;
+    await t.tap(find.byTooltip('You voted'));
+    for (var i = 0; i < 6; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    expect(
+      find.text('You voted for leo_beats. Everyone gets one vote.'),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('vote_creator')), findsNothing);
+    expect(lastVote, isNull);
     await t.pump(const Duration(seconds: 5));
     await closeReel(t);
   });

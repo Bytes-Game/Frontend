@@ -237,7 +237,7 @@ void _warmBeforePlay() {
   test('and so is the one a swipe lands on', () {
     final body = bodyOf('void _onPageChanged(');
     final warm = body.indexOf('_schedulePrefetch();');
-    final play = body.indexOf('_playCurrent();');
+    final play = body.indexOf('_playCurrent(');
     expect(warm, greaterThan(-1));
     expect(play, greaterThan(-1));
     expect(warm, lessThan(play),
@@ -250,7 +250,7 @@ void _warmBeforePlay() {
             'VideoCacheService.awaitReady exists precisely for this and was '
             'never called, so every reel opened against whatever happened to '
             'be on disk at that instant.');
-    expect(src.contains('_playCurrent(waitForWarm: true)'), isTrue,
+    expect(src.contains('_playCurrent(waitForWarm: true'), isTrue,
         reason: 'the initial open does not ask to wait');
   });
 
@@ -286,7 +286,15 @@ void _warmBeforePlay() {
     // guard deleted for exactly that reason.
     final body = bodyOf('Future<void> _playCurrent(');
     final lines = body.split('\n');
-    final at = lines.indexWhere((l) => l.contains('awaitReady('));
+    // The await itself: the warm is waited for on its own, or side by
+    // side with a battle's score.
+    expect(body.contains('awaitReady('), isTrue,
+        reason: 'nothing waits for the warm');
+    final at = lines.indexWhere(
+      (l) =>
+          l.contains('await ') &&
+          (l.contains('awaitReady(') || l.contains('Future.wait(waits)')),
+    );
     expect(at, greaterThan(-1), reason: 'nothing waits for the warm');
     expect(
       lines[at + 1].contains('_currentIndex != index'),

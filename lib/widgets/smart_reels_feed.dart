@@ -9,7 +9,8 @@ import 'package:myapp/widgets/create_burst.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
 import 'package:myapp/widgets/league_badge.dart' show leagueWash;
-import 'package:myapp/models/battle_model.dart' show BattleSide, BattleStandings;
+import 'package:myapp/models/battle_model.dart'
+    show BattleSide, BattleStandings, alreadyVotedText;
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/challenge_detail_page.dart';
@@ -229,7 +230,7 @@ class SmartReelsFeed extends StatefulWidget {
   @visibleForTesting
   static void debugForgetAppOpen() {
     _freshSinceOpen.clear();
-    _ReelTileState._scores.clear();
+    _BattleScores.forget();
   }
 
   const SmartReelsFeed({
@@ -448,6 +449,11 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // keeps them warm because the new page usually shows some of the same
     // reels, and trimming reels far behind the viewport leaves them to be
     // evicted in the normal way.
+    //
+    // First, stop the video this feed put on screen. handBack leaves the
+    // video on screen alone, so without this the one being watched played
+    // on, with sound, after going back from a profile video.
+    VideoPlayerService.instance.leaveScreen(this);
     for (final st in _playerStates.values) {
       st.handBack();
     }
@@ -607,7 +613,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       // hands the feed one reel and shows it immediately, so there is no
       // earlier moment at which anything could have warmed it.
       _prefetchUpcomingVideos();
-      _playCurrent(waitForWarm: true);
+      _playCurrent(waitForWarm: true, arriving: true);
     });
     // Cut the cold-connection tax for the media origin: the app can't
     // know the R2/CDN hostname until real video URLs arrive, so the
@@ -651,7 +657,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _prefetchUpcomingVideos();
-      _playCurrent(waitForWarm: true);
+      _playCurrent(waitForWarm: true, arriving: true);
     });
   }
 
@@ -1009,7 +1015,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     });
 
     _schedulePrefetch();
-    _playCurrent();
+    _playCurrent(arriving: true);
     _maybePrefetchNextPage();
   }
 
@@ -1157,9 +1163,15 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   /// Past this it opens cold, which is exactly what it did before.
   static const Duration _coldOpenGrace = Duration(milliseconds: 400);
 
+  /// How long a deliberately opened battle waits for its score, to know
+  /// which side to open on. Runs alongside the wait for the video itself
+  /// and is no longer, so it never makes the open slower than any other.
+  static const _leaderGrace = _coldOpenGrace;
+
   Future<void> _playCurrent({
     bool waitForWarm = false,
     bool fromStart = true,
+    bool arriving = false,
   }) async {
     if (_currentIndex < 0 || _currentIndex >= _items.length) return;
     final index = _currentIndex;
@@ -1187,9 +1199,38 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // The index is re-checked afterwards: 400ms is long enough for somebody
     // to swipe, and opening a player for a reel they have left is worse than
     // the cold open this is avoiding.
-    if (waitForWarm && !VideoCacheService.instance.isReady(url)) {
-      await VideoCacheService.instance.awaitReady(url, _coldOpenGrace);
+    // A battle opens on whoever is ahead. The score is usually here already
+    // (read ahead with the videos); a battle opened on purpose — a tap on a
+    // profile or in search — gives it a moment, alongside the video's.
+    //
+    // The two waits run side by side, each with its own short limit, so a
+    // battle opened this way never waits longer than any other video.
+    final waits = <Future<Object?>>[
+      if (waitForWarm && !VideoCacheService.instance.isReady(url))
+        VideoCacheService.instance.awaitReady(url, _coldOpenGrace),
+      if (waitForWarm &&
+          arriving &&
+          item.isBattle &&
+          item.id.isNotEmpty &&
+          _BattleScores.of(item.id) == null)
+        _BattleScores.fetch(
+          item.id,
+        ).timeout(_leaderGrace, onTimeout: () => null),
+    ];
+    if (waits.isNotEmpty) {
+      await Future.wait(waits);
       if (!mounted || _currentIndex != index) return;
+    }
+    if (arriving) {
+      item.opensOnAnswer =
+          item.isBattle && _BattleScores.leaderOf(item.id) == 'answer';
+    }
+    if (arriving && item.opensOnAnswer) {
+      // The answer is ahead: the card opens on it and starts it. The
+      // challenger is opened only if they turn to it.
+      item.openOnAnswer.value++;
+      _scheduleInitialWatchEvent(item);
+      return;
     }
 
     // The one place a player is opened. Everything else — every tile the
@@ -1213,7 +1254,11 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // AudioFocus, and taking focus while the old player is still decoding is
     // the audible chop on every swipe) and it declines to start anything if
     // the user swiped on during that handover.
-    await VideoPlayerService.instance.showAndPlay(url, fromStart: fromStart);
+    await VideoPlayerService.instance.showAndPlay(
+      url,
+      fromStart: fromStart,
+      owner: this,
+    );
     // The service guards its own half of that race; this guards ours, so a
     // watch event is not recorded against a reel that is no longer on screen.
     if (!mounted || _currentIndex != index) return;
@@ -1726,10 +1771,17 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     ) {
       final entry = _items[i];
       if (entry is! _ReelItem) continue; // skip cards
-      final u = entry.videoUrl;
+      // A battle opens on whoever is ahead, so that side is the one a
+      // swipe needs first. Its score is read ahead here too, for the next
+      // two battles, so the side is known before the swipe lands.
+      final answerFirst = _BattleScores.leaderOf(entry.id) == 'answer';
+      final u = answerFirst ? entry.opponentVideoUrl : entry.videoUrl;
       if (u.isNotEmpty) challengers.add(u);
-      final opp = entry.opponentVideoUrl;
+      final opp = answerFirst ? entry.videoUrl : entry.opponentVideoUrl;
       if (opp.isNotEmpty) opponents.add(opp);
+      if (entry.isBattle && i <= _currentIndex + 2) {
+        _BattleScores.readAhead(entry.id);
+      }
     }
 
     final upcoming = <String>[...challengers, ...opponents];
@@ -1994,6 +2046,16 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       _toast('Sign in to vote');
       return;
     }
+    // One vote each. A battle you already voted in says so — with who you
+    // voted for — rather than opening the sheet to vote again.
+    if (item.hasVoted) {
+      _toast(
+        item.votedFor.isEmpty
+            ? alreadyVotedText
+            : 'You voted for ${item.votedFor}. Everyone gets one vote.',
+      );
+      return;
+    }
     EventTracker.instance.trackTap(
       target: 'reel_open_vote_dialog',
       pageName: 'home_page',
@@ -2023,7 +2085,19 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
           voterId: userId,
         );
         if (!mounted) return;
-        if (!res.ok) {
+        if (res.alreadyVoted) {
+          // Voted before, perhaps on another phone: keep it marked, on the
+          // side it is really on.
+          setState(() {
+            item.hasVoted = true;
+            item.votedFor = res.yourVote == 'creator'
+                ? item.creatorUsername
+                : res.yourVote == item.opponentResponseId
+                ? item.opponentUsername
+                : '';
+          });
+          _toast(res.message);
+        } else if (!res.ok) {
           // Roll back the optimistic flip on a failed vote so the
           // user can retry instead of believing their vote landed —
           // and say why, when the server said: "This battle has
@@ -2475,6 +2549,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                   onAccept: (anchor) => _onAccept(index, anchor),
                   onDelete: () => _onDelete(index),
                   onNeedPlayer: () => _reopenPlayer(index),
+                  playbackOwner: this,
                 );
               },
             ),
@@ -2582,6 +2657,15 @@ class _ReelItem implements _FeedEntry {
   /// Bumped to turn this reel to the answer's side from outside it — when
   /// someone comes back from the battle page having tapped the answer.
   final ValueNotifier<int> showAnswer = ValueNotifier(0);
+
+  /// Bumped when this battle arrives on screen with the answer ahead, so
+  /// the card opens on the answer — straight there, no turn. See
+  /// [_SmartReelsFeedState._playCurrent].
+  final ValueNotifier<int> openOnAnswer = ValueNotifier(0);
+
+  /// Whether this visit opened on the answer. Decided by the feed as the
+  /// battle arrives.
+  bool opensOnAnswer = false;
 
   /// Which side of a battle is on screen, and for how long. The card turns
   /// it on every flip; views, completions and shares read it so the server
@@ -3014,6 +3098,76 @@ class _ReelPlayerState {
   }
 }
 
+// ─── Live battle scores ───────────────────────────────────────────────
+
+/// The live score of each battle, shared by the feed and the cards.
+///
+/// The card shows it; the feed reads it to open a battle on whoever is
+/// ahead. One copy, so a battle is asked for once however many things want
+/// it, and kept for the app run, refreshed after a minute.
+class _BattleScores {
+  static final Map<String, (BattleStandings, DateTime)> _got = {};
+  static final Map<String, Future<BattleStandings?>> _asking = {};
+
+  static BattleStandings? of(String id) => _got[id]?.$1;
+
+  static bool isFresh(String id) {
+    final had = _got[id];
+    return had != null &&
+        DateTime.now().difference(had.$2) < const Duration(minutes: 1);
+  }
+
+  /// Ask the server, or join the question already on its way. [force]
+  /// asks again even so — after a vote, the answer on its way may be from
+  /// before it.
+  static Future<BattleStandings?> fetch(String id, {bool force = false}) {
+    final asking = _asking[id];
+    if (asking != null && !force) return asking;
+    // A block, not an arrow: remove() hands back this same future, and
+    // whenComplete waits for whatever its callback returns — an arrow
+    // here made the question wait on itself for ever.
+    final f = ApiService.getBattleStandings(id).then((got) {
+      if (got != null) _got[id] = (got, DateTime.now());
+      return got;
+    }).whenComplete(() {
+      _asking.remove(id);
+    });
+    _asking[id] = f;
+    return f;
+  }
+
+  /// Fetch it now if it is not already here, without waiting.
+  static void readAhead(String id) {
+    if (id.isEmpty || _got.containsKey(id) || _asking.containsKey(id)) return;
+    unawaited(fetch(id));
+  }
+
+  /// Who won a decided battle: "creator", "answer", or "" — still running,
+  /// a draw, nobody voted, or not known. The same reading the battle page
+  /// gives its verdict.
+  static String winnerOf(String id) {
+    final st = of(id);
+    if (st == null || !st.resolved) return '';
+    final top = st.sides.where((x) => x.rank == 1).toList();
+    if (top.length != 1 || !top.first.leading) return '';
+    return top.first.isCreator ? 'creator' : 'answer';
+  }
+
+  /// Who is ahead: "creator", "answer", or "" when level or not known.
+  static String leaderOf(String id) {
+    final st = of(id);
+    if (st == null) return '';
+    final lead = st.sides.where((x) => x.leading).toList();
+    if (lead.length != 1) return '';
+    return lead.first.isCreator ? 'creator' : 'answer';
+  }
+
+  static void forget() {
+    _got.clear();
+    _asking.clear();
+  }
+}
+
 // ─── Single reel tile ────────────────────────────────────────────────
 
 class _ReelTile extends StatefulWidget {
@@ -3086,7 +3240,13 @@ class _ReelTile extends StatefulWidget {
     required this.onAccept,
     required this.onDelete,
     required this.onNeedPlayer,
+    required this.playbackOwner,
   });
+
+  /// The feed this tile is in. A flip between the two sides of a battle
+  /// starts a video on the feed's behalf, so the feed can stop it when it
+  /// closes — see [VideoPlayerService.leaveScreen].
+  final Object playbackOwner;
 
   @override
   State<_ReelTile> createState() => _ReelTileState();
@@ -3180,7 +3340,9 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     // duration) on release, so no fixed duration is configured here.
     _cubeCtl = AnimationController(vsync: this, value: 0.0);
     if (widget.isActive) _loadScore();
+    if (!widget.isActive) _rest();
     widget.item.showAnswer.addListener(_turnToAnswer);
+    widget.item.openOnAnswer.addListener(_openOnAnswer);
   }
 
   void _turnToAnswer() {
@@ -3192,42 +3354,43 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   // do not count taken off), fetched when the battle comes on screen and
   // kept for the app run, so scrolling back does not ask again. Refetched
   // after a minute, and after you vote.
-  static final Map<String, (BattleStandings, DateTime)> _scores = {};
   bool _scoreLoading = false;
   bool _votedWhenScored = false;
 
-  BattleStandings? get _score => _scores[widget.item.id]?.$1;
+  BattleStandings? get _score => _BattleScores.of(widget.item.id);
 
   /// Who is ahead in the live score: "creator", "answer", or "".
-  String get _leader {
-    final st = _score;
-    if (st == null) return '';
-    final lead = st.sides.where((x) => x.leading).toList();
-    if (lead.length != 1) return '';
-    return lead.first.isCreator ? 'creator' : 'answer';
-  }
+  String get _leader => _BattleScores.leaderOf(widget.item.id);
 
   Future<void> _loadScore({bool force = false}) async {
     final item = widget.item;
     if (!item.isBattle || item.id.isEmpty || _scoreLoading) return;
-    final had = _scores[item.id];
-    if (!force &&
-        had != null &&
-        DateTime.now().difference(had.$2) < const Duration(minutes: 1)) {
-      return;
-    }
+    if (!force && _BattleScores.isFresh(item.id)) return;
     _scoreLoading = true;
     _votedWhenScored = item.hasVoted;
-    final got = await ApiService.getBattleStandings(item.id);
+    final got = await _BattleScores.fetch(item.id, force: force);
     _scoreLoading = false;
     if (!mounted) return;
     if (got == null) {
       debugPrint('[reel] battle ${item.id}: score could not be read; '
           'the button shows no numbers');
-      setState(() {});
-      return;
     }
-    setState(() => _scores[item.id] = (got, DateTime.now()));
+    setState(() {});
+  }
+
+  /// The feed says this battle has arrived with the answer ahead: open on
+  /// the answer and start it. After the frame, because the card may not yet
+  /// know it is the one on screen, and opening a player during a build
+  /// throws — see [_ensureOpponentState].
+  void _openOnAnswer() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !widget.isActive || !widget.item.isBattle) return;
+      _setShowOpponent(true, track: false, animate: false);
+    });
+    // And ask for that frame. Nothing is playing yet — the challenger was
+    // never started — so without this no frame may come, and the answer
+    // would wait on a poster until something else moved.
+    WidgetsBinding.instance.scheduleFrame();
   }
 
   @override
@@ -3236,6 +3399,8 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     if (!identical(old.item, widget.item)) {
       old.item.showAnswer.removeListener(_turnToAnswer);
       widget.item.showAnswer.addListener(_turnToAnswer);
+      old.item.openOnAnswer.removeListener(_openOnAnswer);
+      widget.item.openOnAnswer.addListener(_openOnAnswer);
     }
     if (widget.isActive && !old.isActive) _loadScore();
     // A vote just landed: the score it changed is worth asking for again.
@@ -3266,11 +3431,36 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
         _cubeCtl.value = 0;
       }
     }
+    if (!widget.isActive) _rest();
+    // Arrived on the challenger's side while resting on the answer's — the
+    // feed decided before the score came in. Show the side that is playing.
+    if (widget.isActive && !old.isActive) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !widget.isActive || _showingOpponent) return;
+        if (widget.item.opensOnAnswer || _cubeDragging) return;
+        if (_cubeCtl.value != 0) {
+          _cubeCtl.stop();
+          _cubeCtl.value = 0;
+        }
+      });
+    }
+  }
+
+  /// Off screen, a battle rests on the side it will open on — whoever is
+  /// ahead — so it slides in showing that side rather than jumping to it
+  /// on arrival. Only the picture: nothing plays off screen.
+  void _rest() {
+    if (_showingOpponent || _cubeDragging || !widget.item.isBattle) return;
+    final target = _leader == 'answer' ? 1.0 : 0.0;
+    if (_cubeCtl.value == target) return;
+    _cubeCtl.stop();
+    _cubeCtl.value = target;
   }
 
   @override
   void dispose() {
     widget.item.showAnswer.removeListener(_turnToAnswer);
+    widget.item.openOnAnswer.removeListener(_openOnAnswer);
     _opponentState?.dispose();
     _heartCtl.dispose();
     _cubeCtl.dispose();
@@ -3717,7 +3907,10 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
       // actually needs, and it belongs to the item, not the state.
       final url = widget.item.videoUrl;
       if (url.isEmpty) return;
-      await VideoPlayerService.instance.showAndPlay(url);
+      await VideoPlayerService.instance.showAndPlay(
+        url,
+        owner: widget.playbackOwner,
+      );
       return;
     }
     if (incoming == null) return;
@@ -3726,7 +3919,10 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     // that records that, rather than starting a player behind the service's
     // back — which is exactly what used to leave the opponent unprotected
     // from eviction and muted by its own initialisation callback.
-    await VideoPlayerService.instance.showAndPlay(incoming.url);
+    await VideoPlayerService.instance.showAndPlay(
+      incoming.url,
+      owner: widget.playbackOwner,
+    );
   }
 
   /// Animate the cube from wherever it currently is to fully showing
@@ -4119,7 +4315,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                 opponent: item.opponentUsername,
                 opponentLeague: item.opponentLeague,
                 showingOpponent: _showingOpponent,
-                leader: _leader,
+                winner: _BattleScores.winnerOf(item.id),
                 onTapChallenger: () => _setShowOpponent(false),
                 onTapOpponent: () => _setShowOpponent(true),
               ),
@@ -4814,7 +5010,7 @@ class _VoteAction extends StatelessWidget {
               // Truncated, so a long name cannot push the column into the
               // video.
               Text(
-                hasVoted ? votedFor : 'Vote',
+                hasVoted ? (votedFor.isEmpty ? 'Voted' : votedFor) : 'Vote',
                 textAlign: TextAlign.center,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -4966,9 +5162,9 @@ class _Matchup extends StatelessWidget {
   final String opponentLeague;
   final bool showingOpponent;
 
-  /// Who is ahead right now: "creator", "answer", or "" when unknown or
-  /// level.
-  final String leader;
+  /// Who won, once the battle is decided: "creator", "answer", or "" —
+  /// still running, a draw, or not known. Only a winner gets a mark.
+  final String winner;
   final VoidCallback onTapChallenger;
   final VoidCallback onTapOpponent;
 
@@ -4980,7 +5176,7 @@ class _Matchup extends StatelessWidget {
     required this.showingOpponent,
     required this.onTapChallenger,
     required this.onTapOpponent,
-    this.leader = '',
+    this.winner = '',
   });
 
   @override
@@ -5007,7 +5203,7 @@ class _Matchup extends StatelessWidget {
                   username: challenger,
                   league: challengerLeague,
                   active: !showingOpponent,
-                  leading: leader == 'creator',
+                  won: winner == 'creator',
                   onTap: onTapChallenger,
                 ),
               ),
@@ -5021,7 +5217,7 @@ class _Matchup extends StatelessWidget {
                   username: opponent.isEmpty ? 'opponent' : opponent,
                   league: opponentLeague,
                   active: showingOpponent,
-                  leading: leader == 'answer',
+                  won: winner == 'answer',
                   onTap: onTapOpponent,
                 ),
               ),
@@ -5066,12 +5262,19 @@ class _VsMedal extends StatelessWidget {
   }
 }
 
+/// One person in the names at the top of a battle: their picture and name.
+///
+/// No trophy and no league shield beside the name — the owner found them
+/// cluttered. The one mark is a green bar under the name of whoever WON,
+/// once the battle is decided. While it is running, nobody has a mark.
 class _MatchupSide extends StatelessWidget {
   final String username;
   final String league;
   final bool active;
-  final bool leading;
+  final bool won;
   final VoidCallback onTap;
+
+  static const green = Color(0xFF30D158);
 
   const _MatchupSide({
     super.key,
@@ -5079,7 +5282,7 @@ class _MatchupSide extends StatelessWidget {
     required this.league,
     required this.active,
     required this.onTap,
-    this.leading = false,
+    this.won = false,
   });
 
   @override
@@ -5103,29 +5306,28 @@ class _MatchupSide extends StatelessWidget {
             _ReelAvatar(username: username, league: league, size: 26),
             const SizedBox(width: 6),
             Flexible(
-              child: Text(
-                username,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: active ? const Color(0xFF111114) : Colors.white,
-                  fontSize: 13.5,
-                  fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+              child: Container(
+                key: won ? const ValueKey('matchup_winner') : null,
+                padding: const EdgeInsets.only(bottom: 1.5),
+                decoration: won
+                    ? const BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(color: green, width: 2.5),
+                        ),
+                      )
+                    : null,
+                child: Text(
+                  username,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: active ? const Color(0xFF111114) : Colors.white,
+                    fontSize: 13.5,
+                    fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+                  ),
                 ),
               ),
             ),
-            if (leading) ...[
-              const SizedBox(width: 4),
-              const Icon(
-                Icons.emoji_events_rounded,
-                key: ValueKey('matchup_leading'),
-                size: 14,
-                color: Color(0xFFFFC53D),
-              ),
-            ] else if (league.isNotEmpty) ...[
-              const SizedBox(width: 4),
-              LeagueEmblem(league: league, size: 13),
-            ],
           ],
         ),
       ),

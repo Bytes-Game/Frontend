@@ -5,6 +5,7 @@
 // not, so a page broken into showing nothing cannot pass by having nothing
 // to find.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -46,15 +47,25 @@ Map<String, dynamic> challengeJson({required bool open, bool liked = false}) =>
 late int likeCalls;
 late bool refuseLikes;
 
+/// How many times the page read the challenge, and the votes it sent. A
+/// vote waits on [voteGate] when one is set.
+late int detailCalls;
+late List<String> votesSent;
+Completer<void>? voteGate;
+
 void fakeServer({required bool open, bool liked = false}) {
   likeCalls = 0;
   refuseLikes = false;
+  detailCalls = 0;
+  votesSent = [];
+  voteGate = null;
   ApiService.useClient(
     MockClient((req) async {
       final p = req.url.path;
       Object body = {};
       var status = 200;
       if (p.endsWith('/challenges/1') || p.endsWith('/challenges/2')) {
+        detailCalls++;
         body = {
           'challenge': challengeJson(open: open, liked: liked),
           'responses': open
@@ -104,6 +115,10 @@ void fakeServer({required bool open, bool liked = false}) {
             },
           ],
         };
+      } else if (p.endsWith('/challenges/vote')) {
+        votesSent.add(req.body);
+        await voteGate?.future;
+        body = {'voted': true, 'votes': []};
       } else if (p.endsWith('/voters')) {
         body = {
           'sides': [
@@ -295,6 +310,33 @@ void main() {
       expect(colorOf(text).computeLuminance(), greaterThan(0.5),
           reason: '"$text" is dark on a dark page');
     }
+  });
+
+  testWidgets('a vote shows the moment it is tapped, and the page is not '
+      'loaded again for it', (t) async {
+    await openPage(t, open: false);
+    final before = detailCalls;
+    voteGate = Completer<void>();
+    final vote = find.widgetWithText(FilledButton, 'Vote').first;
+    await t.ensureVisible(vote);
+    await t.tap(vote);
+    await t.pump();
+    // Still waiting on the server, and it already shows.
+    expect(votesSent, hasLength(1));
+    expect(find.byKey(const ValueKey('your_vote')), findsOneWidget);
+    expect(find.text('13'), findsOneWidget, reason: "maya's 12 + this vote");
+    voteGate!.complete();
+    await settle(t);
+    expect(
+      detailCalls,
+      before,
+      reason: 'reloading the whole page after a vote is what made it slow',
+    );
+    // A second try says so, and sends nothing.
+    await t.tap(find.byKey(const ValueKey('your_vote')));
+    await t.pump();
+    expect(find.textContaining('You already voted'), findsOneWidget);
+    expect(votesSent, hasLength(1));
   });
 
   testWidgets('the players can see who voted for whom; the poster who '
