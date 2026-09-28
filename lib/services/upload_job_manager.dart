@@ -371,6 +371,7 @@ class UploadJobManager {
         emotionTags: meta.emotionTags,
         tags: meta.tags,
         battleDays: meta.battleDays,
+        visibleTo: meta.visibleTo,
       );
       if (challenge == null) {
         _fail(job, 'create_fail',
@@ -531,6 +532,7 @@ class UploadJobManager {
         emotionTags: meta.emotionTags,
         tags: meta.tags,
         battleDays: meta.battleDays,
+        visibleTo: meta.visibleTo,
         // energyLevel removed from the create payload — the server
         // derives it from the metadata it already has. See
         // energy_classifier.go on the backend.
@@ -839,6 +841,9 @@ class UploadJobManager {
                 .map((e) => e.toString())
                 .toList(),
             battleDays: metaJson['battleDays'] as int? ?? 0,
+            visibleTo: (metaJson['visibleTo'] as List? ?? [])
+                .map((e) => e.toString())
+                .toList(),
           );
         }
         if (!job._hasRetryInfo) continue;
@@ -1039,6 +1044,7 @@ class UploadJob {
             'emotionTags': _challengeMeta!.emotionTags,
             'tags': _challengeMeta!.tags,
             'battleDays': _challengeMeta!.battleDays,
+            'visibleTo': _challengeMeta!.visibleTo,
           },
       };
 }
@@ -1070,6 +1076,10 @@ class ChallengeSubmissionMeta {
   /// the usual, which the server reads as 7.
   final int battleDays;
 
+  /// For "Only friends": the particular friends chosen, by user id. Empty
+  /// means all of them.
+  final List<String> visibleTo;
+
   const ChallengeSubmissionMeta({
     required this.prefix,
     required this.subject,
@@ -1078,6 +1088,7 @@ class ChallengeSubmissionMeta {
     required this.emotionTags,
     this.tags = const [],
     this.battleDays = 0,
+    this.visibleTo = const [],
   });
 }
 

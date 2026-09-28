@@ -47,11 +47,22 @@ class UploadStatusOverlay extends StatelessWidget {
             child: ValueListenableBuilder<List<UploadJob>>(
               valueListenable: UploadJobManager.instance.activeJobs,
               builder: (context, jobs, _) {
-                if (jobs.isEmpty) return const SizedBox.shrink();
+                // A challenge's video starts going up while its page is
+                // still being filled in. That is not a post yet, and its
+                // bar — "Preparing video…", "Ready to post" — sat over the
+                // page's own fields. It shows from the moment Post is
+                // pressed.
+                final shown = [
+                  for (final j in jobs)
+                    if (j.kind != UploadJobKind.challenge ||
+                        j.postedAs != null)
+                      j,
+                ];
+                if (shown.isEmpty) return const SizedBox.shrink();
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    for (final job in jobs)
+                    for (final job in shown)
                       Padding(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 12, vertical: 4),

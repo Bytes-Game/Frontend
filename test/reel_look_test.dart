@@ -75,6 +75,28 @@ void fakeServer(Map<String, dynamic> first) {
   posted = [];
   ApiService.useClient(
     MockClient((req) async {
+      if (req.url.path.endsWith('/challenges/${first['id']}')) {
+        return http.Response.bytes(
+          utf8.encode(
+            json.encode({
+              'challenge': first,
+              'responses': [
+                if (first['topResponseId'] != null)
+                  {
+                    'id': first['topResponseId'],
+                    'challengeId': first['id'],
+                    'responderId': '8',
+                    'responderUsername': first['topResponseUsername'],
+                    'videoUrl': first['topResponseVideoUrl'],
+                  },
+              ],
+              'votes': [],
+            }),
+          ),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }
       if (req.url.path.endsWith('/challenges/vote')) {
         lastVote = json.decode(req.body) as Map<String, dynamic>;
       }
@@ -203,23 +225,59 @@ void main() {
   setUp(SmartReelsFeed.debugForgetAppOpen);
   tearDown(() => ApiService.useClient(http.Client()));
 
-  testWidgets('a battle names both people beside the question, not in a '
-      'panel at the top', (t) async {
+  testWidgets('a battle names both people at the top, under the tabs, with '
+      'the question at the bottom', (t) async {
     await openReel(t, battle());
     expect(find.text('maya'), findsOneWidget);
     expect(find.text('leo_beats'), findsOneWidget);
-    expect(find.text('vs'), findsOneWidget);
+    expect(find.text('VS'), findsOneWidget);
     expect(find.text('Who can dance on a moving bus?'), findsOneWidget);
     expect(find.text('18.4K views'), findsOneWidget);
-    // The hint line is gone; the edge tab says it instead.
+    // No hint line, and no tab on the screen's edge.
     expect(find.textContaining('Swipe'), findsNothing);
-    expect(find.byTooltip('See leo_beats'), findsOneWidget);
+    expect(find.byKey(const ValueKey('battle_side_tab')), findsNothing);
+    // Names high on the screen, below Home's tabs; the question low.
+    final names = t.getCenter(find.text('maya')).dy;
+    expect(names, greaterThan(40), reason: 'under the tabs, not on them');
+    expect(names, lessThan(160));
+    expect(
+      t.getCenter(find.text('Who can dance on a moving bus?')).dy,
+      greaterThan(600),
+    );
+    // Side by side on one line.
+    expect(t.getCenter(find.text('leo_beats')).dy, names);
+    await closeReel(t);
+  });
 
-    // The old top panel, gone.
-    expect(find.text('CHALLENGER'), findsNothing);
-    expect(find.text('Swipe left for opponent'), findsNothing);
-    // And they sit in the bottom part of the screen, clear of Home's tabs.
-    expect(t.getCenter(find.text('maya')).dy, greaterThan(500));
+  testWidgets('the sound button is top left, clear of the top-right corner '
+      'where the notifications bell sits', (t) async {
+    await openReel(t, battle());
+    final sound = t.getCenter(find.byKey(const ValueKey('reel_sound')));
+    expect(sound.dx, lessThan(60));
+    expect(sound.dy, lessThan(60));
+    expect(find.byKey(const ValueKey('reel_back')), findsNothing,
+        reason: 'a tab of Home has no back arrow');
+    await closeReel(t);
+  });
+
+  testWidgets('the one ahead wears the trophy', (t) async {
+    await openReel(t, battle());
+    await t.pump(const Duration(milliseconds: 300));
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('matchup_challenger')),
+        matching: find.byKey(const ValueKey('matchup_leading')),
+      ),
+      findsOneWidget,
+      reason: 'maya leads 12 to 9',
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('matchup_opponent')),
+        matching: find.byKey(const ValueKey('matchup_leading')),
+      ),
+      findsNothing,
+    );
     await closeReel(t);
   });
 
@@ -266,6 +324,10 @@ void main() {
     expect(find.text('Who did it better?'), findsOneWidget);
     expect(find.byKey(const ValueKey('vote_creator')), findsOneWidget);
     expect(find.byKey(const ValueKey('vote_opponent')), findsOneWidget);
+    // No Cancel, and one handle: the theme's is switched off.
+    expect(find.text('Cancel'), findsNothing);
+    expect(t.widget<BottomSheet>(find.byType(BottomSheet)).showDragHandle,
+        isFalse);
 
     await t.tap(find.byKey(const ValueKey('vote_opponent')));
     for (var i = 0; i < 6; i++) {
@@ -346,26 +408,18 @@ void main() {
     await closeReel(t);
   });
 
-  testWidgets('the edge tab shows the other person and switches to them; '
-      'both names stay readable', (t) async {
+  testWidgets('both names stay readable; the one on screen is the lit '
+      'chip', (t) async {
     await openReel(t, battle());
-    // The name not on screen is still near-white, not faded out.
     final other = t.widget<Text>(find.text('leo_beats'));
     expect(other.style!.color!.a, greaterThan(0.85));
-
-    await t.tap(find.byTooltip('See leo_beats'));
+    final onScreen = t.widget<Text>(find.text('maya'));
+    expect(onScreen.style!.color, const Color(0xFF111114),
+        reason: 'dark words on the white chip');
+    await t.tap(find.byKey(const ValueKey('matchup_opponent')));
     await t.pump(const Duration(milliseconds: 700));
-    expect(find.text('940'), findsOneWidget, reason: "leo's side now");
-    expect(
-      find.byTooltip('See maya'),
-      findsOneWidget,
-      reason: 'the tab moves to the other edge and offers the way back',
-    );
-    // On the left edge now.
-    expect(
-      t.getCenter(find.byKey(const ValueKey('battle_side_tab'))).dx,
-      lessThan(100),
-    );
+    expect(t.widget<Text>(find.text('leo_beats')).style!.color,
+        const Color(0xFF111114));
     await closeReel(t);
   });
 
@@ -524,7 +578,26 @@ void main() {
     expect(find.byKey(const ValueKey('battle_side_tab')), findsNothing);
     expect(find.text('5.4K views'), findsOneWidget);
     expect(find.byTooltip('Vote'), findsNothing);
-    expect(find.text('vs'), findsNothing);
+    expect(find.text('VS'), findsNothing);
+    await closeReel(t);
+  });
+
+  testWidgets('from the battle page, tapping the answer goes back to the '
+      'reel on the answer\'s side', (t) async {
+    await openReel(t, battle());
+    expect(find.text('1.3K'), findsOneWidget, reason: "maya's side first");
+    await t.tap(find.byKey(const ValueKey('battle_score')));
+    for (var i = 0; i < 8; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byKey(const ValueKey('card_answer')), findsOneWidget);
+    await t.tap(find.byKey(const ValueKey('card_answer')));
+    for (var i = 0; i < 10; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byKey(const ValueKey('card_answer')), findsNothing,
+        reason: 'the battle page closed');
+    expect(find.text('940'), findsOneWidget, reason: "leo's side now");
     await closeReel(t);
   });
 }

@@ -103,7 +103,6 @@ class _SearchPageState extends State<SearchPage>
   // Suggestions (loaded once), shown only while the empty search bar has
   // focus — the page itself opens straight onto videos.
   List<String> _recentSearches = [];
-  List<String> _trendingSearches = [];
 
   /// Accounts opened from search, newest first — part of the history, the
   /// way they are in every app people know. Kept by the server so they
@@ -154,12 +153,10 @@ class _SearchPageState extends State<SearchPage>
 
   Future<void> _loadSearchSuggestions() async {
     final history = await ApiService.getSearchHistory();
-    final trending = await ApiService.getTrendingSearches();
     if (mounted) {
       setState(() {
         _recentSearches = history.recent;
         _recentAccounts = history.accounts;
-        _trendingSearches = trending;
       });
     }
   }
@@ -333,7 +330,12 @@ class _SearchPageState extends State<SearchPage>
     _debounce = Timer(const Duration(milliseconds: 150), () => _search(query));
   }
 
-  Future<void> _search(String query) async {
+  /// Run [query]. [submitted] is true when the person asked for it — the
+  /// search key, or a suggestion tapped — and only then does it go into
+  /// their history. The search that runs as they type is not a search they
+  /// made: it put "d", "da", "dan" and "danc" into the history on the way
+  /// to "dance".
+  Future<void> _search(String query, {bool submitted = false}) async {
     if (query.trim().isEmpty) return;
     setState(() => _loading = true);
     final start = DateTime.now();
@@ -344,7 +346,17 @@ class _SearchPageState extends State<SearchPage>
     final dp = Provider.of<DataProvider>(context, listen: false);
     final userId = dp.user?.id ?? '';
 
-    final result = await ApiService.searchAll(query.trim(), userId: userId);
+    final result = await ApiService.searchAll(
+      query.trim(),
+      userId: userId,
+      record: submitted,
+    );
+    if (submitted && mounted) {
+      final q = query.trim().toLowerCase();
+      setState(() {
+        _recentSearches = [q, ..._recentSearches.where((x) => x != q)];
+      });
+    }
     // A newer search superseded this one while it was in flight — drop
     // this response entirely (results AND analytics).
     if (seq != _searchSeq) return;
@@ -495,7 +507,7 @@ class _SearchPageState extends State<SearchPage>
                       focusNode: _focusNode,
                       hint: 'Search people, battles, shorts',
                       onChanged: _onSearchChanged,
-                      onSubmitted: _search,
+                      onSubmitted: (q) => _search(q, submitted: true),
                     ),
                   ),
                   // Cancel, while searching: back to the videos in one tap.
@@ -617,12 +629,12 @@ class _SearchPageState extends State<SearchPage>
         params: {'query': q},
       );
       _searchCtrl.text = q;
-      _search(q);
+      _search(q, submitted: true);
     }
 
     final hasHistory =
         _recentSearches.isNotEmpty || _recentAccounts.isNotEmpty;
-    if (!hasHistory && _trendingSearches.isEmpty) {
+    if (!hasHistory) {
       return Padding(
         padding: const EdgeInsets.only(top: 48),
         child: Text(
@@ -675,34 +687,6 @@ class _SearchPageState extends State<SearchPage>
               onTap: () => run(q, 'recent'),
               onRemove: () => _forgetSearch(q),
             ),
-        ],
-        if (_trendingSearches.isNotEmpty) ...[
-          const SectionTitle(
-            title: 'Trending',
-            padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final q in _trendingSearches.take(10))
-                  // As wide as its words: a Wrap offers the full width, and
-                  // the chip would take all of it.
-                  IntrinsicWidth(
-                    child: SizedBox(
-                      height: 34,
-                      child: _QueryChip(
-                      label: q,
-                        icon: Icons.trending_up_rounded,
-                        onTap: () => run(q, 'trending'),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
         ],
       ],
     );
@@ -802,7 +786,7 @@ class _SearchPageState extends State<SearchPage>
                     params: {'query': q, 'from': _lastQuery},
                   );
                   _searchCtrl.text = q;
-                  _search(q);
+                  _search(q, submitted: true);
                 },
               );
             },

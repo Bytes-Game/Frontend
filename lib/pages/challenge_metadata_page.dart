@@ -11,7 +11,9 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
+import 'package:myapp/models/user_model.dart';
 import 'package:myapp/services/upload_job_manager.dart';
+import 'package:myapp/widgets/friend_picker_sheet.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/suggest_field.dart';
 import 'package:myapp/widgets/tags_input.dart';
@@ -71,6 +73,10 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
   final _subjectCtl = TextEditingController();
 
   String _visibility = 'arena';
+
+  /// For "Only friends": the particular friends chosen. Empty is all of
+  /// them.
+  List<UserModel> _friends = const [];
 
   /// How many days the battle runs once somebody answers. The server keeps
   /// it between 7 and 30.
@@ -266,6 +272,9 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
       tags: _tags,
       emotionTags: const [],
       battleDays: int.parse(_battleDays),
+      visibleTo: _visibility == 'friends'
+          ? [for (final u in _friends) u.id]
+          : const [],
     );
 
     // Prepared path: the upload has (usually) been running since this
@@ -383,11 +392,15 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
             _choiceRow(
               value: _visibility,
               options: const [
-                ('arena', Icons.public_rounded, 'Everyone'),
-                ('friends', Icons.group_rounded, 'Friends only'),
+                ('arena', Icons.public_rounded, 'Public'),
+                ('friends', Icons.group_rounded, 'Only friends'),
               ],
               onChanged: (v) => setState(() => _visibility = v),
             ),
+            if (_visibility == 'friends') ...[
+              const SizedBox(height: 10),
+              _friendsScope(cs),
+            ],
 
             _section('Battle length'),
             _daysRow(),
@@ -538,7 +551,12 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
                             _visibility == 'friends'
                                 ? Icons.group_rounded
                                 : Icons.public_rounded,
-                            _visibility == 'friends' ? 'Friends' : 'Everyone',
+                            _visibility != 'friends'
+                                ? 'Public'
+                                : _friends.isEmpty
+                                ? 'Only friends'
+                                : '${_friends.length} '
+                                      '${_friends.length == 1 ? 'friend' : 'friends'}',
                           ),
                           _posterChip(
                             Icons.timer_outlined,
@@ -660,6 +678,125 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
   }
 
   /// Two or three choices side by side, the chosen one filled in.
+  /// Under "Only friends": all of them, or some chosen by name.
+  Widget _friendsScope(ColorScheme cs) {
+    Future<void> choose() async {
+      final uid =
+          Provider.of<DataProvider>(context, listen: false).user?.id ?? '';
+      if (uid.isEmpty) return;
+      final picked = await pickFriends(context, userId: uid, chosen: _friends);
+      if (picked == null || !mounted) return;
+      setState(() => _friends = picked);
+    }
+
+    final some = _friends.isNotEmpty;
+    Widget option(String key, String label, IconData icon, bool on,
+        VoidCallback tap) {
+      return Expanded(
+        child: Pressable(
+          onTap: tap,
+          child: AnimatedContainer(
+            key: ValueKey(key),
+            duration: const Duration(milliseconds: 160),
+            height: 40,
+            decoration: BoxDecoration(
+              color: on ? kAccent.withValues(alpha: 0.14) : null,
+              border: Border.all(
+                color: on ? kAccent : quietText(context).withValues(alpha: 0.3),
+              ),
+              borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 16, color: on ? kAccent : cs.onSurface),
+                const SizedBox(width: 6),
+                // Large text on a narrow phone: cut short, never overflow.
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: on ? kAccent : cs.onSurface,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            option('friends_all', 'All friends', Icons.groups_rounded, !some,
+                () => setState(() => _friends = const [])),
+            const SizedBox(width: 8),
+            option('friends_choose', 'Choose friends',
+                Icons.person_search_rounded, some, choose),
+          ],
+        ),
+        if (some) ...[
+          const SizedBox(height: 10),
+          Pressable(
+            onTap: choose,
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 24.0 + 16 * (_friends.take(4).length - 1),
+                  height: 26,
+                  child: Stack(
+                    children: [
+                      for (var i = 0; i < _friends.take(4).length; i++)
+                        Positioned(
+                          left: 16.0 * i,
+                          child: ArenaAvatar(
+                            name: _friends[i].username,
+                            size: 26,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _friends.length == 1
+                        ? 'Only @${_friends.first.username}'
+                        : '@${_friends.first.username} and '
+                              '${_friends.length - 1} more',
+                    key: const ValueKey('friends_summary'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Text(
+                  'Edit',
+                  style: TextStyle(color: kAccent, fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
+          ),
+        ],
+        const SizedBox(height: 6),
+        Text(
+          some
+              ? 'Only these friends see it, and each gets a notification.'
+              : 'Everyone who follows you sees it and gets a notification.',
+          style: TextStyle(fontSize: 12.5, color: quietText(context)),
+        ),
+      ],
+    );
+  }
+
   Widget _choiceRow({
     required String value,
     required List<(String, IconData, String)> options,

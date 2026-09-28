@@ -129,7 +129,8 @@ class _HomePageState extends State<HomePage>
                           pageName: 'home_page',
                           params: {'unreadCount': dp.unreadNotifications},
                         );
-                        dp.clearUnreadNotifications();
+                        // Not cleared here: the page shows what is new
+                        // first, then marks it seen.
                         Navigator.of(context).push(
                           MaterialPageRoute(builder: (_) => const NotificationsPage()),
                         );

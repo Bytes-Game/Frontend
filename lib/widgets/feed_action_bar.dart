@@ -109,6 +109,8 @@ class _FeedActionBarState extends State<FeedActionBar> {
 
   void _onComment() {
     showModalBottomSheet(
+      // The sheet draws its own handle; the theme's would be a second.
+      showDragHandle: false,
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -448,6 +450,9 @@ Future<void> showChallengeVoteDialog({
   final opponent = opponentUsername.isEmpty ? 'Opponent' : opponentUsername;
   return showModalBottomSheet<void>(
     context: context,
+    // One handle — its own — and no Cancel button: a drag down or a tap
+    // outside closes it, as with every sheet.
+    showDragHandle: false,
     backgroundColor: const Color(0xFF1C1C1E),
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
@@ -530,14 +535,7 @@ Future<void> showChallengeVoteDialog({
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFF8E8E93),
-              ),
-              child: const Text('Cancel'),
-            ),
+            const SizedBox(height: 10),
           ],
         ),
       ),

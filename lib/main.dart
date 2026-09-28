@@ -390,6 +390,10 @@ class _WebSocketWrapperState extends State<_WebSocketWrapper>
     _ws = WebSocketService(AppConstants.wsBaseUrl, username);
     if (username.isNotEmpty) {
       _ws.connect();
+      // The list and the bell's count, from the server — what happened
+      // while the app was closed is in it too.
+      // ignore: discarded_futures
+      dp.loadNotifications();
       _ws.notificationStream.listen((n) {
         // next_reel_hint is an invisible prefetch trigger pushed by the
         // backend ranker — the server thinks this URL is what the user

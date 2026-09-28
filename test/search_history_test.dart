@@ -33,9 +33,13 @@ late List<http.Request> changes;
 /// When true the server refuses to delete.
 late bool refuseDeletes;
 
+/// Every search the page ran, as asked.
+late List<Uri> searches;
+
 void fakeServer() {
   changes = [];
   refuseDeletes = false;
+  searches = [];
   ApiService.useClient(
     MockClient((req) async {
       final p = req.url.path;
@@ -65,6 +69,7 @@ void fakeServer() {
       }
       if (p.endsWith('/search/trending')) return jsonBody({'trending': []});
       if (p.endsWith('/search')) {
+        searches.add(req.url);
         return jsonBody({
           'accounts': [
             {
@@ -210,5 +215,35 @@ void main() {
     final leo = t.getTopLeft(find.byKey(const ValueKey('history_account_6')));
     final maya = t.getTopLeft(find.byKey(const ValueKey('history_account_5')));
     expect(leo.dy, lessThan(maya.dy));
+  });
+
+  testWidgets('typing searches without saving; pressing search saves it, '
+      'and so does tapping a past search', (t) async {
+    await openHistory(t);
+    await t.enterText(find.byType(TextField), 'dan');
+    await settle(t);
+    expect(searches, isNotEmpty, reason: 'results come as you type');
+    expect(searches.any((u) => u.queryParameters['record'] == '1'), isFalse,
+        reason: '"dan" is not a search anybody made');
+
+    searches.clear();
+    await t.testTextInput.receiveAction(TextInputAction.search);
+    await settle(t);
+    expect(searches.single.queryParameters['q'], 'dan');
+    expect(searches.single.queryParameters['record'], '1');
+
+    // A past search, tapped, is a search made.
+    await t.enterText(find.byType(TextField), '');
+    await settle(t);
+    searches.clear();
+    await t.tap(find.text('cooking'));
+    await settle(t);
+    expect(searches.single.queryParameters['record'], '1');
+  });
+
+  testWidgets('no Trending, only your own history', (t) async {
+    await openHistory(t);
+    expect(find.text('Recent'), findsOneWidget);
+    expect(find.text('Trending'), findsNothing);
   });
 }

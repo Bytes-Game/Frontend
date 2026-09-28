@@ -410,6 +410,7 @@ void openVideoPlaylist(
           kind: FeedKind.explore,
           playlist: videos,
           startIndex: index.clamp(0, videos.length - 1),
+          showBack: true,
         ),
       ),
     ),

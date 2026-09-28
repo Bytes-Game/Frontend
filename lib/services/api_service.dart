@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:myapp/config/constants.dart';
 import 'package:myapp/services/device_capabilities.dart';
+import 'package:myapp/models/notification_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/battle_model.dart';
@@ -167,46 +168,6 @@ class UpdateProfileResult {
     this.user,
     this.error,
   });
-}
-
-/// Which kind of video a tag-suggestion call is about.
-///
-/// The two are the same feature over two tables — a challenge, and somebody's
-/// answer to one — and they differ only in the path. An enum rather than a
-/// boolean because `getTagSuggestions(id, true)` at a call site says nothing
-/// about what the true means.
-enum TagSubject {
-  challenge('challenges'),
-  response('challenges/responses');
-
-  const TagSubject(this.pathSegment);
-
-  /// The part of the URL that names the kind. Matches the routes in the
-  /// backend's main.go.
-  final String pathSegment;
-}
-
-/// What the model noticed about a video, and what the creator already has.
-class TagSuggestions {
-  /// Offered: seen by the model, not already on the video, not already
-  /// turned down.
-  final List<String> suggested;
-
-  /// What the video carries now.
-  final List<String> yours;
-
-  const TagSuggestions({required this.suggested, required this.yours});
-
-  factory TagSuggestions.fromJson(Map<String, dynamic> j) => TagSuggestions(
-        suggested: _strings(j['suggested']),
-        yours: _strings(j['yours']),
-      );
-
-  bool get isEmpty => suggested.isEmpty;
-
-  static List<String> _strings(Object? v) => v is List
-      ? v.map((e) => e.toString()).where((e) => e.isNotEmpty).toList()
-      : const [];
 }
 
 /// The server looked at an upload and said no, with a reason.
@@ -1015,62 +976,6 @@ class ApiService {
     }
   }
 
-  /// What the model noticed about a video, for the person who made it.
-  ///
-  /// GET /api/v1/challenges/{id}/tag-suggestions            (a challenge)
-  /// GET /api/v1/challenges/responses/{id}/tag-suggestions  (an answer)
-  ///
-  /// Every video is read, listened to and looked at after it is posted — see
-  /// the worker's understanding pass. All of that was for the machine; the
-  /// creator never saw any of it. This is the same information, offered back.
-  ///
-  /// Creator only, enforced on the server. Null means "nothing to show" for
-  /// every reason at once — not yours, not analysed yet, or the request did
-  /// not get through — because none of them is worth interrupting a feed for.
-  static Future<TagSuggestions?> getTagSuggestions(
-    String id, {
-    TagSubject subject = TagSubject.challenge,
-  }) async {
-    try {
-      final res = await _authHttp.get(
-        Uri.parse('$_base/api/v1/${subject.pathSegment}/$id/tag-suggestions'),
-      );
-      if (res.statusCode != 200) return null;
-      return TagSuggestions.fromJson(
-          json.decode(res.body) as Map<String, dynamic>);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Record which suggestions the creator kept and which they turned down.
-  ///
-  /// POST /api/v1/challenges/{id}/tag-suggestions            (a challenge)
-  /// POST /api/v1/challenges/responses/{id}/tag-suggestions  (an answer)
-  ///
-  /// Both in one call, because they are one gesture: the creator looked at
-  /// what was offered and sorted it. Returns the new state, so the caller
-  /// does not have to guess what the server decided.
-  static Future<TagSuggestions?> decideTagSuggestions(
-    String id, {
-    TagSubject subject = TagSubject.challenge,
-    List<String> add = const [],
-    List<String> dismiss = const [],
-  }) async {
-    try {
-      final res = await _authHttp.post(
-        Uri.parse('$_base/api/v1/${subject.pathSegment}/$id/tag-suggestions'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({'add': add, 'dismiss': dismiss}),
-      );
-      if (res.statusCode != 200) return null;
-      return TagSuggestions.fromJson(
-          json.decode(res.body) as Map<String, dynamic>);
-    } catch (_) {
-      return null;
-    }
-  }
-
   /// POST /api/v1/challenges/like -> toggle like on a challenge
   static Future<Map<String, dynamic>?> likeChallenge({
     required String challengeId,
@@ -1758,11 +1663,15 @@ class ApiService {
     String query, {
     String type = 'all',
     String userId = '',
+    // Save it to the person's search history. Only for a search they
+    // asked for, never the one that runs as they type.
+    bool record = false,
   }) async {
     try {
       final params = <String, String>{
         'q': query,
         'type': type,
+        if (record) 'record': '1',
       };
       if (userId.isNotEmpty) {
         params['userId'] = userId;
@@ -1869,20 +1778,6 @@ class ApiService {
     return false;
   }
 
-  /// GET /api/v1/search/trending — the platform's current top queries.
-  static Future<List<String>> getTrendingSearches() async {
-    try {
-      final res = await _authHttp.get(Uri.parse('$_base/api/v1/search/trending'));
-      if (res.statusCode == 200) {
-        final body = json.decode(res.body) as Map<String, dynamic>;
-        return (body['trending'] as List? ?? []).map((e) => e.toString()).toList();
-      }
-      return [];
-    } catch (_) {
-      return [];
-    }
-  }
-
   /// Empty search shape — every section returns an empty list so callers
   /// don't need null-checks on individual keys.
   static Map<String, dynamic> _emptySearchResponse() => {
@@ -1951,6 +1846,85 @@ class ApiService {
   }
 
   // —— Push notifications ————————————————————————————————————————————
+
+  /// GET /api/v1/challenges/{id}/voters — who voted for whom. The server
+  /// answers only the battle's own players; null for anyone else, or when
+  /// it could not be read.
+  static Future<List<VoterSide>?> getVoters(String challengeId) async {
+    try {
+      final res = await _authHttp
+          .get(Uri.parse('$_base/api/v1/challenges/$challengeId/voters'));
+      if (res.statusCode == 200) {
+        final body = json.decode(res.body) as Map<String, dynamic>;
+        return (body['sides'] as List? ?? [])
+            .whereType<Map<String, dynamic>>()
+            .map(VoterSide.fromJson)
+            .toList();
+      }
+      debugPrint('[voters] $challengeId answered ${res.statusCode}');
+    } catch (e) {
+      debugPrint('[voters] $challengeId could not be read: $e');
+    }
+    return null;
+  }
+
+  /// GET /api/v1/challenges/{id}/likers — who liked it. Only for whoever
+  /// posted it; null for anyone else.
+  static Future<List<PersonAt>?> getLikers(String challengeId) async {
+    try {
+      final res = await _authHttp
+          .get(Uri.parse('$_base/api/v1/challenges/$challengeId/likers'));
+      if (res.statusCode == 200) {
+        final body = json.decode(res.body) as Map<String, dynamic>;
+        return (body['likers'] as List? ?? [])
+            .whereType<Map<String, dynamic>>()
+            .map(PersonAt.fromJson)
+            .toList();
+      }
+      debugPrint('[likers] $challengeId answered ${res.statusCode}');
+    } catch (e) {
+      debugPrint('[likers] $challengeId could not be read: $e');
+    }
+    return null;
+  }
+
+  /// GET /api/v1/notifications — your notifications, newest first, and how
+  /// many you have not seen. Null when they could not be read.
+  static Future<({List<NotificationModel> items, int unread})?>
+      getNotifications() async {
+    try {
+      final res =
+          await _authHttp.get(Uri.parse('$_base/api/v1/notifications'));
+      if (res.statusCode == 200) {
+        final body = json.decode(res.body) as Map<String, dynamic>;
+        return (
+          items: (body['items'] as List? ?? [])
+              .whereType<Map<String, dynamic>>()
+              .map(NotificationModel.fromJson)
+              .toList(),
+          unread: body['unread'] is int ? body['unread'] as int : 0,
+        );
+      }
+      debugPrint('[notifications] list answered ${res.statusCode}');
+    } catch (e) {
+      debugPrint('[notifications] list could not be read: $e');
+    }
+    return null;
+  }
+
+  /// POST /api/v1/notifications/read — you have seen them all.
+  static Future<void> markNotificationsRead() async {
+    try {
+      final res = await _authHttp
+          .post(Uri.parse('$_base/api/v1/notifications/read'));
+      if (res.statusCode != 200) {
+        debugPrint('[notifications] mark read answered ${res.statusCode}; '
+            'they stay unread');
+      }
+    } catch (e) {
+      debugPrint('[notifications] could not mark read: $e');
+    }
+  }
 
   /// POST /api/v1/notifications/register
   /// Register this device's FCM/APNs token so the backend can push to this user.
