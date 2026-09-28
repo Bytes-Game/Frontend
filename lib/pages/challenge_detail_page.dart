@@ -8,7 +8,6 @@ import 'package:provider/provider.dart';
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/pages/record_video_page.dart';
 import 'package:myapp/pages/submit_response_upload_page.dart';
-import 'package:myapp/pages/video_player_page.dart';
 import 'package:myapp/pages/video_trim_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
@@ -23,7 +22,8 @@ import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
 import 'package:myapp/widgets/feed_action_bar.dart'
     show ChallengeCommentSheet, CommentSheetCaption;
 import 'package:myapp/widgets/league_badge.dart' show leagueWash;
-import 'package:myapp/widgets/tag_suggestion_strip.dart';
+import 'package:myapp/widgets/people_list_sheet.dart';
+import 'package:myapp/widgets/video_grid_tile.dart' show openVideoPlaylist;
 
 /// Full-screen challenge detail: video, description, responses, and action buttons.
 class ChallengeDetailPage extends StatefulWidget {
@@ -34,11 +34,21 @@ class ChallengeDetailPage extends StatefulWidget {
   /// than making the person find the accept button again here.
   final CreateChoice? acceptWith;
 
+  /// Opened from a reel. A tap on either video then goes back to that
+  /// reel — to the answer's side when the answer was tapped — rather than
+  /// opening a second, bare player with none of the reel's buttons.
+  final bool fromReel;
+
   const ChallengeDetailPage({
     super.key,
     required this.challengeId,
     this.acceptWith,
+    this.fromReel = false,
   });
+
+  /// What a reel is told when this page closes because a video was tapped.
+  static const String backToAnswer = 'answer';
+  static const String backToChallenger = 'challenger';
   
   @override
   State<ChallengeDetailPage> createState() => _ChallengeDetailPageState();
@@ -139,6 +149,8 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     final c = _challenge;
     if (c == null) return;
     showModalBottomSheet(
+      // The sheet draws its own handle; the theme's would be a second.
+      showDragHandle: false,
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -426,12 +438,43 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     );
   }
 
+  /// Watch one side of this battle, in a reel with all its buttons.
+  ///
+  /// From a reel: back to it, on the side tapped. From anywhere else (a
+  /// notification, a profile, a link): a reel of this challenge. It used to
+  /// open a bare player — the video and nothing else, no like, no comment,
+  /// no vote — which felt like a different app.
+  void _watch({required bool answer}) {
+    if (widget.fromReel) {
+      Navigator.of(context).pop(
+        answer
+            ? ChallengeDetailPage.backToAnswer
+            : ChallengeDetailPage.backToChallenger,
+      );
+      return;
+    }
+    final c = _challenge;
+    if (c == null) return;
+    openVideoPlaylist(context, [c], 0);
+  }
+
   @override
   Widget build(BuildContext context) {
+    // This page is dark whatever the app's theme. Everything on it that
+    // takes its colours from the theme — the title, the live score, the
+    // players' names — has to take them from a dark one, or in light mode
+    // they come out dark on dark and simply vanish.
+    return Theme(data: AppTheme.darkTheme, child: _page(context));
+  }
+
+  Widget _page(BuildContext context) {
     final dp = Provider.of<DataProvider>(context, listen: false);
     final c = _challenge;
     final isOwner = c != null && dp.user?.id == c.creatorId;
     final isBattle = _responses.isNotEmpty;
+    final me = dp.user?.id;
+    final isPlayer = me != null &&
+        (isOwner || _responses.any((r) => r.responderId == me));
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -501,6 +544,7 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                         standings: _standings,
                         isOwner: isOwner,
                         onAccept: _acceptFrom,
+                        onWatch: _watch,
                       ),
                       const SizedBox(height: 18),
                       // What: the question, as big as anything on the page.
@@ -525,8 +569,8 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                                 ? Icons.group_rounded
                                 : Icons.public_rounded,
                             label: c.visibility == 'friends'
-                                ? 'Friends only'
-                                : 'Everyone',
+                                ? 'Only friends'
+                                : 'Public',
                           ),
                           if (ContentCategories.isRealAnswer(c.category))
                             _Chip(
@@ -546,6 +590,36 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                         onLike: dp.user == null ? null : _like,
                         onComments: _openComments,
                       ),
+                      // Who liked it (its poster) and who voted for whom
+                      // (the battle's two players). Nobody is pinged per
+                      // vote; this is where they look instead.
+                      if (isOwner || (isBattle && isPlayer)) ...[
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            if (isOwner)
+                              Expanded(
+                                child: _ListButton(
+                                  key: const ValueKey('who_liked'),
+                                  icon: Icons.favorite_rounded,
+                                  label: 'Who liked',
+                                  onTap: () => showLikers(context, c.id),
+                                ),
+                              ),
+                            if (isOwner && isBattle && isPlayer)
+                              const SizedBox(width: 8),
+                            if (isBattle && isPlayer)
+                              Expanded(
+                                child: _ListButton(
+                                  key: const ValueKey('who_voted'),
+                                  icon: Icons.how_to_vote_rounded,
+                                  label: 'Who voted',
+                                  onTap: () => showVoters(context, c.id),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
                       if (c.status == 'open' && !isOwner) ...[
                         const SizedBox(height: 16),
                         Builder(
@@ -616,20 +690,13 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                         ..._responses.skip(1).map(
                               (r) => _ResponseCard(
                                 response: r,
+                                onWatch: () => _watch(answer: true),
                                 onVote: c.status == 'active'
                                     ? () => _vote(r.id)
                                     : null,
-                                isMine: dp.user?.id != null &&
-                                    dp.user!.id == r.responderId,
                               ),
                             ),
                       ],
-                      if (isBattle)
-                        _AnswerTags(
-                          response: _responses.first,
-                          isMine: dp.user?.id != null &&
-                              dp.user!.id == _responses.first.responderId,
-                        ),
                     ],
                   ),
                 ),
@@ -654,6 +721,7 @@ class _Versus extends StatelessWidget {
   final BattleStandings? standings;
   final bool isOwner;
   final ValueChanged<Offset> onAccept;
+  final void Function({required bool answer}) onWatch;
 
   const _Versus({
     required this.challenge,
@@ -661,6 +729,7 @@ class _Versus extends StatelessWidget {
     required this.standings,
     required this.isOwner,
     required this.onAccept,
+    required this.onWatch,
   });
 
   bool _leading(bool creator) {
@@ -689,6 +758,7 @@ class _Versus extends StatelessWidget {
                 thumbnailUrl: challenge.thumbnailUrl ?? '',
                 videoUrl: challenge.videoUrl,
                 title: challenge.title,
+                onTap: () => onWatch(answer: false),
                 leading: _leading(true),
                 decided: standings?.resolved == true,
               ),
@@ -704,6 +774,7 @@ class _Versus extends StatelessWidget {
                       thumbnailUrl: a.thumbnailUrl ?? '',
                       videoUrl: a.videoUrl,
                       title: "${a.responderUsername}'s answer",
+                      onTap: () => onWatch(answer: true),
                       leading: _leading(false),
                       decided: standings?.resolved == true,
                     )
@@ -753,6 +824,7 @@ class _VideoCard extends StatelessWidget {
   final String title;
   final bool leading;
   final bool decided;
+  final VoidCallback onTap;
 
   const _VideoCard({
     super.key,
@@ -762,6 +834,7 @@ class _VideoCard extends StatelessWidget {
     required this.thumbnailUrl,
     required this.videoUrl,
     required this.title,
+    required this.onTap,
     this.leading = false,
     this.decided = false,
   });
@@ -770,15 +843,7 @@ class _VideoCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final ring = league.isEmpty ? Colors.white38 : leagueWash(league);
     return GestureDetector(
-      onTap: videoUrl.isEmpty
-          ? null
-          : () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) =>
-                      VideoPlayerPage(videoUrl: videoUrl, title: title),
-                ),
-              ),
+      onTap: videoUrl.isEmpty ? null : onTap,
       child: AspectRatio(
         aspectRatio: 0.66,
         child: Container(
@@ -1053,6 +1118,52 @@ class _Pill extends StatelessWidget {
 // ----------------------------------------------------------------------------
 // Under the title
 // ----------------------------------------------------------------------------
+
+/// A small dark button opening one of the people lists.
+class _ListButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _ListButton({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: _surface,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: SizedBox(
+          height: 44,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 17, color: Colors.white),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.chevron_right_rounded,
+                  size: 18, color: _muted),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _Chip extends StatelessWidget {
   final IconData icon;
@@ -1356,41 +1467,17 @@ class _CommentsPreview extends StatelessWidget {
   }
 }
 
-/// On your own answer, what the app noticed in it — the same strip a
-/// challenge's creator gets. Takes no space when there is nothing to offer.
-class _AnswerTags extends StatelessWidget {
-  final ChallengeResponseModel response;
-  final bool isMine;
-
-  const _AnswerTags({required this.response, required this.isMine});
-
-  @override
-  Widget build(BuildContext context) {
-    if (isMine && response.id.isNotEmpty) {
-      return TagSuggestionStrip(
-        key: ValueKey('response-tags-${response.id}'),
-        videoId: response.id,
-        subject: TagSubject.response,
-      );
-    }
-    return const SizedBox.shrink();
-  }
-}
-
 /// Another answer, beyond the top one shown in the cards: its video, who,
 /// its likes and views, and a vote.
 class _ResponseCard extends StatelessWidget {
   final ChallengeResponseModel response;
   final VoidCallback? onVote;
-
-  /// True when the signed-in viewer posted this answer. Only then is there
-  /// anything to offer them about it.
-  final bool isMine;
+  final VoidCallback onWatch;
 
   const _ResponseCard({
     required this.response,
+    required this.onWatch,
     this.onVote,
-    this.isMine = false,
   });
 
   @override
@@ -1410,17 +1497,7 @@ class _ResponseCard extends StatelessWidget {
           Row(
             children: [
               GestureDetector(
-                onTap: response.videoUrl.isNotEmpty
-                    ? () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => VideoPlayerPage(
-                              videoUrl: response.videoUrl,
-                              title: "${response.responderUsername}'s answer",
-                            ),
-                          ),
-                        )
-                    : null,
+                onTap: response.videoUrl.isNotEmpty ? onWatch : null,
                 child: Container(
                   width: 54,
                   height: 72,
@@ -1486,10 +1563,6 @@ class _ResponseCard extends StatelessWidget {
                 ),
             ],
           ),
-          // What the model found in this answer, offered back to whoever
-          // posted it. Takes up no space at all when there is nothing to
-          // offer, which is most answers most of the time.
-          _AnswerTags(response: response, isMine: isMine),
         ],
       ),
     );

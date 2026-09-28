@@ -26,37 +26,14 @@ class SearchReelsViewerPage extends StatelessWidget {
 
     return Scaffold(
       backgroundColor: Colors.black,
-      // No appBar — reels are edge-to-edge. Back button is overlaid in the
-      // Stack below so it floats above the video at top-left.
-      body: Stack(
-        children: [
-          // The actual reels feed. Explore kind = same algorithm as the
-          // search-page empty grid, so scrolling continues with the kind
-          // of content the user was already browsing.
-          SmartReelsFeed(
-            userId: userId,
-            kind: FeedKind.explore,
-            seedChallenge: seedChallenge,
-          ),
-
-          // Back button — floats top-left over the video. Black
-          // semi-transparent disc behind the icon so it stays visible
-          // against any video frame (light or dark).
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 8,
-            left: 8,
-            child: Material(
-              color: Colors.black.withValues(alpha: 0.45),
-              shape: const CircleBorder(),
-              clipBehavior: Clip.antiAlias,
-              child: IconButton(
-                icon: const Icon(Icons.arrow_back, color: Colors.white),
-                onPressed: () => Navigator.of(context).maybePop(),
-                tooltip: 'Back to search',
-              ),
-            ),
-          ),
-        ],
+      // No appBar — reels are edge-to-edge. The feed draws the back arrow
+      // itself, top left beside the sound button, so the two never
+      // overlap.
+      body: SmartReelsFeed(
+        userId: userId,
+        kind: FeedKind.explore,
+        seedChallenge: seedChallenge,
+        showBack: true,
       ),
     );
   }

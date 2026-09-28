@@ -135,15 +135,36 @@ class DataProvider with ChangeNotifier {
 
   // —— Notifications ————————————————————————————————————————————————————————
 
+  /// A notification that arrived live. Chat messages are not notifications
+  /// — they have their own list and badge — and one the list already has
+  /// (same server id) is not added twice.
   void addNotification(NotificationModel n) {
+    if (n.type == 'chat') return;
+    if (n.id.isNotEmpty && _notifications.any((x) => x.id == n.id)) return;
     _notifications.insert(0, n);
     _unreadNotifications++;
     notifyListeners();
   }
 
+  /// Load the list from the server: what the page shows, and the count on
+  /// the bell. Kept on the server now, so it survives the app closing.
+  Future<void> loadNotifications() async {
+    final got = await ApiService.getNotifications();
+    if (got == null) return;
+    _notifications
+      ..clear()
+      ..addAll(got.items);
+    _unreadNotifications = got.unread;
+    notifyListeners();
+  }
+
+  /// Everything seen: the bell's count goes, here and on the server.
   void clearUnreadNotifications() {
+    final had = _unreadNotifications > 0 ||
+        _notifications.any((n) => !n.read);
     _unreadNotifications = 0;
     notifyListeners();
+    if (had) ApiService.markNotificationsRead();
   }
 
   // 一 Reset —————————————————————————————————————————————————————————————

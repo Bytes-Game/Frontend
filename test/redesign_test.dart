@@ -116,6 +116,12 @@ void fakeServer() {
           'shorts': [challenge(2, 0)],
         });
       }
+      if (p.endsWith('/followers')) {
+        return jsonBody([
+          {'id': '5', 'username': 'maya', 'fullName': 'Maya Singh'},
+          {'id': '6', 'username': 'leo', 'fullName': ''},
+        ]);
+      }
       if (p.endsWith('/battles')) {
         return jsonBody({
           'summary': {
@@ -184,13 +190,13 @@ void main() {
       expect(find.text('Trending'), findsNothing);
       expect(find.text('Cancel'), findsNothing);
 
-      // Tap into the bar: what you searched before, what is trending.
+      // Tap into the bar: what you searched before, and nothing trending.
       await t.tap(find.byType(TextField));
       await settle(t);
       expect(find.text('Recent'), findsOneWidget);
       expect(find.text('dance'), findsOneWidget);
-      expect(find.text('Trending'), findsOneWidget);
-      expect(find.text('freestyle'), findsOneWidget);
+      expect(find.text('Trending'), findsNothing);
+      expect(find.text('freestyle'), findsNothing);
       expect(find.text('Cancel'), findsOneWidget);
 
       // Cancel: back to the videos.
@@ -633,11 +639,13 @@ void main() {
   group('Challenge details', () {
     // No one signed in, so the page does not start uploading the clip in
     // the background; nothing here is about the upload.
+    late DataProvider detailsDp;
     Future<void> openDetails(WidgetTester t) async {
       phone(t, const Size(400, 1600));
+      detailsDp = DataProvider();
       await t.pumpWidget(
-        ChangeNotifierProvider<DataProvider>(
-          create: (_) => DataProvider(),
+        ChangeNotifierProvider<DataProvider>.value(
+          value: detailsDp,
           child: const MaterialApp(
             home: ChallengeMetadataPage(processedSourcePath: '/tmp/clip.mp4'),
           ),
@@ -684,15 +692,75 @@ void main() {
     testWidgets('who can see it and how long it runs are big taps, and the '
         'card follows them', (t) async {
       await openDetails(t);
-      expect(onCard('Everyone'), findsOneWidget);
+      expect(onCard('Public'), findsOneWidget);
       expect(onCard('7-day battle'), findsOneWidget);
 
-      await t.tap(find.text('Friends only'));
+      await t.tap(find.text('Only friends'));
       await t.tap(find.text('14'));
       await settle(t);
-      expect(onCard('Friends'), findsOneWidget);
+      expect(onCard('Only friends'), findsOneWidget);
       expect(onCard('14-day battle'), findsOneWidget);
       expect(onCard('7-day battle'), findsNothing);
+    });
+
+    testWidgets('Only friends: all of them, or some chosen by name', (
+      t,
+    ) async {
+      await openDetails(t);
+      // Signed in only now: signed in from the start, the page begins
+      // sending the video, which a test has no way to finish.
+      detailsDp.setUser(person('1', 'me'));
+      EventTracker.instance.dispose();
+      expect(find.text('All friends'), findsNothing,
+          reason: 'only once Only friends is picked');
+      await t.tap(find.text('Only friends'));
+      await settle(t);
+      expect(find.text('All friends'), findsOneWidget);
+      expect(find.text('Choose friends'), findsOneWidget);
+
+      await t.ensureVisible(find.byKey(const ValueKey('friends_choose')));
+      await settle(t);
+      await t.tap(find.byKey(const ValueKey('friends_choose')));
+      await settle(t);
+      // Your followers, to tick.
+      expect(find.byKey(const ValueKey('friend_5')), findsOneWidget);
+      expect(find.byKey(const ValueKey('friend_6')), findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('friend_5')));
+      await settle(t);
+      expect(find.text('Done · 1 friend'), findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('friends_done')));
+      await settle(t);
+
+      expect(find.text('Only @maya'), findsOneWidget);
+      expect(onCard('1 friend'), findsOneWidget);
+      expect(
+        find.textContaining('Only these friends see it'),
+        findsOneWidget,
+      );
+
+      // Back to all of them.
+      await t.tap(find.byKey(const ValueKey('friends_all')));
+      await settle(t);
+      expect(find.text('Only @maya'), findsNothing);
+      expect(onCard('Only friends'), findsOneWidget);
+    });
+
+    test('the chosen friends reach the server on both ways of posting', () {
+      final code = File('lib/services/upload_job_manager.dart')
+          .readAsLinesSync()
+          .where((l) => !l.trimLeft().startsWith('//'))
+          .join('\n');
+      expect(
+        RegExp(r'createChallenge\([^;]*visibleTo: meta\.visibleTo,')
+            .allMatches(code)
+            .length,
+        2,
+      );
+      final page = File('lib/pages/challenge_metadata_page.dart')
+          .readAsLinesSync()
+          .where((l) => !l.trimLeft().startsWith('//'))
+          .join('\n');
+      expect(page, contains("visibleTo: _visibility == 'friends'"));
     });
 
     testWidgets('Post is pinned to the bottom, whatever is scrolled', (
@@ -756,7 +824,8 @@ void main() {
     testWidgets('an empty notifications page says what will appear', (t) async {
       await t.pumpWidget(app(const NotificationsPage()));
       await settle(t);
-      expect(find.text('No notifications yet'), findsOneWidget);
+      expect(find.text('Nothing yet'), findsOneWidget);
+      expect(find.textContaining('challenges you'), findsOneWidget);
     });
   });
 }

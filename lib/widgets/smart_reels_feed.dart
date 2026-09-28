@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:video_player/video_player.dart';
 import 'package:provider/provider.dart';
-import 'package:myapp/widgets/tag_suggestion_strip.dart';
 import 'package:myapp/widgets/create_burst.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
@@ -165,6 +164,10 @@ class SmartReelsFeed extends StatefulWidget {
   /// Where in [playlist] to open.
   final int startIndex;
 
+  /// A back arrow at the top left, beside the sound button: for a reel
+  /// screen opened on top of another page rather than shown as a tab.
+  final bool showBack;
+
   /// Feeds that have had their fresh first page since the app opened.
   ///
   /// ════════════════════════════════════════════════════════════════════════
@@ -237,6 +240,7 @@ class SmartReelsFeed extends StatefulWidget {
     this.seedChallenge,
     this.playlist,
     this.startIndex = 0,
+    this.showBack = false,
   });
 
   @override
@@ -2121,11 +2125,20 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       params: {'contentId': item.id, 'contentType': item.type},
     );
     if (item.type == 'challenge' && item.id.isNotEmpty) {
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => ChallengeDetailPage(challengeId: item.id),
-        ),
-      );
+      // ignore: discarded_futures
+      Navigator.of(context)
+          .push<String>(
+            MaterialPageRoute(
+              builder: (_) =>
+                  ChallengeDetailPage(challengeId: item.id, fromReel: true),
+            ),
+          )
+          .then((back) {
+            // The answer was tapped on the battle page: show it here.
+            if (back == ChallengeDetailPage.backToAnswer) {
+              item.showAnswer.value++;
+            }
+          });
     }
     // Posts already shown full-bleed — no separate detail page needed for now.
   }
@@ -2147,6 +2160,8 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       params: {'contentId': item.id, 'contentType': item.type},
     );
     showModalBottomSheet(
+      // The sheet draws its own handle; the theme's would be a second.
+      showDragHandle: false,
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -2450,6 +2465,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                   state: state,
                   isActive: index == _currentIndex,
                   isOwner: isOwner,
+                  showBack: widget.showBack,
                   onLike: () => _onLike(index),
                   onComment: () => _onComment(index),
                   onShare: () => _onShare(index),
@@ -2562,6 +2578,10 @@ class _ReelItem implements _FeedEntry {
   /// to the creator, so an answer could never have any.
   int opponentLikes;
   bool opponentLiked = false;
+
+  /// Bumped to turn this reel to the answer's side from outside it — when
+  /// someone comes back from the battle page having tapped the answer.
+  final ValueNotifier<int> showAnswer = ValueNotifier(0);
 
   /// Which side of a battle is on screen, and for how long. The card turns
   /// it on every flip; views, completions and shares read it so the server
@@ -3048,11 +3068,15 @@ class _ReelTile extends StatefulWidget {
   /// itself, because [state] is the parent's, so it asks.
   final VoidCallback onNeedPlayer;
 
+  /// See [SmartReelsFeed.showBack].
+  final bool showBack;
+
   const _ReelTile({
     required this.item,
     required this.state,
     required this.isActive,
     required this.isOwner,
+    this.showBack = false,
     required this.onLike,
     required this.onComment,
     required this.onShare,
@@ -3156,6 +3180,11 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     // duration) on release, so no fixed duration is configured here.
     _cubeCtl = AnimationController(vsync: this, value: 0.0);
     if (widget.isActive) _loadScore();
+    widget.item.showAnswer.addListener(_turnToAnswer);
+  }
+
+  void _turnToAnswer() {
+    if (mounted && widget.item.isBattle) _settleTo(true);
   }
 
   // ── The live score on a battle ─────────────────────────────────────────
@@ -3168,6 +3197,15 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   bool _votedWhenScored = false;
 
   BattleStandings? get _score => _scores[widget.item.id]?.$1;
+
+  /// Who is ahead in the live score: "creator", "answer", or "".
+  String get _leader {
+    final st = _score;
+    if (st == null) return '';
+    final lead = st.sides.where((x) => x.leading).toList();
+    if (lead.length != 1) return '';
+    return lead.first.isCreator ? 'creator' : 'answer';
+  }
 
   Future<void> _loadScore({bool force = false}) async {
     final item = widget.item;
@@ -3195,6 +3233,10 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   @override
   void didUpdateWidget(covariant _ReelTile old) {
     super.didUpdateWidget(old);
+    if (!identical(old.item, widget.item)) {
+      old.item.showAnswer.removeListener(_turnToAnswer);
+      widget.item.showAnswer.addListener(_turnToAnswer);
+    }
     if (widget.isActive && !old.isActive) _loadScore();
     // A vote just landed: the score it changed is worth asking for again.
     if (widget.item.hasVoted && !_votedWhenScored && widget.isActive) {
@@ -3228,6 +3270,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    widget.item.showAnswer.removeListener(_turnToAnswer);
     _opponentState?.dispose();
     _heartCtl.dispose();
     _cubeCtl.dispose();
@@ -3952,25 +3995,48 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
           ),
         ),
 
-        // Mute toggle — top-right, out of the action rail's way. This
-        // is what makes the backend's `unmute` ranking signal reachable
-        // at all: the feed used to be permanently unmuted, so the
-        // strongest "I actively want to hear this" signal never fired.
+        // Sound, top LEFT — where TikTok keeps it. It was top right, where
+        // Home also puts the notifications bell, and the two sat on top of
+        // each other. On a reel screen opened from another page a back
+        // arrow comes first.
+        //
+        // This toggle is what makes the backend's `unmute` ranking signal
+        // reachable at all: the feed used to be permanently unmuted, so
+        // the strongest "I actively want to hear this" signal never fired.
         Positioned(
-          top: 12,
-          right: 12,
-          child: SafeArea(
-            child: ValueListenableBuilder<bool>(
-              valueListenable: VideoPlayerService.instance.feedMuted,
-              builder: (_, muted, _) => IconButton(
-                icon: Icon(
-                  muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-                  color: Colors.white,
-                  shadows: const [Shadow(blurRadius: 8, color: Colors.black54)],
+          top: MediaQuery.of(context).padding.top + 2,
+          left: 4,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.showBack)
+                IconButton(
+                  key: const ValueKey('reel_back'),
+                  tooltip: 'Back',
+                  icon: const Icon(
+                    Icons.arrow_back_ios_new_rounded,
+                    color: Colors.white,
+                    size: 22,
+                    shadows: [Shadow(blurRadius: 8, color: Colors.black54)],
+                  ),
+                  onPressed: () => Navigator.of(context).maybePop(),
                 ),
-                onPressed: _toggleMute,
+              ValueListenableBuilder<bool>(
+                valueListenable: VideoPlayerService.instance.feedMuted,
+                builder: (_, muted, _) => IconButton(
+                  key: const ValueKey('reel_sound'),
+                  tooltip: muted ? 'Sound on' : 'Sound off',
+                  icon: Icon(
+                    muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                    color: Colors.white,
+                    shadows: const [
+                      Shadow(blurRadius: 8, color: Colors.black54),
+                    ],
+                  ),
+                  onPressed: _toggleMute,
+                ),
               ),
-            ),
+            ],
           ),
         ),
 
@@ -4036,26 +4102,27 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
           ),
         ),
 
-        // On a battle, a tab on the edge of the screen with the other
-        // person's picture and an arrow: tap it, or swipe that way, to see
-        // their video. Says "there is another side over here" without a
-        // line of text taking up the bottom of the screen.
+        // On a battle, the two people at the top, under the feed's tabs:
+        // who is in it, which of them is on screen, and — by being two
+        // names side by side — that there is another side to swipe to.
+        // Tap either name to switch. This replaces a tab with an arrow on
+        // the screen's edge, which read as clutter.
         if (item.isBattle)
           Positioned(
-            top: MediaQuery.of(context).size.height * 0.40,
-            right: _showingOpponent ? null : 0,
-            left: _showingOpponent ? 0 : null,
-            child: _SideTab(
-              key: const ValueKey('battle_side_tab'),
-              username: _showingOpponent
-                  ? item.creatorUsername
-                  : item.opponentUsername,
-              league: _showingOpponent
-                  ? item.creatorLeague
-                  : item.opponentLeague,
-              onLeft: _showingOpponent,
-              nudge: widget.isActive,
-              onTap: () => _setShowOpponent(!_showingOpponent),
+            top: MediaQuery.of(context).padding.top + 50,
+            left: 16,
+            right: 16,
+            child: Center(
+              child: _Matchup(
+                challenger: item.creatorUsername,
+                challengerLeague: item.creatorLeague,
+                opponent: item.opponentUsername,
+                opponentLeague: item.opponentLeague,
+                showingOpponent: _showingOpponent,
+                leader: _leader,
+                onTapChallenger: () => _setShowOpponent(false),
+                onTapOpponent: () => _setShowOpponent(true),
+              ),
             ),
           ),
 
@@ -4082,23 +4149,15 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
               // up — tap either to switch. It used to be a two-box panel at
               // the top of the screen, where Home's tabs also sit, and the
               // two overlapped.
-              if (item.isBattle)
-                _Matchup(
-                  challenger: item.creatorUsername,
-                  challengerLeague: item.creatorLeague,
-                  opponent: item.opponentUsername,
-                  opponentLeague: item.opponentLeague,
-                  showingOpponent: _showingOpponent,
-                  onTapChallenger: () => _setShowOpponent(false),
-                  onTapOpponent: () => _setShowOpponent(true),
-                )
-              else
+              // A battle's two names are at the top; a short's one is here.
+              if (!item.isBattle) ...[
                 _CreatorLine(
                   username: item.creatorUsername,
                   league: item.creatorLeague,
                   tag: isChallenge ? 'Open challenge' : null,
                 ),
-              const SizedBox(height: 8),
+                const SizedBox(height: 8),
+              ],
               // What: the challenge itself, the biggest words on screen. One
               // line, cut short with "…" when it is longer; tap it for the
               // whole of it, with the comments underneath.
@@ -4135,15 +4194,6 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                   shadows: _textShadow,
                 ),
               ),
-              // What the model noticed, offered back to the person who made
-              // the video. Renders nothing at all unless there is something
-              // to offer, so a reel with no suggestions is unchanged — see
-              // TagSuggestionStrip.
-              if (widget.isOwner && item.id.isNotEmpty)
-                TagSuggestionStrip(
-                  key: ValueKey('tags-${item.id}'),
-                  videoId: item.id,
-                ),
               if (isChallenge) ...[
                 const SizedBox(height: 10),
                 // A battle shows its score — the thing you want to know
@@ -4915,6 +4965,10 @@ class _Matchup extends StatelessWidget {
   final String opponent;
   final String opponentLeague;
   final bool showingOpponent;
+
+  /// Who is ahead right now: "creator", "answer", or "" when unknown or
+  /// level.
+  final String leader;
   final VoidCallback onTapChallenger;
   final VoidCallback onTapOpponent;
 
@@ -4926,44 +4980,88 @@ class _Matchup extends StatelessWidget {
     required this.showingOpponent,
     required this.onTapChallenger,
     required this.onTapOpponent,
+    this.leader = '',
   });
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Flexible(
-          child: _MatchupSide(
-            key: const ValueKey('matchup_challenger'),
-            username: challenger,
-            league: challengerLeague,
-            active: !showingOpponent,
-            onTap: onTapChallenger,
+    // One frosted bar: the two people as chips, the one on screen lit up,
+    // a VS medal between them. Reads as a match card, not as two labels.
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(30),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+        child: Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.32),
+            borderRadius: BorderRadius.circular(30),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: _MatchupSide(
+                  key: const ValueKey('matchup_challenger'),
+                  username: challenger,
+                  league: challengerLeague,
+                  active: !showingOpponent,
+                  leading: leader == 'creator',
+                  onTap: onTapChallenger,
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 6),
+                child: _VsMedal(),
+              ),
+              Flexible(
+                child: _MatchupSide(
+                  key: const ValueKey('matchup_opponent'),
+                  username: opponent.isEmpty ? 'opponent' : opponent,
+                  league: opponentLeague,
+                  active: showingOpponent,
+                  leading: leader == 'answer',
+                  onTap: onTapOpponent,
+                ),
+              ),
+            ],
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          child: Text(
-            'vs',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.75),
-              fontSize: 13,
-              fontWeight: FontWeight.w800,
-              fontStyle: FontStyle.italic,
-              shadows: _textShadow,
-            ),
-          ),
+      ),
+    );
+  }
+}
+
+/// The small round "VS" between the two names.
+class _VsMedal extends StatelessWidget {
+  const _VsMedal();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 26,
+      height: 26,
+      alignment: Alignment.center,
+      decoration: const BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFFFF375F), Color(0xFF0A84FF)],
         ),
-        Flexible(
-          child: _MatchupSide(
-            key: const ValueKey('matchup_opponent'),
-            username: opponent.isEmpty ? 'opponent' : opponent,
-            league: opponentLeague,
-            active: showingOpponent,
-            onTap: onTapOpponent,
-          ),
+        boxShadow: [BoxShadow(color: Color(0x66000000), blurRadius: 6)],
+      ),
+      child: const Text(
+        'VS',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 9.5,
+          fontWeight: FontWeight.w900,
+          fontStyle: FontStyle.italic,
+          letterSpacing: 0.3,
         ),
-      ],
+      ),
     );
   }
 }
@@ -4972,6 +5070,7 @@ class _MatchupSide extends StatelessWidget {
   final String username;
   final String league;
   final bool active;
+  final bool leading;
   final VoidCallback onTap;
 
   const _MatchupSide({
@@ -4980,6 +5079,7 @@ class _MatchupSide extends StatelessWidget {
     required this.league,
     required this.active,
     required this.onTap,
+    this.leading = false,
   });
 
   @override
@@ -4988,43 +5088,43 @@ class _MatchupSide extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.fromLTRB(3, 3, 10, 3),
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+        padding: const EdgeInsets.fromLTRB(3, 3, 11, 3),
         decoration: BoxDecoration(
-          color: active
-              ? Colors.white.withValues(alpha: 0.18)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: active
-                ? Colors.white.withValues(alpha: 0.35)
-                : Colors.transparent,
-          ),
+          // The side on screen is a solid white chip; the other stays
+          // glass, but its name is fully readable — dimmed looked hidden.
+          color: active ? Colors.white : Colors.white.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(24),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _ReelAvatar(username: username, league: league, size: 28),
+            _ReelAvatar(username: username, league: league, size: 26),
             const SizedBox(width: 6),
             Flexible(
               child: Text(
                 username,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                // Both names readable at all times; the one on screen is
-                // the bold one in the chip. Dimming the other made it look
-                // hidden.
                 style: TextStyle(
-                  color: active ? Colors.white : const Color(0xE6FFFFFF),
-                  fontSize: 14,
-                  fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                  shadows: _textShadow,
+                  color: active ? const Color(0xFF111114) : Colors.white,
+                  fontSize: 13.5,
+                  fontWeight: active ? FontWeight.w800 : FontWeight.w600,
                 ),
               ),
             ),
-            if (league.isNotEmpty) ...[
-              const SizedBox(width: 5),
-              LeagueEmblem(league: league, size: 14),
+            if (leading) ...[
+              const SizedBox(width: 4),
+              const Icon(
+                Icons.emoji_events_rounded,
+                key: ValueKey('matchup_leading'),
+                size: 14,
+                color: Color(0xFFFFC53D),
+              ),
+            ] else if (league.isNotEmpty) ...[
+              const SizedBox(width: 4),
+              LeagueEmblem(league: league, size: 13),
             ],
           ],
         ),
@@ -5144,124 +5244,6 @@ class _ScorePill extends StatelessWidget {
                       size: 18,
                       color: Colors.white70,
                     ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The tab on the edge of a battle: the other person's picture and an arrow
-/// pointing in, on the side their video is. Tap it or swipe across to see
-/// them. While the battle is on screen it leans in a little now and then,
-/// which says "there is more over here" without any words.
-class _SideTab extends StatefulWidget {
-  final String username;
-  final String league;
-
-  /// On the left edge (the creator, while the answer is showing).
-  final bool onLeft;
-
-  /// Lean in now and then. Only on the battle that is on screen: every
-  /// tile animating at once would redraw pages nobody can see.
-  final bool nudge;
-  final VoidCallback onTap;
-
-  const _SideTab({
-    super.key,
-    required this.username,
-    required this.league,
-    required this.onLeft,
-    required this.nudge,
-    required this.onTap,
-  });
-
-  @override
-  State<_SideTab> createState() => _SideTabState();
-}
-
-class _SideTabState extends State<_SideTab>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _lean = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 2600),
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.nudge) _lean.repeat();
-  }
-
-  @override
-  void didUpdateWidget(_SideTab old) {
-    super.didUpdateWidget(old);
-    if (widget.nudge && !_lean.isAnimating) _lean.repeat();
-    if (!widget.nudge && _lean.isAnimating) {
-      _lean.stop();
-      _lean.value = 0;
-    }
-  }
-
-  @override
-  void dispose() {
-    _lean.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final inward = widget.onLeft ? 1.0 : -1.0;
-    const r = Radius.circular(22);
-    return Tooltip(
-      message: 'See ${widget.username.isEmpty ? 'the other side' : widget.username}',
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: widget.onTap,
-        child: AnimatedBuilder(
-          animation: _lean,
-          builder: (_, child) {
-            // A quick lean in and back, then a pause: the first fifth of
-            // each cycle.
-            final t = _lean.value;
-            final lean = t < 0.2 ? math.sin(t / 0.2 * math.pi) : 0.0;
-            return Transform.translate(
-              offset: Offset(inward * 6 * lean, 0),
-              child: child,
-            );
-          },
-          child: ClipRRect(
-            borderRadius: widget.onLeft
-                ? const BorderRadius.only(topRight: r, bottomRight: r)
-                : const BorderRadius.only(topLeft: r, bottomLeft: r),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-              child: Container(
-                padding: EdgeInsets.fromLTRB(
-                  widget.onLeft ? 6 : 8,
-                  6,
-                  widget.onLeft ? 8 : 6,
-                  6,
-                ),
-                color: Colors.black.withValues(alpha: 0.28),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (!widget.onLeft)
-                      const Icon(Icons.chevron_left_rounded,
-                          size: 20, color: Colors.white),
-                    _ReelAvatar(
-                      username: widget.username,
-                      league: widget.league,
-                      size: 30,
-                    ),
-                    if (widget.onLeft)
-                      const Icon(Icons.chevron_right_rounded,
-                          size: 20, color: Colors.white),
                   ],
                 ),
               ),

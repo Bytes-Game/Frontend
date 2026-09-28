@@ -328,3 +328,50 @@ class LeagueStep {
     return LeagueStep(_floors[i].$1, _floors[i + 1].$1, p, ceiling - rating);
   }
 }
+
+/// Someone on a "who voted" or "who liked" list, and when.
+class PersonAt {
+  final String userId;
+  final String username;
+  final String league;
+  final DateTime? at;
+
+  const PersonAt({
+    required this.userId,
+    required this.username,
+    this.league = '',
+    this.at,
+  });
+
+  factory PersonAt.fromJson(Map<String, dynamic> j) => PersonAt(
+    userId: '${j['userId'] ?? ''}',
+    username: '${j['username'] ?? ''}',
+    league: '${j['league'] ?? ''}',
+    at: _toTime(j['at']),
+  );
+}
+
+/// One side of a battle and the people who voted for it. Only the battle's
+/// own players are sent these.
+class VoterSide {
+  final String username;
+
+  /// "creator" or "responder".
+  final String role;
+  final List<PersonAt> voters;
+
+  const VoterSide({
+    required this.username,
+    required this.role,
+    this.voters = const [],
+  });
+
+  factory VoterSide.fromJson(Map<String, dynamic> j) => VoterSide(
+    username: '${j['username'] ?? ''}',
+    role: '${j['role'] ?? ''}',
+    voters: (j['voters'] as List? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(PersonAt.fromJson)
+        .toList(),
+  );
+}

@@ -9,6 +9,11 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:myapp/widgets/smart_reels_feed.dart';
+import 'package:myapp/services/reel_diagnostics.dart';
+import 'package:myapp/pages/video_player_page.dart';
+import 'package:myapp/config/app_theme.dart';
+import 'package:flutter/rendering.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:provider/provider.dart';
@@ -99,6 +104,33 @@ void fakeServer({required bool open, bool liked = false}) {
             },
           ],
         };
+      } else if (p.endsWith('/voters')) {
+        body = {
+          'sides': [
+            {
+              'username': 'maya',
+              'role': 'creator',
+              'voters': [
+                {'userId': '31', 'username': 'sam', 'at': ''},
+              ],
+            },
+            {
+              'username': 'leo_beats',
+              'role': 'responder',
+              'responseId': '77',
+              'voters': [
+                {'userId': '32', 'username': 'priya', 'at': ''},
+                {'userId': '33', 'username': 'omar', 'at': ''},
+              ],
+            },
+          ],
+        };
+      } else if (p.endsWith('/likers')) {
+        body = {
+          'likers': [
+            {'userId': '34', 'username': 'nina', 'at': ''},
+          ],
+        };
       } else if (p.endsWith('/challenges/like')) {
         likeCalls++;
         if (refuseLikes) {
@@ -121,6 +153,7 @@ Future<void> openPage(
   required bool open,
   bool liked = false,
   String me = '1',
+  ThemeData? theme,
 }) async {
   t.view.physicalSize = const Size(400, 1400);
   t.view.devicePixelRatio = 1;
@@ -143,6 +176,7 @@ Future<void> openPage(
     ChangeNotifierProvider<DataProvider>.value(
       value: dp,
       child: MaterialApp(
+        theme: theme,
         home: ChallengeDetailPage(challengeId: open ? '2' : '1'),
       ),
     ),
@@ -250,5 +284,67 @@ void main() {
     await settle(t);
     expect(find.byKey(const ValueKey('full_caption')), findsOneWidget);
     expect(find.text('3 comments'), findsOneWidget);
+  });
+
+  testWidgets('in the light theme the words on the dark page are still '
+      'light, so none of them vanish', (t) async {
+    await openPage(t, open: false, theme: AppTheme.lightTheme);
+    Color colorOf(String text) =>
+        t.renderObject<RenderParagraph>(find.text(text).first).text.style!.color!;
+    for (final text in ['Battle', 'Live score', 'maya', 'leo_beats']) {
+      expect(colorOf(text).computeLuminance(), greaterThan(0.5),
+          reason: '"$text" is dark on a dark page');
+    }
+  });
+
+  testWidgets('the players can see who voted for whom; the poster who '
+      'liked it', (t) async {
+    // The creator: both lists.
+    await openPage(t, open: false, me: '9');
+    expect(find.byKey(const ValueKey('who_liked')), findsOneWidget);
+    await t.ensureVisible(find.byKey(const ValueKey('who_voted')));
+    await t.tap(find.byKey(const ValueKey('who_voted')));
+    await settle(t);
+    expect(find.text('maya · 1'), findsOneWidget);
+    expect(find.text('leo_beats · 2'), findsOneWidget);
+    expect(find.text('sam'), findsOneWidget);
+    await t.tap(find.text('leo_beats · 2'));
+    await settle(t);
+    expect(find.text('priya'), findsOneWidget);
+    expect(find.text('omar'), findsOneWidget);
+    await t.tapAt(const Offset(20, 40));
+    await settle(t);
+
+    await t.tap(find.byKey(const ValueKey('who_liked')));
+    await settle(t);
+    expect(find.text('Liked by 1'), findsOneWidget);
+    expect(find.text('nina'), findsOneWidget);
+  });
+
+  testWidgets('the answerer sees who voted, not who liked', (t) async {
+    await openPage(t, open: false, me: '8');
+    expect(find.byKey(const ValueKey('who_voted')), findsOneWidget);
+    expect(find.byKey(const ValueKey('who_liked')), findsNothing);
+  });
+
+  testWidgets('anyone else sees neither', (t) async {
+    await openPage(t, open: false, me: '1');
+    expect(find.byKey(const ValueKey('who_voted')), findsNothing);
+    expect(find.byKey(const ValueKey('who_liked')), findsNothing);
+    // The page itself is there.
+    expect(find.byKey(const ValueKey('card_creator')), findsOneWidget);
+  });
+
+  testWidgets('opened from somewhere else, a tap on a video opens it as a '
+      'reel with its buttons, not a bare player', (t) async {
+    await openPage(t, open: false);
+    await t.tap(find.byKey(const ValueKey('card_creator')));
+    await settle(t);
+    expect(find.byType(SmartReelsFeed), findsOneWidget);
+    expect(find.byTooltip('Like'), findsWidgets);
+    expect(find.byType(VideoPlayerPage), findsNothing);
+    await t.pumpWidget(const MaterialApp(home: SizedBox()));
+    await t.pump(const Duration(seconds: 5));
+    ReelDiagnostics.instance.debugReset();
   });
 }

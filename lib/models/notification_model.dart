@@ -19,6 +19,24 @@ class NotificationModel {
   /// suppresses surfacing the notification to the user.
   final String? videoUrl;
 
+  // What the notifications page shows, from the server's list (or the same
+  // shape live down the socket). Empty for chat and prefetch hints.
+
+  /// The server's id for it: how a live one is recognised when the list is
+  /// loaded again.
+  final String id;
+
+  /// The sentence without the name in front: "started following you." The
+  /// page sets [actorUsername] in bold ahead of it.
+  final String text;
+  final bool read;
+  final String actorId;
+  final String actorUsername;
+  final String actorLeague;
+  final String challengeId;
+  final String challengeTitle;
+  final String thumbnailUrl;
+
   NotificationModel({
     required this.type,
     required this.message,
@@ -29,7 +47,38 @@ class NotificationModel {
     this.receiverUsername,
     this.messageId,
     this.videoUrl,
+    this.id = '',
+    this.text = '',
+    this.read = false,
+    this.actorId = '',
+    this.actorUsername = '',
+    this.actorLeague = '',
+    this.challengeId = '',
+    this.challengeTitle = '',
+    this.thumbnailUrl = '',
   });
+
+  /// The same notification, seen.
+  NotificationModel asRead() => NotificationModel(
+    type: type,
+    message: message,
+    timestamp: timestamp,
+    senderId: senderId,
+    senderUsername: senderUsername,
+    receiverId: receiverId,
+    receiverUsername: receiverUsername,
+    messageId: messageId,
+    videoUrl: videoUrl,
+    id: id,
+    text: text,
+    read: true,
+    actorId: actorId,
+    actorUsername: actorUsername,
+    actorLeague: actorLeague,
+    challengeId: challengeId,
+    challengeTitle: challengeTitle,
+    thumbnailUrl: thumbnailUrl,
+  );
 
   /// Parse from backend JSON sent over WebSocket.
   factory NotificationModel.fromJson(Map<String, dynamic> json) {
@@ -45,6 +94,15 @@ class NotificationModel {
       receiverUsername: json['receiverUsername'],
       messageId: json['messageId'],
       videoUrl: json['videoUrl'],
+      id: '${json['id'] ?? ''}',
+      text: '${json['text'] ?? ''}',
+      read: json['read'] == true,
+      actorId: '${json['actorId'] ?? ''}',
+      actorUsername: '${json['actorUsername'] ?? ''}',
+      actorLeague: '${json['actorLeague'] ?? ''}',
+      challengeId: '${json['challengeId'] ?? ''}',
+      challengeTitle: '${json['challengeTitle'] ?? ''}',
+      thumbnailUrl: '${json['thumbnailUrl'] ?? ''}',
     );
   }
 }
