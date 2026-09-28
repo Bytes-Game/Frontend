@@ -82,6 +82,10 @@ class BattleStandings {
   /// How many votes were taken off, by reason, in the server's own words.
   final Map<String, int> removed;
 
+  /// The side the signed-in person voted for: "creator", an answer's id, or
+  /// empty if they have not voted.
+  final String yourVote;
+
   const BattleStandings({
     required this.challengeId,
     required this.status,
@@ -91,6 +95,7 @@ class BattleStandings {
     this.resolved = false,
     this.sides = const [],
     this.removed = const {},
+    this.yourVote = '',
   });
 
   /// Voting has closed, whether or not the server has decided it yet.
@@ -124,6 +129,7 @@ class BattleStandings {
       for (final e in (j['removed'] as Map? ?? const {}).entries)
         '${e.key}': _toInt(e.value),
     },
+    yourVote: '${j['yourVote'] ?? ''}',
   );
 }
 
@@ -275,8 +281,25 @@ class BattlesPage {
 class ActionResult {
   final bool ok;
   final String message;
-  const ActionResult(this.ok, [this.message = '']);
+
+  /// Set only when a vote was turned down because this person already voted
+  /// in the battle: the side their one vote is on ("creator", or an answer's
+  /// id). Empty in every other case.
+  final String yourVote;
+
+  const ActionResult(this.ok, [this.message = '']) : yourVote = '';
+
+  const ActionResult.alreadyVoted(this.yourVote)
+    : ok = false,
+      message = alreadyVotedText;
+
+  bool get alreadyVoted => yourVote.isNotEmpty;
 }
+
+/// What someone sees when they try to vote twice in one battle. Said as a
+/// fact, not as an error — nothing went wrong.
+const alreadyVotedText =
+    'You already voted in this battle. Everyone gets one vote.';
 
 /// Where a rating sits on the league ladder.
 ///

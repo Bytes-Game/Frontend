@@ -70,7 +70,7 @@ void main() {
 
     test('the feed passes the choice through to the service', () {
       final body = bodyOf(src, 'Future<void> _playCurrent(');
-      expect(body, contains('showAndPlay(url, fromStart: fromStart)'),
+      expect(body, matches(RegExp(r'showAndPlay\(\s*url,\s*fromStart: fromStart,')),
           reason: 'the feed decides which arrivals restart and which resume, '
               'and then does not tell the service which this one is');
     });

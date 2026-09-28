@@ -21,9 +21,13 @@ class BattleScoreboard extends StatefulWidget {
   /// The signed-in person, or null.
   final String? viewerId;
 
-  /// Casts a vote. For the creator's side it is called with the challenge's
-  /// own id, as every vote dialog in the app does. Null hides the buttons.
-  final Future<void> Function(String responseId)? onVote;
+  /// Casts a vote and says how it went. For the creator's side it is called
+  /// with the challenge's own id, as every vote dialog in the app does. Null
+  /// hides the buttons.
+  ///
+  /// The scoreboard does not wait for it: the vote shows the moment it is
+  /// tapped, and is taken back only if the server turns it down.
+  final Future<ActionResult> Function(String responseId)? onVote;
 
   /// Change this to make the scoreboard load again — after a vote, say.
   final int refreshToken;
@@ -46,6 +50,15 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
   bool _failed = false;
   bool _extending = false;
   Timer? _tick;
+
+  /// The side this person voted for: "creator", an answer's id, or empty.
+  /// Set the moment they tap, before the server has answered.
+  String _yourVote = '';
+
+  /// The side given one extra vote on screen while the server catches up.
+  /// Cleared when a fresh count comes in, which has the vote in it.
+  String _counting = '';
+  bool _sending = false;
 
   @override
   void initState() {
@@ -79,8 +92,56 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
     setState(() {
       _loading = false;
       _failed = s == null;
-      if (s != null) _standings = s;
+      if (s != null) {
+        _standings = s;
+        if (s.yourVote.isNotEmpty) _yourVote = s.yourVote;
+        if (!_sending) _counting = '';
+      }
     });
+  }
+
+  static String _sideKey(BattleSide side) =>
+      side.isCreator ? 'creator' : side.responseId;
+
+  void _say(String message) {
+    ScaffoldMessenger.maybeOf(context)
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
+      );
+  }
+
+  /// A tap on Vote. It shows at once — the button turns into "Your vote"
+  /// and the count goes up by one — and the server is told after. Waiting
+  /// for the server first, then reloading the whole page, is what made the
+  /// button feel like it did nothing.
+  Future<void> _cast(BattleSide side) async {
+    if (_yourVote.isNotEmpty || _sending) {
+      _say(alreadyVotedText);
+      return;
+    }
+    final key = _sideKey(side);
+    setState(() {
+      _yourVote = key;
+      _counting = key;
+      _sending = true;
+    });
+    final res = await widget.onVote!(
+      side.isCreator ? widget.challengeId : side.responseId,
+    );
+    if (!mounted) return;
+    setState(() {
+      _sending = false;
+      if (!res.ok) {
+        _counting = '';
+        // Already voted: show the vote they have. Anything else: take it
+        // back so they can try again.
+        _yourVote = res.alreadyVoted ? res.yourVote : '';
+      }
+    });
+    if (!res.ok) _say(res.message);
+    // The server's own count, quietly, once it has the vote.
+    if (res.ok || res.alreadyVoted) _load();
   }
 
   bool get _viewerIsIn =>
@@ -160,9 +221,12 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
       );
     }
 
-    final total = s.sides.fold<double>(0, (a, b) => a + b.votes);
+    double shown(BattleSide side) =>
+        side.votes + (_counting == _sideKey(side) ? 1 : 0);
+    final total = s.sides.fold<double>(0, (a, b) => a + shown(b));
     final canVote =
         widget.onVote != null && !s.over && !s.notStarted && !_viewerIsIn;
+    final voted = _yourVote.isNotEmpty;
 
     // A plain raised panel, the same as every other box on the battle page,
     // rather than a tinted gradient.
@@ -208,13 +272,13 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
             for (final side in s.sides)
               _SideRow(
                 side: side,
-                share: total > 0 ? side.votes / total : 0,
+                votes: shown(side),
+                share: total > 0 ? shown(side) / total : 0,
                 decided: s.resolved,
-                onVote: canVote
-                    ? () => widget.onVote!(
-                        side.isCreator ? widget.challengeId : side.responseId,
-                      )
-                    : null,
+                yours: _yourVote == _sideKey(side),
+                // One vote each: once it is cast, no side offers another.
+                onVote: canVote && !voted ? () => _cast(side) : null,
+                onYours: canVote ? () => _say(alreadyVotedText) : null,
               ),
           if (s.resolved) ...[
             const SizedBox(height: 4),
@@ -345,15 +409,28 @@ String votesText(double v) =>
 
 class _SideRow extends StatelessWidget {
   final BattleSide side;
+
+  /// The count to show: the server's, plus this person's vote while the
+  /// server catches up.
+  final double votes;
   final double share;
   final bool decided;
+
+  /// This person's vote is on this side.
+  final bool yours;
   final VoidCallback? onVote;
+
+  /// A tap on "Your vote": says there is one vote each.
+  final VoidCallback? onYours;
 
   const _SideRow({
     required this.side,
+    required this.votes,
     required this.share,
     required this.decided,
+    required this.yours,
     this.onVote,
+    this.onYours,
   });
 
   @override
@@ -416,7 +493,7 @@ class _SideRow extends StatelessWidget {
                 ),
               ),
               Text(
-                votesText(side.votes),
+                votesText(votes),
                 style: tt.headlineSmall?.copyWith(
                   fontWeight: FontWeight.w800,
                   color: accent,
@@ -424,7 +501,10 @@ class _SideRow extends StatelessWidget {
               ),
               const SizedBox(width: 4),
               Text('votes', style: tt.labelSmall),
-              if (onVote != null) ...[
+              if (yours) ...[
+                const SizedBox(width: 8),
+                _YourVote(onTap: onYours),
+              ] else if (onVote != null) ...[
                 const SizedBox(width: 8),
                 FilledButton(
                   onPressed: onVote,
@@ -479,4 +559,44 @@ class _SideRow extends StatelessWidget {
       ],
     ),
   );
+}
+
+/// Where the Vote button was, once this person has voted for that side: a
+/// green tick and "Your vote". Tapping it says there is one vote each.
+class _YourVote extends StatelessWidget {
+  final VoidCallback? onTap;
+
+  const _YourVote({this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    const green = Color(0xFF30D158);
+    return Material(
+      key: const ValueKey('your_vote'),
+      color: green.withValues(alpha: 0.16),
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.check_rounded, size: 16, color: green),
+              SizedBox(width: 4),
+              Text(
+                'Your vote',
+                style: TextStyle(
+                  color: green,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

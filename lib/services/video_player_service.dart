@@ -293,6 +293,13 @@ class VideoPlayerService {
   /// about the reel on screen, not about how the controller was created.
   String? _activeUrl;
 
+  /// Who put [_activeUrl] on screen: the page that last called
+  /// [showAndPlay] with an owner, or null when nobody said.
+  ///
+  /// Needed so a page that is closing can stop the video IT started — and
+  /// only that. See [leaveScreen].
+  Object? _activeOwner;
+
   /// The controller currently being watched for starvation, and the
   /// listener attached to it, so it can be detached when the reel changes.
   VideoPlayerController? _starvationWatched;
@@ -894,6 +901,9 @@ class VideoPlayerService {
     // controller that finishes initialising later comes up at the right
     // volume instead of racing this sweep.
     _activeUrl = activeUrl;
+    // A new claim on the screen. Whoever made it says so after this, in
+    // [showAndPlay]; anybody calling here directly is nobody's.
+    _activeOwner = null;
     _watchForStarvation(activeUrl);
     final stopping = <Future<void>>[];
     for (final entry in _pool) {
@@ -956,8 +966,19 @@ class VideoPlayerService {
   /// on screen means. Pass false only where the viewer never LEFT — coming
   /// back to the app after it was backgrounded is the same reel at the same
   /// moment, and restarting it there would lose their place.
-  Future<void> showAndPlay(String url, {bool fromStart = true}) async {
-    await pauseAllExcept(url);
+  ///
+  /// [owner] is the page doing it — the feed. It is how that page, when it
+  /// closes, stops the video it started: see [leaveScreen].
+  Future<void> showAndPlay(
+    String url, {
+    bool fromStart = true,
+    Object? owner,
+  }) async {
+    // Claimed straight away, not after the old players have stopped: a
+    // page closed in that moment must still find its claim.
+    final stopping = pauseAllExcept(url);
+    _activeOwner = owner;
+    await stopping;
     // Re-checked AFTER the await rather than before: a second swipe during
     // the handover runs its own showAndPlay, which sets _activeUrl to the
     // new reel. Whichever call loses this race must not start a video the
@@ -1159,6 +1180,39 @@ class VideoPlayerService {
     await entry.controller.pause();
   }
 
+  /// A page that put a video on screen is closing: stop that video.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// THE VIDEO KEPT PLAYING AFTER GOING BACK
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// Open a video from a profile, press back, and its sound carried on with
+  /// nothing on screen. The closing feed handed its players back — but
+  /// [handBack] never touches the video on screen, on purpose, because two
+  /// feeds are alive at once during a tab change and the other may have just
+  /// started that same video. With nothing else on screen, nobody stopped
+  /// it. Switching bottom tabs hid this, because that pauses everything
+  /// first; going back from a pushed page does not.
+  ///
+  /// So the screen now knows who claimed it. This stops the video only if
+  /// [owner] is still the one who put it there. If another page has claimed
+  /// the screen since, the video is theirs and is left alone.
+  ///
+  /// Afterwards nothing is on screen, so [handBack] can give that player up
+  /// like the rest.
+  void leaveScreen(Object owner) {
+    if (!identical(_activeOwner, owner)) return;
+    final entry = _activeEntry;
+    _activeUrl = null;
+    _activeOwner = null;
+    _stopTimingFirstFrame();
+    if (entry == null) return;
+    // ignore: discarded_futures
+    entry.controller.pause();
+    // ignore: discarded_futures
+    entry.controller.setVolume(0);
+  }
+
   /// Hand a player back for good: out of the pool, and shut down.
   ///
   /// ══════════════════════════════════════════════════════════════════════
@@ -1275,6 +1329,7 @@ class VideoPlayerService {
     _pool.clear();
     _prefetchedUrls.clear();
     _activeUrl = null;
+    _activeOwner = null;
     _pendingSpares.clear();
     _wantedSpares = {};
     // Release the one-at-a-time gate. A shutdown that left it held would
@@ -1509,6 +1564,9 @@ class VideoPlayerService {
   /// other observable state said so.
   @visibleForTesting
   String? get debugActiveUrl => _activeUrl;
+
+  @visibleForTesting
+  Object? get debugActiveOwner => _activeOwner;
 }
 
 class _PoolEntry {

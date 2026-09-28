@@ -47,6 +47,15 @@ void fakeServer() {
               'challengeTitle': 'Who can juggle five?',
             },
             {
+              'id': '4',
+              'type': 'battle_won',
+              'text': 'You won “Who can juggle five?” against leo, 14–9.',
+              'message': 'You won “Who can juggle five?” against leo, 14–9.',
+              'timestamp': ago(const Duration(hours: 3)),
+              'read': true,
+              'challengeId': '40',
+            },
+            {
               'id': '2',
               'type': 'follow',
               'text': 'started following you.',
@@ -169,6 +178,35 @@ void main() {
     expect(find.text('New'), findsOneWidget);
   });
 
+  testWidgets('a battle you won: the sentence, a green trophy, and a tap '
+      'opens the battle', (t) async {
+    await openPage(t);
+    final row = find.byKey(const ValueKey('note_4'));
+    expect(row, findsOneWidget);
+    expect(
+      find.descendant(
+        of: row,
+        matching: find.textContaining(
+          'You won “Who can juggle five?” against leo, 14–9.',
+          findRichText: true,
+        ),
+      ),
+      findsOneWidget,
+    );
+    final trophy = t.widget<Icon>(
+      find.descendant(
+        of: row,
+        matching: find.byIcon(Icons.emoji_events_rounded),
+      ),
+    );
+    expect(trophy.color, const Color(0xFF30D158));
+    await t.tap(row);
+    for (var i = 0; i < 8; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byType(ChallengeDetailPage), findsOneWidget);
+  });
+
   testWidgets('a follow offers to follow back', (t) async {
     await openPage(t);
     await t.tap(find.byKey(const ValueKey('note_follow_back')));
@@ -191,7 +229,7 @@ void main() {
       final dp = signedIn();
       await dp.loadNotifications();
       expect(dp.unreadNotifications, 1);
-      expect(dp.notifications, hasLength(2));
+      expect(dp.notifications, hasLength(3));
     });
 
     test('a live one already in the list is not added twice; chat is not a '
@@ -208,7 +246,7 @@ void main() {
       dp.addNotification(
         NotificationModel.fromJson({'type': 'chat', 'message': 'hi'}),
       );
-      expect(dp.notifications, hasLength(2));
+      expect(dp.notifications, hasLength(3));
       expect(dp.unreadNotifications, 1);
       dp.addNotification(
         NotificationModel.fromJson({
@@ -217,7 +255,7 @@ void main() {
           'message': 'new',
         }),
       );
-      expect(dp.notifications, hasLength(3));
+      expect(dp.notifications, hasLength(4));
       expect(dp.unreadNotifications, 2);
     });
   });

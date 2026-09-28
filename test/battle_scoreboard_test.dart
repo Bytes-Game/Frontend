@@ -4,6 +4,7 @@
 // what is not, so a scoreboard broken into showing nothing at all cannot
 // pass.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -12,6 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+import 'package:myapp/models/battle_model.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/widgets/battle_scoreboard.dart';
 
@@ -19,7 +21,9 @@ Map<String, dynamic> standings({
   required String endsAt,
   bool resolved = false,
   int battleDays = 7,
+  String yourVote = '',
 }) => {
+  if (yourVote.isNotEmpty) 'yourVote': yourVote,
   'challengeId': '7',
   'status': resolved ? 'completed' : 'active',
   'battleDays': battleDays,
@@ -74,7 +78,11 @@ void main() {
   });
   tearDown(() => ApiService.useClient(http.Client()));
 
-  Future<List<String>> pump(WidgetTester tester, {String? viewer}) async {
+  Future<List<String>> pump(
+    WidgetTester tester, {
+    String? viewer,
+    Future<ActionResult> Function()? server,
+  }) async {
     final votes = <String>[];
     await tester.pumpWidget(
       MaterialApp(
@@ -83,7 +91,10 @@ void main() {
             child: BattleScoreboard(
               challengeId: '7',
               viewerId: viewer,
-              onVote: (id) async => votes.add(id),
+              onVote: (id) {
+                votes.add(id);
+                return server?.call() ?? Future.value(const ActionResult(true));
+              },
             ),
           ),
         ),
@@ -117,11 +128,12 @@ void main() {
 
     final buttons = find.widgetWithText(FilledButton, 'Vote');
     expect(buttons, findsNWidgets(2));
+    expect(find.byKey(const ValueKey('your_vote')), findsNothing);
     await tester.tap(buttons.at(0));
-    await tester.tap(buttons.at(1));
+    await tester.pumpAndSettle();
     // The creator's side by the challenge's own id, as every vote dialog
-    // does; the answer by its id.
-    expect(votes, ['7', '12']);
+    // does.
+    expect(votes, ['7']);
     expect(
       find.text('Make it longer'),
       findsNothing,
@@ -174,6 +186,141 @@ void main() {
     await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
     expect(sent, hasLength(2));
+  });
+
+  group('one vote, shown at once', () {
+    setUp(() {
+      answer = (_) => http.Response(
+        json.encode(standings(endsAt: '2099-10-04T10:00:00Z')),
+        200,
+      );
+    });
+
+    testWidgets('a tap shows the vote before the server has answered', (
+      tester,
+    ) async {
+      final reply = Completer<ActionResult>();
+      final votes = await pump(
+        tester,
+        viewer: '9',
+        server: () => reply.future,
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Vote').at(1));
+      await tester.pump();
+
+      // The server has not answered, and it already shows: leo's count is
+      // up by one and his button reads "Your vote".
+      expect(votes, ['12']);
+      // (leo also has 4 likes, so "4" shows twice.)
+      expect(find.text('3'), findsNothing);
+      expect(find.text('4'), findsNWidgets(2), reason: '3 votes + yours');
+      expect(find.byKey(const ValueKey('your_vote')), findsOneWidget);
+      expect(
+        find.widgetWithText(FilledButton, 'Vote'),
+        findsNothing,
+        reason: 'one vote each: no side offers another',
+      );
+      expect(sent, hasLength(1), reason: 'nothing waited on a reload');
+
+      reply.complete(const ActionResult(true));
+      await tester.pumpAndSettle();
+      // Then the server's own count, quietly.
+      expect(sent, hasLength(2));
+      expect(find.byKey(const ValueKey('your_vote')), findsOneWidget);
+    });
+
+    testWidgets('a second tap says there is one vote each and sends '
+        'nothing', (tester) async {
+      final votes = await pump(tester, viewer: '9');
+      await tester.tap(find.widgetWithText(FilledButton, 'Vote').at(0));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('your_vote')));
+      await tester.pump();
+      expect(find.text(alreadyVotedText), findsOneWidget);
+      expect(votes, ['7'], reason: 'the second tap never reached the server');
+    });
+
+    testWidgets('a vote cast before shows from the start', (tester) async {
+      answer = (_) => http.Response(
+        json.encode(standings(endsAt: '2099-10-04T10:00:00Z', yourVote: '12')),
+        200,
+      );
+      await pump(tester, viewer: '9');
+      final mine = find.byKey(const ValueKey('your_vote'));
+      expect(mine, findsOneWidget);
+      // On leo's row, not maya's.
+      expect(
+        tester.getCenter(mine).dy,
+        closeTo(tester.getCenter(find.text('leo')).dy, 30),
+      );
+      expect(find.widgetWithText(FilledButton, 'Vote'), findsNothing);
+      expect(find.text('3'), findsOneWidget, reason: 'the count is not bumped');
+    });
+
+    testWidgets('turned down because one was already cast: says so '
+        'kindly and marks the side it is on', (tester) async {
+      await pump(
+        tester,
+        viewer: '9',
+        server: () async => const ActionResult.alreadyVoted('creator'),
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Vote').at(1));
+      await tester.pumpAndSettle();
+      expect(find.text(alreadyVotedText), findsOneWidget);
+      final mine = find.byKey(const ValueKey('your_vote'));
+      expect(mine, findsOneWidget);
+      expect(
+        tester.getCenter(mine).dy,
+        closeTo(tester.getCenter(find.text('maya')).dy, 30),
+      );
+      expect(find.text('3'), findsOneWidget, reason: 'the +1 is taken back');
+    });
+
+    testWidgets('turned down for another reason: taken back, with why', (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        viewer: '9',
+        server: () async => const ActionResult(false, 'This battle has ended.'),
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Vote').at(1));
+      await tester.pumpAndSettle();
+      expect(find.text('This battle has ended.'), findsOneWidget);
+      expect(find.byKey(const ValueKey('your_vote')), findsNothing);
+      expect(find.widgetWithText(FilledButton, 'Vote'), findsNWidgets(2));
+      expect(find.text('3'), findsOneWidget);
+    });
+  });
+
+  group('the vote call', () {
+    test('"already voted" comes back as that, with the side', () async {
+      answer = (_) => http.Response(
+        'You already voted in this battle. Everyone gets one vote.\n',
+        409,
+        headers: {'x-your-vote': '12'},
+      );
+      final res = await ApiService.voteChallenge(
+        challengeId: '7',
+        responseId: '7',
+        voterId: 'u',
+      );
+      expect(res.ok, isFalse);
+      expect(res.alreadyVoted, isTrue);
+      expect(res.yourVote, '12');
+      expect(res.message, alreadyVotedText);
+    });
+
+    test('another 409 is not mistaken for it', () async {
+      answer = (_) => http.Response('This battle has ended.\n', 409);
+      final res = await ApiService.voteChallenge(
+        challengeId: '7',
+        responseId: '7',
+        voterId: 'u',
+      );
+      expect(res.alreadyVoted, isFalse);
+      expect(res.message, 'This battle has ended.');
+    });
   });
 
   test('time left reads like a person would say it', () {
