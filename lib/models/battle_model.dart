@@ -337,6 +337,20 @@ class ActionResult {
   const ActionResult(this.ok, [this.message = '']);
 }
 
+/// What came of reporting a video that doesn't match its challenge.
+class ReportResult {
+  /// The server has the report.
+  final bool sent;
+
+  /// The video is down now — this report, or one before it, settled it.
+  final bool takenDown;
+
+  /// What to tell the person, in the server's words when it gave some.
+  final String message;
+
+  const ReportResult(this.sent, this.takenDown, this.message);
+}
+
 /// Where a rating sits on the league ladder.
 ///
 /// The thresholds are the server's (leagueFor in battles.go): a league is

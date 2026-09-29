@@ -132,8 +132,8 @@ void main() {
     testWidgets('opens with no category chosen', (tester) async {
       await openForm(tester);
 
-      expect(find.text('Skip and we work it out from the video'),
-          findsOneWidget,
+      // An example in light text, not a choice: the picker opens empty.
+      expect(find.text('e.g. Dance, Comedy, Sports'), findsOneWidget,
           reason: 'A picker that opens already showing an answer is how the '
               'field stopped meaning anything.');
       // And it is not quietly sitting on a real category either.
@@ -144,14 +144,18 @@ void main() {
       }
     });
 
-    testWidgets('says what happens if you skip it', (tester) async {
+    testWidgets('says it can be skipped, and shows an example in light '
+        'text', (tester) async {
       await openForm(tester);
 
-      expect(find.text('Skip and we work it out from the video'),
-          findsOneWidget,
-          reason: 'Leaving it blank is a supported answer, so the form has '
-              'to say so. Silence here reads as a field you forgot.');
+      // Leaving it blank is a supported answer, so the form says so — in
+      // the label now. The owner asked for the old line under it to go.
       expect(find.text('CATEGORY (OPTIONAL)'), findsOneWidget);
+      expect(find.text('Skip and we work it out from the video'), findsNothing);
+      final example = tester.widget<Text>(find.text('e.g. Dance, Comedy, Sports'));
+      expect(example.style?.color?.a, lessThan(1.0),
+          reason: 'the example is light, so it reads as a hint and not as '
+              'a choice already made');
     });
 
     testWidgets('picking one still works', (tester) async {
@@ -166,7 +170,7 @@ void main() {
       // something NOT being shown, and a picker broken so badly it renders
       // nothing at all would sail through every one of them.
       expect(find.text('Comedy'), findsOneWidget);
-      expect(find.text('Skip and we work it out from the video'), findsNothing);
+      expect(find.text('e.g. Dance, Comedy, Sports'), findsNothing);
     });
 
     testWidgets('posting without one is allowed', (tester) async {

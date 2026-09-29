@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:myapp/models/battle_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/widgets/arena_ui.dart';
-import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
 import 'package:myapp/widgets/league_badge.dart';
 
 /// The top of a profile, laid out the way a contact card is: the picture on
@@ -169,8 +168,6 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
                     const SizedBox(height: 3),
                     Row(
                       children: [
-                        LeagueEmblem(league: record.league, size: 15),
-                        const SizedBox(width: 5),
                         Flexible(
                           child: Text(
                             user.fullName.isNotEmpty

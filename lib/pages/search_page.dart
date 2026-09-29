@@ -19,7 +19,6 @@ import 'package:myapp/pages/profile_page.dart';
 import 'package:myapp/widgets/shimmer_loading.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/widgets/arena_ui.dart';
-import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
 
 /// Search page — TikTok / Instagram style with four tabs:
 ///   * Top      — interleaved best of accounts + battles + shorts
@@ -1062,8 +1061,6 @@ class _SearchPageState extends State<SearchPage>
                   const SizedBox(height: 2),
                   Row(
                     children: [
-                      LeagueEmblem(league: user.league, size: 14),
-                      const SizedBox(width: 5),
                       Flexible(
                         child: Text(
                           hasName

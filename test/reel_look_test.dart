@@ -86,11 +86,19 @@ List<Map<String, dynamic>> sharesSent = [];
 /// Views the app reported.
 List<Map<String, dynamic>> watchesSent = [];
 
+/// Reports that a video doesn't match its challenge: where each went, and
+/// which answer it named.
+List<(String, String)> reportsSent = [];
+
+/// When true a report is the one that takes the video down.
+bool reportTakesDown = false;
+
 void fakeServer(Map<String, dynamic> first) {
   lastVote = null;
   peopleAsked = [];
   sharesSent = [];
   watchesSent = [];
+  reportsSent = [];
   standingsAsked = 0;
   refuseComments = false;
   posted = [];
@@ -120,6 +128,20 @@ void fakeServer(Map<String, dynamic> first) {
       }
       if (req.url.path.endsWith('/challenges/vote')) {
         lastVote = json.decode(req.body) as Map<String, dynamic>;
+      }
+      if (req.url.path.endsWith('/report')) {
+        final body = json.decode(req.body) as Map<String, dynamic>;
+        reportsSent.add((req.url.path, body['responseId'] as String? ?? ''));
+        return http.Response(
+          json.encode({
+            'reported': true,
+            'takenDown': reportTakesDown,
+            'message': reportTakesDown
+                ? "Thanks. It didn't match the challenge, so it has been taken down."
+                : 'Thanks for reporting.',
+          }),
+          200,
+        );
       }
       if (req.url.path.endsWith('/people')) {
         peopleAsked.add(req.url.queryParameters['what'] ?? '');
@@ -295,6 +317,97 @@ void main() {
     SmartReelsFeed.debugForgetAppOpen();
     answerLeads = false;
     decided = false;
+    reportTakesDown = false;
+  });
+
+  group('reporting a video that doesn\'t match the challenge', () {
+    Future<void> reportFromMenu(WidgetTester t, {bool confirm = true}) async {
+      await t.tap(find.byKey(const ValueKey('reel_more')));
+      // Two frames: the menu finishes opening, then takes taps.
+      await t.pump(const Duration(milliseconds: 400));
+      await t.pump(const Duration(milliseconds: 100));
+      await t.tap(find.byKey(const ValueKey('reel_report')));
+      await t.pump(const Duration(milliseconds: 400));
+      await t.pump(const Duration(milliseconds: 100));
+      expect(find.byKey(const ValueKey('report_dialog')), findsOneWidget);
+      await t.tap(confirm
+          ? find.byKey(const ValueKey('report_confirm'))
+          : find.text('Cancel'));
+      for (var i = 0; i < 5; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    testWidgets('somebody else\'s video: the challenger\'s side reports the '
+        'challenge\'s own video', (t) async {
+      await openReel(t, battle());
+      await reportFromMenu(t);
+      expect(reportsSent, [('/api/v1/challenges/1/report', '')]);
+      expect(find.text('Thanks for reporting.'), findsOneWidget);
+      // Not taken down: the reel stays.
+      expect(find.textContaining('dance on a moving bus'), findsWidgets);
+      await closeReel(t);
+    });
+
+    testWidgets('on the answer\'s side it reports the answer', (t) async {
+      answerLeads = true; // opens on the answer
+      await openReel(t, battle());
+      await reportFromMenu(t);
+      expect(reportsSent, [('/api/v1/challenges/1/report', '77')]);
+      await closeReel(t);
+    });
+
+    testWidgets('changing your mind sends nothing', (t) async {
+      await openReel(t, battle());
+      await reportFromMenu(t, confirm: false);
+      expect(reportsSent, isEmpty);
+      await closeReel(t);
+    });
+
+    testWidgets('your own challenge: delete, and no report', (t) async {
+      await openReel(t, battle(), meId: '9', meName: 'maya');
+      await t.tap(find.byKey(const ValueKey('reel_more')));
+      await t.pump(const Duration(milliseconds: 400));
+      expect(find.text('Delete'), findsOneWidget);
+      expect(find.byKey(const ValueKey('reel_report')), findsNothing);
+      await t.tapAt(const Offset(10, 10));
+      await t.pump(const Duration(milliseconds: 400));
+      await closeReel(t);
+    });
+
+    testWidgets('your own answer on screen: nothing to report or delete', (
+      t,
+    ) async {
+      answerLeads = true;
+      await openReel(t, battle(), meId: '8', meName: 'leo_beats');
+      expect(find.byKey(const ValueKey('reel_more')), findsNothing);
+      await closeReel(t);
+    });
+
+    testWidgets('your own answer, but the challenger on screen: that one '
+        'can be reported', (t) async {
+      await openReel(t, battle(), meId: '8', meName: 'leo_beats');
+      await reportFromMenu(t);
+      expect(reportsSent, [('/api/v1/challenges/1/report', '')]);
+      await closeReel(t);
+    });
+
+    testWidgets('taken down: it says so and the reel leaves the feed', (
+      t,
+    ) async {
+      reportTakesDown = true;
+      await openReel(t, battle());
+      expect(find.textContaining('dance on a moving bus'), findsWidgets);
+      await reportFromMenu(t);
+      expect(
+        find.text(
+          "Thanks. It didn't match the challenge, so it has been taken down.",
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('dance on a moving bus'), findsNothing);
+      await closeReel(t);
+    });
   });
 
   // A few frames: the list's answer arrives between them, not inside one.

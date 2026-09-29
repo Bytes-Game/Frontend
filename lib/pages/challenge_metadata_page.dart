@@ -18,6 +18,11 @@ import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/suggest_field.dart';
 import 'package:myapp/widgets/tags_input.dart';
 
+/// Longest a challenge's prefix and subject may be, in characters. The
+/// server holds new challenges to the same limits.
+const maxPrefix = 50;
+const maxSubject = 30;
+
 /// Final step of the create-challenge flow.
 ///
 /// At the top, a preview card: the clip playing beside the challenge's
@@ -332,7 +337,8 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
               controller: _prefixCtl,
               label: 'Prefix',
               hint: 'Who is better at',
-              validator: _requiredText,
+              validator: (v) => _limitedText(v, maxPrefix),
+              maxLength: maxPrefix,
               suggestions: _prefixSuggestions,
               displayString: (s) => s,
               buildRow: (s) => Text(s),
@@ -351,7 +357,11 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
                     final p = _prefixSuggestions[i];
                     final chosen = _prefixCtl.text.trim() == p;
                     return Pressable(
-                      onTap: () => setState(() => _prefixCtl.text = p),
+                      onTap: () => setState(
+                        () => _prefixCtl.text = p.characters
+                            .take(maxPrefix)
+                            .toString(),
+                      ),
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                         alignment: Alignment.center,
@@ -379,14 +389,13 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
               controller: _subjectCtl,
               label: 'Subject',
               hint: 'pranks',
-              validator: _requiredText,
+              validator: (v) => _limitedText(v, maxSubject),
+              maxLength: maxSubject,
               suggestions: _subjectSuggestions,
               displayString: (m) => (m['subject'] as String?) ?? '',
               buildRow: _subjectOptionTile,
               onQuery: _refreshSubjectSuggestions,
             ),
-            const SizedBox(height: 8),
-            _autoDetectHint(cs),
 
             _section('Who can see it'),
             _choiceRow(
@@ -406,8 +415,7 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
             _daysRow(),
             const SizedBox(height: 8),
             Text(
-              'Voting starts when someone accepts. You can make it longer '
-              'later, never shorter.',
+              'Voting starts when someone accepts.',
               style: TextStyle(fontSize: 12.5, color: quietText(context)),
             ),
 
@@ -632,31 +640,6 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
     if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
     if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}K';
     return '$n';
-  }
-
-  Widget _autoDetectHint(ColorScheme cs) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 4, top: 2),
-      child: Row(
-        children: [
-          Icon(
-            Icons.auto_awesome,
-            size: 14,
-            color: cs.onSurface.withValues(alpha: 0.55),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              'Energy is worked out from your subject and category.',
-              style: TextStyle(
-                fontSize: 12,
-                color: cs.onSurface.withValues(alpha: 0.55),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   // ── Small chrome helpers ───────────────────────────────────────────
@@ -953,13 +936,12 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
           dropdownColor: cs.surfaceContainerHigh,
           style: TextStyle(color: cs.onSurface),
           iconEnabledColor: cs.onSurface.withValues(alpha: 0.7),
-          // Shown while nothing is picked. Says what happens if they skip,
-          // rather than naming a category — a category sitting there reads
-          // as an answer the creator never gave.
+          // Shown while nothing is picked: examples, in a light shade, so
+          // it reads as a hint and not as a choice already made.
           hint: Text(
-            'Skip and we work it out from the video',
+            'e.g. Dance, Comedy, Sports',
             style: TextStyle(
-              color: cs.onSurfaceVariant.withValues(alpha: 0.8),
+              color: cs.onSurfaceVariant.withValues(alpha: 0.5),
             ),
           ),
           items: ContentCategories.choosable
@@ -977,8 +959,12 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
     );
   }
 
-  String? _requiredText(String? v) {
-    if (v == null || v.trim().isEmpty) return 'Required';
+  /// Filled in, and no longer than [max] characters — the same limit the
+  /// server holds new challenges to.
+  String? _limitedText(String? v, int max) {
+    final t = v?.trim() ?? '';
+    if (t.isEmpty) return 'Required';
+    if (t.runes.length > max) return 'Keep it to $max characters';
     return null;
   }
 }

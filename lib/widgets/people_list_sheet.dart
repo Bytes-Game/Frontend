@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:myapp/models/battle_model.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/widgets/arena_ui.dart';
-import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
 
 /// The lists behind the counts: who liked, who voted for whom, who shared.
 enum PeopleList { likes, votes, shares }
@@ -181,10 +180,6 @@ class _People extends StatelessWidget {
                   ),
                 ),
               ),
-              if (p.league.isNotEmpty) ...[
-                const SizedBox(width: 6),
-                LeagueEmblem(league: p.league, size: 14),
-              ],
             ],
           ),
           trailing: p.at == null
