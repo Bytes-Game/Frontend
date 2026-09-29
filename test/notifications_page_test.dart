@@ -68,6 +68,17 @@ void fakeServer() {
               'challengeId': '40',
             },
             {
+              'id': '6',
+              'type': 'off_topic_penalty',
+              'text': 'Several people reported your video in “Who can juggle '
+                  'five?” for not matching the challenge. It cost you 25 '
+                  'rating points. Your video stays up.',
+              'message': 'Several people reported your video.',
+              'timestamp': ago(const Duration(hours: 6)),
+              'read': true,
+              'challengeId': '40',
+            },
+            {
               'id': '2',
               'type': 'follow',
               'text': 'started following you.',
@@ -239,6 +250,27 @@ void main() {
     expect(mark.color, const Color(0xFFFF453A));
   });
 
+  testWidgets('reported but not taken down: says the video stays up, with '
+      'a red flag', (t) async {
+    await openPage(t);
+    final row = find.byKey(const ValueKey('note_6'));
+    expect(row, findsOneWidget);
+    expect(
+      find.descendant(
+        of: row,
+        matching: find.textContaining(
+          'It cost you 25 rating points. Your video stays up.',
+          findRichText: true,
+        ),
+      ),
+      findsOneWidget,
+    );
+    final mark = t.widget<Icon>(
+      find.descendant(of: row, matching: find.byIcon(Icons.flag_rounded)),
+    );
+    expect(mark.color, const Color(0xFFFF453A));
+  });
+
   testWidgets('a follow offers to follow back', (t) async {
     await openPage(t);
     await t.tap(find.byKey(const ValueKey('note_follow_back')));
@@ -261,7 +293,7 @@ void main() {
       final dp = signedIn();
       await dp.loadNotifications();
       expect(dp.unreadNotifications, 1);
-      expect(dp.notifications, hasLength(4));
+      expect(dp.notifications, hasLength(5));
     });
 
     test('a live one already in the list is not added twice; chat is not a '
@@ -278,7 +310,7 @@ void main() {
       dp.addNotification(
         NotificationModel.fromJson({'type': 'chat', 'message': 'hi'}),
       );
-      expect(dp.notifications, hasLength(4));
+      expect(dp.notifications, hasLength(5));
       expect(dp.unreadNotifications, 1);
       dp.addNotification(
         NotificationModel.fromJson({
@@ -287,7 +319,7 @@ void main() {
           'message': 'new',
         }),
       );
-      expect(dp.notifications, hasLength(5));
+      expect(dp.notifications, hasLength(6));
       expect(dp.unreadNotifications, 2);
     });
   });

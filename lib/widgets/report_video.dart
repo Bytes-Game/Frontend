@@ -5,9 +5,10 @@ import 'package:myapp/services/api_service.dart';
 
 /// Report a video that doesn't match its challenge.
 ///
-/// Asks first, because a report can cost somebody their battle: the server
-/// takes the video down when its model agrees the video doesn't match, or
-/// when enough viewers report it, and its owner loses rating points.
+/// Asks first, because a report can cost somebody: when enough viewers
+/// report a video its owner loses rating points (the video stays up), and
+/// when the server's check agrees too the video is taken down and its owner
+/// loses the battle.
 ///
 /// [responseId] names an answer; empty reports the challenge's own video.
 /// Returns what came of it, or null when the person changed their mind.
@@ -24,8 +25,9 @@ Future<ReportResult?> reportVideo(
       title: const Text("Doesn't match the challenge?"),
       content: const Text(
         'Report this video only if it has nothing to do with what the '
-        'challenge asks. If that is confirmed, the video is taken down and '
-        'its owner loses the battle and rating points.',
+        'challenge asks. If other people agree, its owner loses rating '
+        'points. If our check agrees too, the video is taken down and they '
+        'lose the battle.',
       ),
       actions: [
         TextButton(

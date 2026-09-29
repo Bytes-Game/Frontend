@@ -205,6 +205,9 @@ class _Heading extends StatelessWidget {
     // Your video was taken down: it didn't match its challenge.
     case 'off_topic':
       return (icon: Icons.block_rounded, color: const Color(0xFFFF453A));
+    // Reported by several people: it cost rating points, the video is up.
+    case 'off_topic_penalty':
+      return (icon: Icons.flag_rounded, color: const Color(0xFFFF453A));
     // A heads-up that your video may not match, before anybody reports it.
     case 'off_topic_warning':
       return (icon: Icons.flag_rounded, color: const Color(0xFFFF9F0A));
