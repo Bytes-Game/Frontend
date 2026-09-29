@@ -57,12 +57,11 @@ void fakeServer() {
             },
             {
               'id': '5',
-              'type': 'off_topic',
-              'text': 'Your answer to “Who can juggle five?” was taken down: '
-                  "it didn't match the challenge. You lost the battle and 41 "
-                  'rating points.',
-              'message': 'Your answer to “Who can juggle five?” was taken '
-                  "down: it didn't match the challenge.",
+              'type': 'false_report',
+              'text': "You reported the other side's video in “Who can juggle "
+                  'five?”, but our check found it does match the challenge. A '
+                  'false report cost you 10 rating points.',
+              'message': 'A false report cost you 10 rating points.',
               'timestamp': ago(const Duration(hours: 5)),
               'read': true,
               'challengeId': '40',
@@ -230,7 +229,7 @@ void main() {
     expect(find.byType(ChallengeDetailPage), findsOneWidget);
   });
 
-  testWidgets('a video taken down: the reason, in red', (t) async {
+  testWidgets('a false report: what it cost, with an orange flag', (t) async {
     await openPage(t);
     final row = find.byKey(const ValueKey('note_5'));
     expect(row, findsOneWidget);
@@ -238,16 +237,16 @@ void main() {
       find.descendant(
         of: row,
         matching: find.textContaining(
-          "didn't match the challenge. You lost the battle and 41 rating points.",
+          'A false report cost you 10 rating points.',
           findRichText: true,
         ),
       ),
       findsOneWidget,
     );
     final mark = t.widget<Icon>(
-      find.descendant(of: row, matching: find.byIcon(Icons.block_rounded)),
+      find.descendant(of: row, matching: find.byIcon(Icons.flag_outlined)),
     );
-    expect(mark.color, const Color(0xFFFF453A));
+    expect(mark.color, const Color(0xFFFF9F0A));
   });
 
   testWidgets('reported but not taken down: says the video stays up, with '

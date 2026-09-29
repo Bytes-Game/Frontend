@@ -48,12 +48,12 @@ class VideoGridTile extends StatelessWidget {
   bool get _isBattle =>
       video.responseCount > 0 || video.topResponseId.isNotEmpty;
 
-  /// A challenge taken down for not matching its video is still on its
-  /// owner's own profile — nobody else's — and says so.
+  /// A removed challenge is still on its owner's own profile — nobody
+  /// else's — and says so.
   TileBadge? get _badge =>
       badge ??
       (video.status == 'removed'
-          ? const TileBadge('Taken down', Icons.block_rounded, Color(0xFFFF453A))
+          ? const TileBadge('Removed', Icons.block_rounded, Color(0xFFFF453A))
           : null);
 
   @override

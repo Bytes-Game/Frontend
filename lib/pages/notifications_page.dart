@@ -202,10 +202,10 @@ class _Heading extends StatelessWidget {
     // A battle you won. Green, the colour the app gives a winner everywhere.
     case 'battle_won':
       return (icon: Icons.emoji_events_rounded, color: const Color(0xFF30D158));
-    // Your video was taken down: it didn't match its challenge.
-    case 'off_topic':
-      return (icon: Icons.block_rounded, color: const Color(0xFFFF453A));
-    // Reported by several people: it cost rating points, the video is up.
+    // You reported the other side's video and it did match: that cost you.
+    case 'false_report':
+      return (icon: Icons.flag_outlined, color: const Color(0xFFFF9F0A));
+    // Your video didn't match: it cost rating points, and it stays up.
     case 'off_topic_penalty':
       return (icon: Icons.flag_rounded, color: const Color(0xFFFF453A));
     // A heads-up that your video may not match, before anybody reports it.
