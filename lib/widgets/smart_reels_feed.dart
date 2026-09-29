@@ -7,7 +7,6 @@ import 'package:video_player/video_player.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/widgets/create_burst.dart';
 import 'package:myapp/config/app_theme.dart';
-import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
 import 'package:myapp/widgets/league_badge.dart' show leagueWash;
 import 'package:myapp/models/battle_model.dart'
     show BattleSide, BattleStandings;
@@ -29,6 +28,7 @@ import 'package:myapp/services/playback_reporter.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/video_player_service.dart';
+import 'package:myapp/widgets/report_video.dart';
 import 'package:myapp/widgets/feed_action_bar.dart'
     show
         ChallengeCommentSheet,
@@ -2348,6 +2348,43 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       return;
     }
 
+    _removeReel(index);
+
+    // Tell every other feed surface (profile grid, explore page) to
+    // refetch — same signal challenge_detail_page sends after a delete.
+    dp.bumpFeedRefresh();
+
+    _toast('Challenge deleted');
+  }
+
+  /// "This video doesn't match the challenge" — for the side on screen.
+  ///
+  /// A video that comes down leaves the feed at once, whichever side it
+  /// was: the person just told us they don't want to watch it.
+  Future<void> _onReport(int index) async {
+    if (index >= _items.length) return;
+    final item = _items[index];
+    if (item is! _ReelItem || item.id.isEmpty) return;
+    final onAnswer = item.isBattle && item.faces.showingOpponent;
+    EventTracker.instance.trackTap(
+      target: 'reel_report_open',
+      pageName: 'home_page',
+      params: {'contentId': item.id, 'onAnswer': onAnswer},
+    );
+    final result = await reportVideo(
+      context,
+      challengeId: item.id,
+      responseId: onAnswer ? item.opponentResponseId : '',
+    );
+    if (!mounted || result == null || !result.takenDown) return;
+    // Only this reel goes. Not a reload of the whole feed: that would throw
+    // the person back to the top for reporting one video.
+    final at = _items.indexOf(item);
+    if (at >= 0) _removeReel(at);
+  }
+
+  /// Take the reel at [index] out of the feed and carry on with the next.
+  void _removeReel(int index) {
     // Splice out + release the player for the deleted reel, then re-key
     // the player-state map so every entry past the removed slot still
     // maps to its tile. The PageController stays on the same numeric
@@ -2372,12 +2409,6 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
         _currentIndex = _items.length - 1;
       }
     });
-
-    // Tell every other feed surface (profile grid, explore page) to
-    // refetch — same signal challenge_detail_page sends after a delete.
-    dp.bumpFeedRefresh();
-
-    _toast('Challenge deleted');
 
     // Resume autoplay on whatever reel is now under the viewport.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2562,13 +2593,17 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                 // follows this reel becoming current. See the note on
                 // _getPlayerState.
                 final state = _getPlayerState(index);
-                final currentUserId =
-                    context.read<DataProvider>().user?.id ?? '';
+                final me = context.read<DataProvider>().user;
+                final currentUserId = me?.id ?? '';
                 final isOwner =
                     reel.type == 'challenge' &&
                     reel.creatorId.isNotEmpty &&
                     currentUserId.isNotEmpty &&
                     reel.creatorId == currentUserId;
+                final canReport =
+                    reel.type == 'challenge' &&
+                    reel.id.isNotEmpty &&
+                    currentUserId.isNotEmpty;
                 return _ReelTile(
                   item: reel,
                   state: state,
@@ -2583,6 +2618,10 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                   onOpenDetail: () => _onOpenDetail(index),
                   onAccept: (anchor) => _onAccept(index, anchor),
                   onDelete: () => _onDelete(index),
+                  onReport: canReport ? () => _onReport(index) : null,
+                  answerIsMine:
+                      reel.opponentUsername.isNotEmpty &&
+                      reel.opponentUsername == me?.username,
                   onNeedPlayer: () => _reopenPlayer(index),
                   playbackOwner: this,
                 );
@@ -3262,6 +3301,15 @@ class _ReelTile extends StatefulWidget {
   /// true.
   final VoidCallback onDelete;
 
+  /// Report the video on screen as not matching its challenge — the
+  /// challenge's own video, or the answer when that side is showing. Null
+  /// when nobody is signed in. Never offered for your own video: see
+  /// [answerIsMine].
+  final VoidCallback? onReport;
+
+  /// The answer in this battle is the signed-in person's own.
+  final bool answerIsMine;
+
   /// Ask the feed to open this reel's own player again and rebuild.
   ///
   /// Only reached on a phone held to a single player, where flipping to a
@@ -3287,6 +3335,8 @@ class _ReelTile extends StatefulWidget {
     required this.onOpenDetail,
     required this.onAccept,
     required this.onDelete,
+    this.onReport,
+    this.answerIsMine = false,
     required this.onNeedPlayer,
     required this.playbackOwner,
   });
@@ -3325,6 +3375,14 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   // network round trip.
   bool _showingOpponent = false;
   _ReelPlayerState? _opponentState;
+
+  /// Whether the video on screen can be reported: somebody is signed in
+  /// and it is not their own. On a battle that follows the side showing.
+  bool get _canReport {
+    if (widget.onReport == null) return false;
+    final onAnswer = widget.item.isBattle && _showingOpponent;
+    return !(onAnswer ? widget.answerIsMine : widget.isOwner);
+  }
 
   // 3D cube turn between the challenger and opponent videos — the
   // Instagram-stories cube, around the vertical axis. _cubeCtl.value is
@@ -4515,13 +4573,16 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
               MediaQuery.of(context).padding.bottom + _ScrubBar.stripHeight,
           child: Column(
             children: [
-              // Owner-only overflow menu. Lives ABOVE the vote/like
-              // stack so the destructive action is visually quarantined
-              // from the high-frequency engagement controls — a user
-              // double-tapping for "like" will never accidentally land
-              // on delete.
-              if (widget.isOwner) ...[
-                _OwnerMenuButton(onDelete: widget.onDelete),
+              // The "more" menu: delete on your own challenge, report on
+              // somebody else's video. Lives ABOVE the vote/like stack so
+              // those are visually quarantined from the everyday controls
+              // — a user double-tapping for "like" will never accidentally
+              // land on delete or report.
+              if (widget.isOwner || _canReport) ...[
+                _MoreMenuButton(
+                  onDelete: widget.isOwner ? widget.onDelete : null,
+                  onReport: _canReport ? widget.onReport : null,
+                ),
                 const SizedBox(height: 10),
               ],
               // A number under every button, as on Instagram. The icon does
@@ -5028,19 +5089,26 @@ class _ActionState extends State<_Action> with SingleTickerProviderStateMixin {
   }
 }
 
-/// Owner-only overflow menu for the right-rail. A 3-dot icon that opens
-/// a PopupMenu with destructive actions (currently just "Delete"). Kept
-/// as its own widget so the PopupMenu can anchor against the icon's
+/// The right-rail "more" menu. A 3-dot icon that opens a PopupMenu with the
+/// actions that are not taps you make every day: "Delete" on your own
+/// challenge, and "Doesn't match the challenge" on somebody else's video.
+/// Kept as its own widget so the PopupMenu can anchor against the icon's
 /// own RenderBox — anchoring against the parent Column would make the
 /// menu pop out far to the left where it visually disconnects from the
 /// triggering control.
-class _OwnerMenuButton extends StatelessWidget {
-  final VoidCallback onDelete;
-  const _OwnerMenuButton({required this.onDelete});
+class _MoreMenuButton extends StatelessWidget {
+  /// Null: not yours to delete.
+  final VoidCallback? onDelete;
+
+  /// Report the video on screen. Null: it is yours, or nobody is signed in.
+  final VoidCallback? onReport;
+
+  const _MoreMenuButton({this.onDelete, this.onReport});
 
   @override
   Widget build(BuildContext context) {
     return PopupMenuButton<String>(
+      key: const ValueKey('reel_more'),
       tooltip: 'More',
       icon: const Icon(
         Icons.more_horiz_rounded,
@@ -5050,19 +5118,33 @@ class _OwnerMenuButton extends StatelessWidget {
       ),
       color: Colors.black87,
       onSelected: (v) {
-        if (v == 'delete') onDelete();
+        if (v == 'delete') onDelete?.call();
+        if (v == 'report') onReport?.call();
       },
-      itemBuilder: (_) => const [
-        PopupMenuItem<String>(
-          value: 'delete',
-          child: Row(
-            children: [
-              Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
-              SizedBox(width: 10),
-              Text('Delete', style: TextStyle(color: Colors.redAccent)),
-            ],
+      itemBuilder: (_) => [
+        if (onReport != null)
+          const PopupMenuItem<String>(
+            key: ValueKey('reel_report'),
+            value: 'report',
+            child: Row(
+              children: [
+                Icon(Icons.flag_outlined, color: Colors.white, size: 20),
+                SizedBox(width: 10),
+                Text(reportMenuLabel, style: TextStyle(color: Colors.white)),
+              ],
+            ),
           ),
-        ),
+        if (onDelete != null)
+          const PopupMenuItem<String>(
+            value: 'delete',
+            child: Row(
+              children: [
+                Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                SizedBox(width: 10),
+                Text('Delete', style: TextStyle(color: Colors.redAccent)),
+              ],
+            ),
+          ),
       ],
     );
   }
@@ -5265,10 +5347,6 @@ class _CreatorLine extends StatelessWidget {
             ),
           ),
         ),
-        if (league.isNotEmpty) ...[
-          const SizedBox(width: 6),
-          LeagueEmblem(league: league, size: 16),
-        ],
         if (tag != null) ...[
           const SizedBox(width: 8),
           Flexible(

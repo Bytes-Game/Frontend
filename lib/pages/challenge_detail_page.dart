@@ -18,11 +18,11 @@ import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/upload_job_manager.dart';
 import 'package:myapp/models/battle_model.dart' show ActionResult, BattleStandings;
 import 'package:myapp/config/app_theme.dart';
-import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
 import 'package:myapp/widgets/feed_action_bar.dart'
     show ChallengeCommentSheet, ChallengeShareSheet, CommentSheetCaption;
 import 'package:myapp/widgets/league_badge.dart' show leagueWash;
 import 'package:myapp/widgets/people_list_sheet.dart';
+import 'package:myapp/widgets/report_video.dart';
 import 'package:myapp/widgets/video_grid_tile.dart' show openVideoPlaylist;
 
 /// Full-screen challenge detail: video, description, responses, and action buttons.
@@ -314,6 +314,39 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     setState(() => _scoreVersion++);
   }
 
+  /// The videos on this page the signed-in person may report as not
+  /// matching the challenge: every one that isn't theirs, still up. Each is
+  /// (answer id, whose it is) — an empty id is the challenge's own video.
+  List<(String, String)> _reportable(ChallengeModel c, String? me) {
+    if (me == null || me.isEmpty || c.status == 'removed') return const [];
+    return [
+      if (c.creatorId != me) ('', "${c.creatorUsername}'s"),
+      for (final r in _responses)
+        if (r.responderId != me) (r.id, "${r.responderUsername}'s"),
+    ];
+  }
+
+  /// Report one video as not matching the challenge. When it comes down,
+  /// the page reads the battle again, so what is on screen is what is left.
+  Future<void> _report(String responseId) async {
+    final c = _challenge;
+    if (c == null) return;
+    EventTracker.instance.trackTap(
+      target: 'challenge_report_open',
+      pageName: 'challenge_detail_page',
+      params: {'challengeId': c.id, 'responseId': responseId},
+    );
+    final result = await reportVideo(
+      context,
+      challengeId: c.id,
+      responseId: responseId,
+    );
+    if (!mounted || result == null || !result.takenDown) return;
+    Provider.of<DataProvider>(context, listen: false).bumpFeedRefresh();
+    await _load();
+    if (mounted) setState(() => _scoreVersion++);
+  }
+
   /// Owner-only destructive action. Confirms via dialog, calls the
   /// backend (which CASCADEs through responses/votes/likes/comments/
   /// saves/HLS jobs in one transaction), bumps the feed-refresh
@@ -533,27 +566,49 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
           style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
         ),
         actions: [
-          if (isOwner)
+          if (c != null && (isOwner || _reportable(c, me).isNotEmpty))
             PopupMenuButton<String>(
+              key: const ValueKey('detail_more'),
               icon: const Icon(Icons.more_horiz_rounded),
               tooltip: 'More',
               color: const Color(0xFF2C2C2E),
               onSelected: (v) {
                 if (v == 'delete') _delete();
+                if (v.startsWith('report:')) _report(v.substring(7));
               },
-              itemBuilder: (_) => const [
-                PopupMenuItem<String>(
-                  value: 'delete',
-                  child: Row(
-                    children: [
-                      Icon(Icons.delete_outline_rounded,
-                          color: Color(0xFFFF453A)),
-                      SizedBox(width: 10),
-                      Text('Delete',
-                          style: TextStyle(color: Color(0xFFFF453A))),
-                    ],
+              itemBuilder: (_) => [
+                // One line per video that isn't yours: the challenge's own,
+                // and each answer, by whose it is.
+                for (final (rid, whose) in _reportable(c, me))
+                  PopupMenuItem<String>(
+                    key: ValueKey('report_$rid'),
+                    value: 'report:$rid',
+                    child: Row(
+                      children: [
+                        const Icon(Icons.flag_outlined, color: Colors.white),
+                        const SizedBox(width: 10),
+                        Flexible(
+                          child: Text(
+                            "$whose video doesn't match",
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
+                if (isOwner)
+                  const PopupMenuItem<String>(
+                    value: 'delete',
+                    child: Row(
+                      children: [
+                        Icon(Icons.delete_outline_rounded,
+                            color: Color(0xFFFF453A)),
+                        SizedBox(width: 10),
+                        Text('Delete',
+                            style: TextStyle(color: Color(0xFFFF453A))),
+                      ],
+                    ),
+                  ),
               ],
             ),
         ],
@@ -602,6 +657,10 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                           letterSpacing: -0.5,
                         ),
                       ),
+                      if (c.status == 'removed') ...[
+                        const SizedBox(height: 12),
+                        const _TakenDown(),
+                      ],
                       const SizedBox(height: 10),
                       Wrap(
                         spacing: 6,
@@ -986,10 +1045,6 @@ class _VideoCard extends StatelessWidget {
                         ),
                       ),
                     ),
-                    if (league.isNotEmpty) ...[
-                      const SizedBox(width: 4),
-                      LeagueEmblem(league: league, size: 13),
-                    ],
                   ],
                 ),
               ),
@@ -1178,8 +1233,40 @@ class _Chip extends StatelessWidget {
   }
 }
 
+/// Why a challenge is still here but gone for everyone else: its video
+/// didn't match what it asks, so it was taken down.
+class _TakenDown extends StatelessWidget {
+  const _TakenDown();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const ValueKey('taken_down'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFF453A).withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.block_rounded, size: 18, color: Color(0xFFFF453A)),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              "Taken down: the video didn't match what this challenge asks. "
+              'Nobody else can see it, answer it or vote on it.',
+              style: TextStyle(color: Colors.white, fontSize: 13.5, height: 1.3),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Where the challenge is in its life: waiting, live (and how long is
-/// left), or decided.
+/// left), taken down, or decided.
 class _StatusChip extends StatelessWidget {
   final ChallengeModel challenge;
   final BattleStandings? standings;
@@ -1189,6 +1276,13 @@ class _StatusChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final st = standings;
+    if (challenge.status == 'removed') {
+      return const _Chip(
+        icon: Icons.block_rounded,
+        label: 'Taken down',
+        color: Color(0xFFFF453A),
+      );
+    }
     if (challenge.status == 'open') {
       return const _Chip(
         icon: Icons.hourglass_top_rounded,
@@ -1572,8 +1666,6 @@ class _ResponseCard extends StatelessWidget {
                             ),
                           ),
                         ),
-                        const SizedBox(width: 5),
-                        LeagueEmblem(league: response.responderLeague, size: 14),
                       ],
                     ),
                     const SizedBox(height: 4),

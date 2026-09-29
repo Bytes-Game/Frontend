@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 /// A TextField with a backend-driven suggestions overlay.
 ///
@@ -50,6 +51,10 @@ class SuggestField<T> extends StatefulWidget {
   /// the field.
   final ValueChanged<T>? onSelected;
 
+  /// Longest it may be, in characters, with a counter under the field.
+  /// A suggestion picked from the list is cut to it too.
+  final int? maxLength;
+
   /// Debounce window for [onQuery]. 150 ms is the typing-feels-
   /// instant sweet spot — every keystroke under that gets coalesced.
   final Duration debounce;
@@ -65,6 +70,7 @@ class SuggestField<T> extends StatefulWidget {
     this.hint,
     this.validator,
     this.onSelected,
+    this.maxLength,
     this.debounce = const Duration(milliseconds: 150),
   });
 
@@ -148,7 +154,11 @@ class _SuggestFieldState<T> extends State<SuggestField<T>> {
 
   void _onTap(T value) {
     final s = widget.displayString(value);
-    widget.controller.text = s;
+    final max = widget.maxLength;
+    widget.controller.text =
+        max != null && s.characters.length > max
+            ? s.characters.take(max).toString()
+            : s;
     widget.controller.selection = TextSelection.collapsed(offset: s.length);
     if (widget.onSelected != null) {
       widget.onSelected!(value);
@@ -242,6 +252,8 @@ class _SuggestFieldState<T> extends State<SuggestField<T>> {
             controller: widget.controller,
             focusNode: _focus,
             validator: widget.validator,
+            maxLength: widget.maxLength,
+            maxLengthEnforcement: MaxLengthEnforcement.enforced,
             style: TextStyle(color: cs.onSurface),
             decoration: InputDecoration(
               labelText: widget.label,
