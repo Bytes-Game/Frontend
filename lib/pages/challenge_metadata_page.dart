@@ -15,6 +15,7 @@ import 'package:myapp/models/user_model.dart';
 import 'package:myapp/services/upload_job_manager.dart';
 import 'package:myapp/widgets/friend_picker_sheet.dart';
 import 'package:myapp/widgets/arena_ui.dart';
+import 'package:myapp/widgets/match_warning.dart';
 import 'package:myapp/widgets/suggest_field.dart';
 import 'package:myapp/widgets/tags_input.dart';
 
@@ -436,11 +437,17 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
           ],
         ),
       ),
-      // Always in reach, however far down the form is scrolled.
+      // Always in reach, however far down the form is scrolled — and so is
+      // the warning that the video has to match what was written.
       bottomNavigationBar: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-          child: SizedBox(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const MatchWarning(text: matchWarningChallenge),
+              const SizedBox(height: 8),
+              SizedBox(
             height: 52,
             child: FilledButton(
               onPressed: _busy ? null : _submit,
@@ -468,6 +475,8 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
                       ),
                     ),
             ),
+              ),
+            ],
           ),
         ),
       ),

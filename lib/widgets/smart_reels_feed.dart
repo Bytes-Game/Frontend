@@ -2358,9 +2358,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   }
 
   /// "This video doesn't match the challenge" — for the side on screen.
-  ///
-  /// A video that comes down leaves the feed at once, whichever side it
-  /// was: the person just told us they don't want to watch it.
+  /// The video stays up whatever comes of it.
   Future<void> _onReport(int index) async {
     if (index >= _items.length) return;
     final item = _items[index];
@@ -2371,16 +2369,17 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       pageName: 'home_page',
       params: {'contentId': item.id, 'onAnswer': onAnswer},
     );
-    final result = await reportVideo(
+    final me = Provider.of<DataProvider>(context, listen: false).user;
+    await reportVideo(
       context,
       challengeId: item.id,
       responseId: onAnswer ? item.opponentResponseId : '',
+      // In the battle themselves: told that a false report costs them.
+      inBattle: me != null &&
+          (item.creatorId == me.id ||
+              (item.opponentUsername.isNotEmpty &&
+                  item.opponentUsername == me.username)),
     );
-    if (!mounted || result == null || !result.takenDown) return;
-    // Only this reel goes. Not a reload of the whole feed: that would throw
-    // the person back to the top for reporting one video.
-    final at = _items.indexOf(item);
-    if (at >= 0) _removeReel(at);
   }
 
   /// Take the reel at [index] out of the feed and carry on with the next.

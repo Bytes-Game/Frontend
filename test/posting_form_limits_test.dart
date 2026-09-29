@@ -18,6 +18,7 @@ import 'package:provider/provider.dart';
 import 'package:myapp/pages/challenge_metadata_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/widgets/match_warning.dart';
 
 void main() {
   setUp(() {
@@ -88,6 +89,17 @@ void main() {
     expect(find.textContaining('worked out from your subject'), findsNothing);
     expect(find.textContaining('work it out from the video'), findsNothing);
     expect(find.text('e.g. Dance, Comedy, Sports'), findsOneWidget);
+  });
+
+  testWidgets('warns, right by the Post button, that the video must match',
+      (tester) async {
+    await openForm(tester);
+    expect(find.text(matchWarningChallenge), findsOneWidget);
+    // Just above the button, so it is in view whenever the button is.
+    final warning = tester.getBottomLeft(find.text(matchWarningChallenge)).dy;
+    final button = tester.getTopLeft(find.text('Post Challenge')).dy;
+    expect(warning, lessThan(button));
+    expect(button - warning, lessThan(40));
   });
 
   test('the old sentences are gone from the page\'s code, not just hidden', () {

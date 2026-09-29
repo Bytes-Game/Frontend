@@ -5,6 +5,7 @@
 // page broken into showing nothing cannot pass by having nothing to find.
 
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,6 +19,7 @@ import 'package:myapp/pages/challenge_detail_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/widgets/match_warning.dart';
 import 'package:myapp/widgets/video_grid_tile.dart';
 
 /// Reports the page sent: (path, responseId).
@@ -26,8 +28,8 @@ late List<(String, String)> reports;
 /// The challenge's status as the server reports it.
 late String status;
 
-/// When true a report is the one that takes the video down.
-late bool takesDown;
+/// What the server says back to a report.
+late String reply;
 
 void fakeServer() {
   reports = [];
@@ -64,14 +66,7 @@ void fakeServer() {
       } else if (p.endsWith('/report')) {
         final sent = json.decode(req.body) as Map<String, dynamic>;
         reports.add((p, sent['responseId'] as String? ?? ''));
-        if (takesDown) status = 'completed';
-        body = {
-          'reported': true,
-          'takenDown': takesDown,
-          'message': takesDown
-              ? "Thanks. It didn't match the challenge, so it has been taken down."
-              : 'Thanks for reporting.',
-        };
+        body = {'reported': true, 'message': reply};
       } else if (p.endsWith('/standings')) {
         body = {'challengeId': '1', 'status': status, 'participants': []};
       } else if (p.endsWith('/comments')) {
@@ -124,7 +119,7 @@ Future<void> settle(WidgetTester t) async {
 void main() {
   setUp(() {
     status = 'active';
-    takesDown = false;
+    reply = 'Thanks for reporting.';
   });
   tearDown(() => ApiService.useClient(http.Client()));
 
@@ -175,35 +170,65 @@ void main() {
       expect(find.text('Delete'), findsOneWidget);
     });
 
-    testWidgets('when a report takes it down, the page reads the battle '
-        'again', (t) async {
-      takesDown = true;
-      await openPage(t);
-      expect(find.text('Final'), findsNothing);
+    testWidgets('somebody in the battle is told first that a false report '
+        'costs them', (t) async {
+      await openPage(t, me: '9', name: 'maya');
       await t.tap(find.byKey(const ValueKey('detail_more')));
       await settle(t);
       await t.tap(find.byKey(const ValueKey('report_77')));
       await settle(t);
+      expect(find.byKey(const ValueKey('report_dialog')), findsOneWidget);
+      expect(find.byKey(const ValueKey('report_in_battle')), findsOneWidget);
+      // And the server's answer is what they see.
+      reply = 'Our check found this video does match the challenge, so this '
+          'report cost you 10 rating points.';
       await t.tap(find.byKey(const ValueKey('report_confirm')));
       await settle(t);
-      expect(
-        find.text(
-          "Thanks. It didn't match the challenge, so it has been taken down.",
-        ),
-        findsOneWidget,
-      );
-      // The server now says the battle is over; the page shows it.
-      expect(find.text('Final'), findsOneWidget);
+      expect(find.textContaining('cost you 10 rating points'), findsOneWidget);
     });
 
-    testWidgets('a challenge taken down says so, and offers nothing to '
+    testWidgets('a viewer is not warned about their own points, and the video '
+        'stays on the page after the report', (t) async {
+      await openPage(t);
+      await t.tap(find.byKey(const ValueKey('detail_more')));
+      await settle(t);
+      await t.tap(find.byKey(const ValueKey('report_77')));
+      await settle(t);
+      expect(find.byKey(const ValueKey('report_dialog')), findsOneWidget);
+      expect(find.byKey(const ValueKey('report_in_battle')), findsNothing);
+      await t.tap(find.byKey(const ValueKey('report_confirm')));
+      await settle(t);
+      expect(find.byKey(const ValueKey('card_answer')), findsOneWidget);
+    });
+
+    testWidgets('a removed challenge says so, and offers nothing to '
         'report', (t) async {
       status = 'removed';
       await openPage(t);
       expect(find.byKey(const ValueKey('taken_down')), findsOneWidget);
-      expect(find.text('Taken down'), findsOneWidget);
+      expect(find.text('Removed'), findsOneWidget);
       expect(find.byKey(const ValueKey('detail_more')), findsNothing);
       expect(find.byKey(const ValueKey('accept_button')), findsNothing);
+    });
+
+    testWidgets('before taking a challenge on: the warning under the button',
+        (t) async {
+      status = 'open';
+      await openPage(t);
+      expect(find.byKey(const ValueKey('accept_button')), findsOneWidget);
+      expect(find.text(matchWarningAnswer), findsOneWidget);
+      // Below the button, where it is read before pressing it... after.
+      expect(
+        t.getTopLeft(find.text(matchWarningAnswer)).dy,
+        greaterThan(t.getTopLeft(find.byKey(const ValueKey('accept_button'))).dy),
+      );
+    });
+
+    testWidgets('your own challenge has no warning about answering it',
+        (t) async {
+      status = 'open';
+      await openPage(t, me: '9', name: 'maya');
+      expect(find.text(matchWarningAnswer), findsNothing);
     });
 
     testWidgets('a live challenge has no taken-down notice', (t) async {
@@ -221,7 +246,7 @@ void main() {
         path = req.url.path;
         body = json.decode(req.body) as Map<String, dynamic>;
         return http.Response(
-          '{"reported":true,"takenDown":true,"message":"Gone."}',
+          '{"reported":true,"message":"Thanks for reporting."}',
           200,
         );
       }));
@@ -231,14 +256,14 @@ void main() {
       );
       expect(path, '/api/v1/challenges/4/report');
       expect(body, {'responseId': '71'});
-      expect((r.sent, r.takenDown, r.message), (true, true, 'Gone.'));
+      expect((r.sent, r.message), (true, 'Thanks for reporting.'));
     });
 
     test('a refusal comes back in the server\'s words', () async {
       ApiService.useClient(MockClient((req) async =>
           http.Response("You can't report your own video.\n", 403)));
       final r = await ApiService.reportOffTopic(challengeId: '4');
-      expect((r.sent, r.takenDown), (false, false));
+      expect(r.sent, isFalse);
       expect(r.message, "You can't report your own video.");
     });
 
@@ -279,17 +304,62 @@ void main() {
           ),
         );
 
-    testWidgets('a challenge taken down is marked on its owner\'s profile',
+    testWidgets('a removed challenge is marked on its owner\'s profile',
         (t) async {
       await t.pumpWidget(tile('removed'));
-      expect(find.text('Taken down'), findsOneWidget);
+      expect(find.text('Removed'), findsOneWidget);
       expect(find.textContaining('juggle five'), findsOneWidget);
     });
 
     testWidgets('any other is not', (t) async {
       await t.pumpWidget(tile('active'));
-      expect(find.text('Taken down'), findsNothing);
+      expect(find.text('Removed'), findsNothing);
       expect(find.textContaining('juggle five'), findsOneWidget);
+    });
+  });
+
+  group('the last check before an answer is sent', () {
+    Future<bool?> ask(WidgetTester t, String button) async {
+      bool? answer;
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () async =>
+                  answer = await confirmAnswerMatches(context, 'Who can juggle five?'),
+              child: const Text('send'),
+            ),
+          ),
+        ),
+      ));
+      await t.tap(find.text('send'));
+      await t.pumpAndSettle();
+      expect(find.text('“Who can juggle five?”'), findsOneWidget);
+      await t.tap(find.text(button));
+      await t.pumpAndSettle();
+      return answer;
+    }
+
+    testWidgets('going ahead sends it', (t) async {
+      expect(await ask(t, 'Post my answer'), isTrue);
+    });
+
+    testWidgets('going back sends nothing', (t) async {
+      expect(await ask(t, 'Go back'), isFalse);
+    });
+
+    test('the battle page asks it before the answer is handed over', () {
+      final code = File('lib/pages/challenge_detail_page.dart')
+          .readAsLinesSync()
+          .where((l) => !l.trimLeft().startsWith('//'))
+          .join('\n');
+      final start = code.indexOf('Future<void> _continueWithSource(');
+      expect(start, isNonNegative);
+      final body = code.substring(start);
+      final asked = body.indexOf('confirmAnswerMatches(');
+      final sent = body.indexOf('SubmitResponseUploadPage(');
+      expect(asked, isNonNegative, reason: 'nothing asks before sending an answer');
+      expect(sent, greaterThan(asked), reason: 'it must ask BEFORE sending');
     });
   });
 }

@@ -90,8 +90,6 @@ List<Map<String, dynamic>> watchesSent = [];
 /// which answer it named.
 List<(String, String)> reportsSent = [];
 
-/// When true a report is the one that takes the video down.
-bool reportTakesDown = false;
 
 void fakeServer(Map<String, dynamic> first) {
   lastVote = null;
@@ -133,13 +131,7 @@ void fakeServer(Map<String, dynamic> first) {
         final body = json.decode(req.body) as Map<String, dynamic>;
         reportsSent.add((req.url.path, body['responseId'] as String? ?? ''));
         return http.Response(
-          json.encode({
-            'reported': true,
-            'takenDown': reportTakesDown,
-            'message': reportTakesDown
-                ? "Thanks. It didn't match the challenge, so it has been taken down."
-                : 'Thanks for reporting.',
-          }),
+          json.encode({'reported': true, 'message': 'Thanks for reporting.'}),
           200,
         );
       }
@@ -317,7 +309,6 @@ void main() {
     SmartReelsFeed.debugForgetAppOpen();
     answerLeads = false;
     decided = false;
-    reportTakesDown = false;
   });
 
   group('reporting a video that doesn\'t match the challenge', () {
@@ -392,20 +383,37 @@ void main() {
       await closeReel(t);
     });
 
-    testWidgets('taken down: it says so and the reel leaves the feed', (
-      t,
-    ) async {
-      reportTakesDown = true;
+    testWidgets('after a report the video stays in the feed', (t) async {
       await openReel(t, battle());
-      expect(find.textContaining('dance on a moving bus'), findsWidgets);
       await reportFromMenu(t);
-      expect(
-        find.text(
-          "Thanks. It didn't match the challenge, so it has been taken down.",
-        ),
-        findsOneWidget,
-      );
-      expect(find.textContaining('dance on a moving bus'), findsNothing);
+      expect(find.text('Thanks for reporting.'), findsOneWidget);
+      expect(find.textContaining('dance on a moving bus'), findsWidgets);
+      await closeReel(t);
+    });
+
+    testWidgets('in the battle yourself: told a false report costs you; a '
+        'viewer is not', (t) async {
+      Future<bool> warned() async {
+        await t.tap(find.byKey(const ValueKey('reel_more')));
+        await t.pump(const Duration(milliseconds: 400));
+        await t.pump(const Duration(milliseconds: 100));
+        await t.tap(find.byKey(const ValueKey('reel_report')));
+        await t.pump(const Duration(milliseconds: 400));
+        await t.pump(const Duration(milliseconds: 100));
+        final shown =
+            find.byKey(const ValueKey('report_in_battle')).evaluate().isNotEmpty;
+        await t.tap(find.text('Cancel'));
+        await t.pump(const Duration(milliseconds: 400));
+        return shown;
+      }
+
+      // leo answered; the challenger's side is on screen.
+      await openReel(t, battle(), meId: '8', meName: 'leo_beats');
+      expect(await warned(), isTrue);
+      await closeReel(t);
+
+      await openReel(t, battle());
+      expect(await warned(), isFalse);
       await closeReel(t);
     });
   });

@@ -1064,13 +1064,14 @@ class ApiService {
 
   /// POST /api/v1/challenges/{id}/report -> "this video doesn't match the
   /// challenge". [responseId] names an answer; empty means the challenge's
-  /// own video. The server takes the video down when its model agrees, or
-  /// when enough viewers report it — see offtopic.go on the server.
+  /// own video. Nothing is taken down: the server charges the video's owner
+  /// when the evidence is enough, and charges somebody in the battle who
+  /// reports a video that does match — see offtopic.go on the server.
   static Future<ReportResult> reportOffTopic({
     required String challengeId,
     String responseId = '',
   }) async {
-    const failed = ReportResult(false, false, 'Could not send the report. Try again.');
+    const failed = ReportResult(false, 'Could not send the report. Try again.');
     try {
       final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/challenges/$challengeId/report'),
@@ -1081,13 +1082,12 @@ class ApiService {
         final body = json.decode(res.body) as Map<String, dynamic>;
         return ReportResult(
           true,
-          body['takenDown'] == true,
           (body['message'] as String?) ?? 'Thanks for reporting.',
         );
       }
       if (res.statusCode >= 400 && res.statusCode < 500) {
         final why = res.body.trim();
-        return ReportResult(false, false, why.isEmpty ? failed.message : why);
+        return ReportResult(false, why.isEmpty ? failed.message : why);
       }
       return failed;
     } catch (_) {

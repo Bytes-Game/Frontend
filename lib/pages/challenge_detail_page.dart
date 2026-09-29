@@ -22,6 +22,7 @@ import 'package:myapp/widgets/feed_action_bar.dart'
     show ChallengeCommentSheet, ChallengeShareSheet, CommentSheetCaption;
 import 'package:myapp/widgets/league_badge.dart' show leagueWash;
 import 'package:myapp/widgets/people_list_sheet.dart';
+import 'package:myapp/widgets/match_warning.dart';
 import 'package:myapp/widgets/report_video.dart';
 import 'package:myapp/widgets/video_grid_tile.dart' show openVideoPlaylist;
 
@@ -326,25 +327,25 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     ];
   }
 
-  /// Report one video as not matching the challenge. When it comes down,
-  /// the page reads the battle again, so what is on screen is what is left.
+  /// Report one video as not matching the challenge. The video stays up
+  /// whatever happens; its owner may lose rating points. Somebody in the
+  /// battle is told first that a false report costs them.
   Future<void> _report(String responseId) async {
     final c = _challenge;
     if (c == null) return;
+    final me = Provider.of<DataProvider>(context, listen: false).user?.id;
     EventTracker.instance.trackTap(
       target: 'challenge_report_open',
       pageName: 'challenge_detail_page',
       params: {'challengeId': c.id, 'responseId': responseId},
     );
-    final result = await reportVideo(
+    await reportVideo(
       context,
       challengeId: c.id,
       responseId: responseId,
+      inBattle: me != null &&
+          (c.creatorId == me || _responses.any((r) => r.responderId == me)),
     );
-    if (!mounted || result == null || !result.takenDown) return;
-    Provider.of<DataProvider>(context, listen: false).bumpFeedRefresh();
-    await _load();
-    if (mounted) setState(() => _scoreVersion++);
   }
 
   /// Owner-only destructive action. Confirms via dialog, calls the
@@ -495,6 +496,12 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
       ),
     );
     if (!mounted || trimmed == null || trimmed.isEmpty) return;
+
+    // The last word before it goes: does this video answer the challenge?
+    // One that doesn't costs its owner rating points, so they are asked
+    // now rather than told afterwards.
+    final question = _challenge == null ? '' : _question(_challenge!);
+    if (!await confirmAnswerMatches(context, question) || !mounted) return;
 
     // The hand-off page dispatches the job and pops instantly with
     // `true`. We don't await the upload here — onCompleted listener
@@ -740,6 +747,8 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                             ),
                           ),
                         ),
+                        const SizedBox(height: 10),
+                        const MatchWarning(text: matchWarningAnswer),
                       ],
                       // —— Live score ——
                       // Genuine votes, likes, views and shares per side, how
@@ -1233,8 +1242,9 @@ class _Chip extends StatelessWidget {
   }
 }
 
-/// Why a challenge is still here but gone for everyone else: its video
-/// didn't match what it asks, so it was taken down.
+/// A challenge that has been removed (by hand or by moderation — never for
+/// not matching; that costs rating points instead) is still here for its
+/// owner, and gone for everyone else.
 class _TakenDown extends StatelessWidget {
   const _TakenDown();
 
@@ -1254,8 +1264,8 @@ class _TakenDown extends StatelessWidget {
           SizedBox(width: 10),
           Expanded(
             child: Text(
-              "Taken down: the video didn't match what this challenge asks. "
-              'Nobody else can see it, answer it or vote on it.',
+              'This challenge has been removed. Nobody else can see it, '
+              'answer it or vote on it.',
               style: TextStyle(color: Colors.white, fontSize: 13.5, height: 1.3),
             ),
           ),
@@ -1266,7 +1276,7 @@ class _TakenDown extends StatelessWidget {
 }
 
 /// Where the challenge is in its life: waiting, live (and how long is
-/// left), taken down, or decided.
+/// left), removed, or decided.
 class _StatusChip extends StatelessWidget {
   final ChallengeModel challenge;
   final BattleStandings? standings;
@@ -1279,7 +1289,7 @@ class _StatusChip extends StatelessWidget {
     if (challenge.status == 'removed') {
       return const _Chip(
         icon: Icons.block_rounded,
-        label: 'Taken down',
+        label: 'Removed',
         color: Color(0xFFFF453A),
       );
     }
