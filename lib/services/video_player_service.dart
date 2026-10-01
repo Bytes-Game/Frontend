@@ -1097,6 +1097,13 @@ class VideoPlayerService {
     await entry.controller.pause();
   }
 
+  /// Whether the reel on screen is playing right now. Read before something
+  /// covers it — a menu, a page — so that whatever covered it can start it
+  /// again afterwards only if it was playing, never one somebody had
+  /// stopped themselves.
+  bool get activeIsPlaying =>
+      _activeEntry?.controller.value.isPlaying ?? false;
+
   /// Start the reel on screen again after [pauseActive].
   Future<void> resumeActive() async {
     final entry = _activeEntry;
