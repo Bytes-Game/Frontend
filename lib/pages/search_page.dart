@@ -12,6 +12,7 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
+import 'package:myapp/widgets/fold_in.dart';
 import 'package:myapp/widgets/profile_card_3d.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/pages/search_reels_viewer_page.dart';
@@ -595,11 +596,17 @@ class _SearchPageState extends State<SearchPage>
             sliver: SliverGrid(
               gridDelegate: _gridDelegate,
               delegate: SliverChildBuilderDelegate(
-                (context, i) => _PreviewableTile(
-                  challenge: _exploreChallenges[i],
-                  coordinator: _previewCoord,
-                  onTap: () =>
-                      _onChallengeTap(_exploreChallenges[i], i, 'explore'),
+                (context, i) => FoldIn(
+                  // A diagonal wave across the grid as it builds itself;
+                  // tiles lean away as they leave the top.
+                  order: i ~/ 3 + i % 3,
+                  depth: true,
+                  child: _PreviewableTile(
+                    challenge: _exploreChallenges[i],
+                    coordinator: _previewCoord,
+                    onTap: () =>
+                        _onChallengeTap(_exploreChallenges[i], i, 'explore'),
+                  ),
                 ),
                 childCount: _exploreChallenges.length,
               ),
@@ -956,10 +963,14 @@ class _SearchPageState extends State<SearchPage>
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 24),
       gridDelegate: _gridDelegate,
       itemCount: items.length,
-      itemBuilder: (context, i) => _PreviewableTile(
-        challenge: items[i],
-        coordinator: _previewCoord,
-        onTap: () => _onChallengeTap(items[i], i, resultType),
+      itemBuilder: (context, i) => FoldIn(
+        order: i ~/ 3 + i % 3,
+        depth: true,
+        child: _PreviewableTile(
+          challenge: items[i],
+          coordinator: _previewCoord,
+          onTap: () => _onChallengeTap(items[i], i, resultType),
+        ),
       ),
     );
   }

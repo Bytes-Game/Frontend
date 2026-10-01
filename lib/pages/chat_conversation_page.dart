@@ -1,9 +1,13 @@
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/call_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
@@ -12,20 +16,23 @@ import 'package:myapp/widgets/arena_ui.dart';
 
 /// One conversation.
 ///
-///   * Header: their picture (green dot when online), name, and "Active now"
-///     or when they were last here; call buttons on the right.
-///   * Your messages are filled with the brand gradient, theirs sit on a
-///     soft surface. A run of messages from one person groups together,
-///     with the corners between them tightened, and their picture once at
-///     the end of the run.
-///   * A time caption appears where 30 minutes or more pass between two
-///     messages.
-///   * Under your newest message: Seen, Delivered or Sent, with ticks.
+///   * Header, on frosted glass that the messages scroll under: their
+///     picture (green dot when online), name, and "typing…", "Active now"
+///     or when they were last here; audio and video call buttons.
+///   * Your messages in the accent blue, theirs on soft grey. A run from one
+///     person groups together, corners tightened between them, their
+///     picture once at the end of the run.
+///   * A message that arrives — or that you send — pops into place from its
+///     own side.
+///   * Under your newest message: Sent, then Delivered, then Seen, changing
+///     the moment it happens on their phone (see chat_live.go on the
+///     server). A message that could not be sent says so; tap it to retry.
+///   * While they type, a bubble with three bouncing dots.
+///   * Scrolled up, a round button takes you back to the newest message and
+///     counts what came in meanwhile.
 ///   * Swipe a message sideways to reply to it. Hold it for everything
 ///     else: reply, copy, forward, edit (for 15 minutes), delete, unsend.
 ///   * An empty chat offers a few one-tap openers, sent as real messages.
-///   * The composer: photo on the left, the text field, and a gradient send
-///     button that appears the moment there is something to send.
 class ChatConversationPage extends StatefulWidget {
   final String otherUserId;
   final String otherUsername;
@@ -47,6 +54,8 @@ class _ChatConversationPageState extends State<ChatConversationPage>
   List<Map<String, dynamic>> _messages = [];
   bool _loading = true;
   StreamSubscription? _wsSub;
+  StreamSubscription? _liveSub;
+  WebSocketService? _ws;
   bool _otherOnline = false;
   String _otherLastSeen = '';
 
@@ -54,6 +63,28 @@ class _ChatConversationPageState extends State<ChatConversationPage>
   String? _editingMsgId;
   // Reply mode
   Map<String, dynamic>? _replyingTo;
+
+  /// They are typing right now. Cleared by their "stopped", by a message
+  /// from them, or after a few seconds of nothing in case "stopped" is lost.
+  bool _theyType = false;
+  Timer? _theyTypeTimer;
+
+  /// When this phone last said "typing", so it says it every few seconds
+  /// rather than on every key.
+  DateTime? _saidTypingAt;
+  Timer? _stoppedTypingTimer;
+
+  /// Messages that arrived or were sent while this page was open: they pop
+  /// in. The ones loaded with the page are simply there.
+  final Set<String> _fresh = {};
+
+  /// "Delivered" can arrive before the server has told this phone the id
+  /// of the message it just sent. Kept until the id is known.
+  final Set<String> _deliveredEarly = {};
+
+  /// Scrolled away from the newest message, and how many came in since.
+  bool _awayFromBottom = false;
+  int _missed = 0;
 
   late final String _convId;
 
@@ -77,6 +108,8 @@ class _ChatConversationPageState extends State<ChatConversationPage>
       otherUserId: widget.otherUserId,
       source: 'conversation_direct',
     );
+    _scrollCtrl.addListener(_onScroll);
+    _msgCtrl.addListener(_onComposerChanged);
     _loadMessages();
     _listenForRealTime();
     _checkOnlineStatus();
@@ -84,9 +117,13 @@ class _ChatConversationPageState extends State<ChatConversationPage>
 
   @override
   void dispose() {
+    if (_saidTypingAt != null) _sayTyping(false);
     _msgCtrl.dispose();
     _scrollCtrl.dispose();
     _wsSub?.cancel();
+    _liveSub?.cancel();
+    _theyTypeTimer?.cancel();
+    _stoppedTypingTimer?.cancel();
     super.dispose();
   }
 
@@ -112,7 +149,7 @@ class _ChatConversationPageState extends State<ChatConversationPage>
         _messages = msgs.reversed.toList();
         _loading = false;
       });
-      _scrollToBottom();
+      _scrollToBottom(jump: true);
       final unreadInbound = _messages
           .where((m) =>
               m['senderId'] == widget.otherUserId && m['isRead'] != true)
@@ -129,11 +166,13 @@ class _ChatConversationPageState extends State<ChatConversationPage>
 
   void _listenForRealTime() {
     final ws = Provider.of<WebSocketService>(context, listen: false);
+    _ws = ws;
     _wsSub = ws.notificationStream.listen((notif) {
       if (notif.type == 'chat' && notif.senderId == widget.otherUserId) {
+        final id = notif.messageId ?? '';
         setState(() {
           _messages.add({
-            'id': notif.messageId ?? '',
+            'id': id,
             'senderId': notif.senderId ?? '',
             'senderUsername': notif.senderUsername ?? '',
             'receiverId': notif.receiverId ?? '',
@@ -145,9 +184,12 @@ class _ChatConversationPageState extends State<ChatConversationPage>
             'isDeleted': false,
             'createdAt': notif.timestamp.toIso8601String(),
           });
+          _fresh.add(id);
           _otherOnline = true;
+          _theyType = false;
+          if (_awayFromBottom) _missed++;
         });
-        _scrollToBottom();
+        if (!_awayFromBottom) _scrollToBottom();
         EventTracker.instance.trackMessagesRead(
           conversationId: _convId,
           messageCount: 1,
@@ -155,6 +197,94 @@ class _ChatConversationPageState extends State<ChatConversationPage>
         ApiService.markChatRead(widget.otherUserId, _myId);
       }
     });
+    // "Seen", "Delivered" and "typing…", as they happen on their phone.
+    _liveSub = ws.events.listen(_onLive);
+  }
+
+  void _onLive(Map<String, dynamic> ev) {
+    if (!mounted) return;
+    switch (ev['type']) {
+      case 'chat_read':
+        if (ev['readerId'] != widget.otherUserId) return;
+        setState(() {
+          for (final m in _messages) {
+            if (m['senderId'] == _myId && m['status'] != 'failed') {
+              m['isRead'] = true;
+              m['status'] = 'read';
+            }
+          }
+          _otherOnline = true;
+        });
+      case 'chat_delivered':
+        if (ev['receiverId'] != widget.otherUserId) return;
+        final ids = {
+          for (final id in ev['messageIds'] as List? ?? const []) '$id',
+        };
+        setState(() {
+          for (final m in _messages) {
+            if (ids.remove(m['id']) && m['isRead'] != true) {
+              m['status'] = 'delivered';
+            }
+          }
+          _deliveredEarly.addAll(ids);
+        });
+      case 'typing':
+        if (ev['from'] != widget.otherUserId) return;
+        final typing = ev['typing'] == true;
+        _theyTypeTimer?.cancel();
+        if (typing) {
+          _theyTypeTimer = Timer(const Duration(seconds: 6), () {
+            if (mounted) setState(() => _theyType = false);
+          });
+        }
+        setState(() {
+          _theyType = typing;
+          if (typing) _otherOnline = true;
+        });
+        if (typing && !_awayFromBottom) _scrollToBottom();
+    }
+  }
+
+  /// Tells them "typing…" every few seconds while there is something in
+  /// the box, and "stopped" once it is empty, sent, or left alone.
+  void _onComposerChanged() {
+    if (_editingMsgId != null) return;
+    final has = _msgCtrl.text.trim().isNotEmpty;
+    _stoppedTypingTimer?.cancel();
+    if (!has) {
+      if (_saidTypingAt != null) _sayTyping(false);
+      return;
+    }
+    final now = DateTime.now();
+    final said = _saidTypingAt;
+    if (said == null || now.difference(said) > const Duration(seconds: 3)) {
+      _sayTyping(true);
+    }
+    _stoppedTypingTimer = Timer(const Duration(seconds: 5), () {
+      if (_saidTypingAt != null) _sayTyping(false);
+    });
+  }
+
+  void _sayTyping(bool typing) {
+    _saidTypingAt = typing ? DateTime.now() : null;
+    if (!typing) _stoppedTypingTimer?.cancel();
+    _ws?.send({
+      'type': 'typing',
+      'to': widget.otherUserId,
+      'typing': typing,
+    });
+  }
+
+  void _onScroll() {
+    if (!_scrollCtrl.hasClients) return;
+    final pos = _scrollCtrl.position;
+    final away = pos.maxScrollExtent - pos.pixels > 240;
+    if (away != _awayFromBottom) {
+      setState(() {
+        _awayFromBottom = away;
+        if (!away) _missed = 0;
+      });
+    }
   }
 
   /// Sends what is in the composer, or [preset] — one of the openers an
@@ -188,26 +318,30 @@ class _ChatConversationPageState extends State<ChatConversationPage>
       return;
     }
 
+    if (_saidTypingAt != null) _sayTyping(false);
     final dp = Provider.of<DataProvider>(context, listen: false);
     final now = DateTime.now().toUtc().toIso8601String();
     final replyId = _replyingTo?['id'] as String? ?? '';
     final replyText = _replyingTo?['message'] as String? ?? '';
+    final tempId = 'temp_${DateTime.now().microsecondsSinceEpoch}';
+    final msg = <String, dynamic>{
+      'id': tempId,
+      'senderId': _myId,
+      'senderUsername': dp.user!.username,
+      'receiverId': widget.otherUserId,
+      'receiverUsername': widget.otherUsername,
+      'message': text,
+      'isRead': false,
+      'status': 'sent',
+      'isEdited': false,
+      'isDeleted': false,
+      'replyToId': replyId,
+      'replyToText': replyText,
+      'createdAt': now,
+    };
     setState(() {
-      _messages.add({
-        'id': 'temp_${DateTime.now().millisecondsSinceEpoch}',
-        'senderId': _myId,
-        'senderUsername': dp.user!.username,
-        'receiverId': widget.otherUserId,
-        'receiverUsername': widget.otherUsername,
-        'message': text,
-        'isRead': false,
-        'status': 'sent',
-        'isEdited': false,
-        'isDeleted': false,
-        'replyToId': replyId,
-        'replyToText': replyText,
-        'createdAt': now,
-      });
+      _messages.add(msg);
+      _fresh.add(tempId);
       _replyingTo = null;
     });
     _scrollToBottom();
@@ -217,22 +351,54 @@ class _ChatConversationPageState extends State<ChatConversationPage>
       messageLength: text.length,
       hasMedia: false,
     );
-
-    await ApiService.sendChatMessage(
-      senderId: _myId,
-      receiverId: widget.otherUserId,
-      message: text,
-      replyToId: replyId.isNotEmpty ? replyId : null,
-    );
+    await _deliver(msg);
   }
 
-  void _scrollToBottom() {
+  /// Sends [msg] to the server and puts the server's id on it, which is
+  /// what "Delivered" and "Seen" are matched against. Marks it failed when
+  /// the server could not be reached.
+  Future<void> _deliver(Map<String, dynamic> msg) async {
+    final replyId = msg['replyToId'] as String? ?? '';
+    final res = await ApiService.sendChatMessage(
+      senderId: _myId,
+      receiverId: widget.otherUserId,
+      message: msg['message'] as String? ?? '',
+      replyToId: replyId.isNotEmpty ? replyId : null,
+    );
+    if (!mounted) return;
+    setState(() {
+      if (res == null) {
+        msg['status'] = 'failed';
+        return;
+      }
+      final serverId = res['id'];
+      if (serverId == null) return;
+      final id = '$serverId';
+      _fresh.add(id);
+      msg['id'] = id;
+      if (msg['isRead'] != true) {
+        msg['status'] = _deliveredEarly.remove(id) ? 'delivered' : 'sent';
+      }
+    });
+  }
+
+  Future<void> _retry(Map<String, dynamic> msg) async {
+    HapticFeedback.selectionClick();
+    setState(() => msg['status'] = 'sent');
+    await _deliver(msg);
+  }
+
+  void _scrollToBottom({bool jump = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollCtrl.hasClients) {
+      if (!_scrollCtrl.hasClients) return;
+      final end = _scrollCtrl.position.maxScrollExtent;
+      if (jump) {
+        _scrollCtrl.jumpTo(end);
+      } else {
         _scrollCtrl.animateTo(
-          _scrollCtrl.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
+          end,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
         );
       }
     });
@@ -244,9 +410,8 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     return DateTime.now().toUtc().difference(createdAt).inMinutes < 15;
   }
 
-  /// Feature slots IG has but our chat backend doesn't yet (media DMs,
-  /// voice, calls). The glyphs are part of the exact layout — tapping
-  /// tells the user it's on the way instead of silently doing nothing.
+  /// Photo and voice messages are not built yet. Tapping says so instead
+  /// of silently doing nothing.
   void _comingSoon(String what) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -254,6 +419,31 @@ class _ChatConversationPageState extends State<ChatConversationPage>
         duration: const Duration(seconds: 1),
         behavior: SnackBarBehavior.floating,
       ),
+    );
+  }
+
+  /// Rings them. The call screen comes up over everything (CallHost).
+  void _call({required bool video}) {
+    final calls = Provider.of<CallService>(context, listen: false);
+    if (calls.busy) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("You're already on a call"),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    HapticFeedback.mediumImpact();
+    EventTracker.instance.trackTap(
+      target: video ? 'chat_video_call' : 'chat_audio_call',
+      pageName: 'chat_conversation_page',
+      params: {'conversationId': _convId},
+    );
+    // ignore: discarded_futures
+    calls.start(
+      CallPeer(id: widget.otherUserId, username: widget.otherUsername),
+      video: video,
     );
   }
 
@@ -488,18 +678,29 @@ class _ChatConversationPageState extends State<ChatConversationPage>
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
     final activity = _activityLabel();
+    final top = MediaQuery.of(context).padding.top + kToolbarHeight;
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
         leading: const BackButton(),
         titleSpacing: 0,
         centerTitle: false,
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        flexibleSpace: _Frost(
+          border: const Border(bottom: BorderSide(width: 0.5)),
+          child: const SizedBox.expand(),
+        ),
         title: Row(
           children: [
             ArenaAvatar(
               name: widget.otherUsername,
-              size: 40,
+              size: 38,
               online: _otherOnline,
             ),
             const SizedBox(width: 10),
@@ -512,17 +713,32 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                           fontSize: 16, fontWeight: FontWeight.w700)),
-                  if (activity.isNotEmpty)
-                    Text(
-                      activity,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: _otherOnline
-                            ? AppTheme.success
-                            : cs.onSurface.withValues(alpha: 0.5),
-                      ),
-                    ),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 200),
+                    child: _theyType
+                        ? const Text(
+                            'typing…',
+                            key: ValueKey('typing'),
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: kAccent,
+                            ),
+                          )
+                        : activity.isEmpty
+                            ? const SizedBox.shrink()
+                            : Text(
+                                activity,
+                                key: ValueKey(activity),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: _otherOnline
+                                      ? AppTheme.success
+                                      : cs.onSurface.withValues(alpha: 0.5),
+                                ),
+                              ),
+                  ),
                 ],
               ),
             ),
@@ -533,197 +749,524 @@ class _ChatConversationPageState extends State<ChatConversationPage>
             icon: Icons.call_rounded,
             tooltip: 'Audio call',
             size: 38,
-            onTap: () => _comingSoon('Audio calling'),
+            onTap: () => _call(video: false),
           ),
           const SizedBox(width: 8),
           IconBubble(
             icon: Icons.videocam_rounded,
             tooltip: 'Video call',
             size: 38,
-            onTap: () => _comingSoon('Video calling'),
+            onTap: () => _call(video: true),
           ),
           const SizedBox(width: 12),
         ],
       ),
-      body: Column(
-        children: [
-          // Messages
-          Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : _messages.isEmpty
-                    ? _EmptyThread(
-                        name: widget.otherUsername,
-                        onPick: _sendMessage,
-                      )
-                    : ListView.builder(
-                        controller: _scrollCtrl,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 8),
-                        itemCount: _messages.length,
-                        itemBuilder: (_, i) {
-                          final msg = _messages[i];
-                          final isMe = msg['senderId'] == _myId;
-                          final showHeader = _needsTimeHeader(
-                              i == 0 ? null : _messages[i - 1], msg);
-                          // Grouping: consecutive bubbles from one sender
-                          // (with no time caption splitting them) tighten
-                          // their facing corners.
-                          final prevSame = i > 0 &&
-                              !showHeader &&
-                              _messages[i - 1]['senderId'] ==
-                                  msg['senderId'];
-                          final nextSame = i < _messages.length - 1 &&
-                              _messages[i + 1]['senderId'] ==
-                                  msg['senderId'] &&
-                              !_needsTimeHeader(msg, _messages[i + 1]);
-                          final isNewest = i == _messages.length - 1;
-                          return Column(
-                            children: [
-                              if (showHeader)
-                                _TimeHeader(
-                                    date: msg['createdAt'] ?? ''),
-                              _MessageBubble(
-                                message: msg,
-                                isMe: isMe,
-                                otherUsername: widget.otherUsername,
-                                groupedWithPrev: prevSame,
-                                groupedWithNext: nextSame,
-                                // The seen sign lives under your last
-                                // message only while it's the newest
-                                // thing in the thread.
-                                showStatus: isMe && isNewest,
-                                onLongPress: () =>
-                                    _showMessageActions(msg),
-                                onReply: () =>
-                                    setState(() => _replyingTo = msg),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-          ),
-
-          // Replying to…
-          if (_replyingTo != null)
-            _ComposerBanner(
-              icon: Icons.reply_rounded,
-              title: _replyingTo!['senderId'] == _myId
-                  ? 'Replying to yourself'
-                  : 'Replying to ${widget.otherUsername}',
-              body: _replyingTo!['message'] ?? '',
-              onClose: () => setState(() => _replyingTo = null),
-            ),
-
-          // Editing…
-          if (_editingMsgId != null)
-            _ComposerBanner(
-              icon: Icons.edit_rounded,
-              title: 'Editing message',
-              onClose: () => setState(() {
-                _editingMsgId = null;
-                _msgCtrl.clear();
-              }),
-            ),
-
-          // ── Composer ──
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  IconBubble(
-                    icon: Icons.add_photo_alternate_rounded,
-                    tooltip: 'Photo',
-                    size: 44,
-                    onTap: () => _comingSoon('Photo messaging'),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Container(
-                      constraints: const BoxConstraints(minHeight: 44),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 11),
-                      decoration: BoxDecoration(
-                        color: cs.onSurface.withValues(alpha: 0.06),
-                        borderRadius:
-                            BorderRadius.circular(AppTheme.radiusXxl),
-                        border: Border.all(
-                            color: cs.onSurface.withValues(alpha: 0.08)),
-                      ),
-                      child: TextField(
-                        controller: _msgCtrl,
-                        minLines: 1,
-                        maxLines: 5,
-                        cursorColor: AppTheme.primary,
-                        decoration: const InputDecoration(
-                          hintText: 'Message…',
-                          filled: false,
-                          border: InputBorder.none,
-                          enabledBorder: InputBorder.none,
-                          focusedBorder: InputBorder.none,
-                          isCollapsed: true,
-                          // Zero, explicitly. The app's theme gives every text box 20
-                          // pixels of padding at the side and 16 above and below, and a
-                          // collapsed field still takes it — which pushed the words
-                          // right and off-centre inside this slim bar.
-                          contentPadding: EdgeInsets.zero,
-                        ),
-                        style: const TextStyle(fontSize: 15),
-                        textInputAction: TextInputAction.send,
-                        onSubmitted: (_) => _sendMessage(),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  // Send appears the moment there is something to send
-                  // (Save while editing); until then, the microphone.
-                  ValueListenableBuilder<TextEditingValue>(
-                    valueListenable: _msgCtrl,
-                    builder: (_, value, _) {
-                      final ready = value.text.trim().isNotEmpty ||
-                          _editingMsgId != null;
-                      return AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 160),
-                        transitionBuilder: (c, a) =>
-                            ScaleTransition(scale: a, child: c),
-                        child: ready
-                            ? IconBubble(
-                                key: const ValueKey('send'),
-                                icon: _editingMsgId != null
-                                    ? Icons.check_rounded
-                                    : Icons.arrow_upward_rounded,
-                                tooltip:
-                                    _editingMsgId != null ? 'Save' : 'Send',
-                                filled: true,
-                                size: 44,
-                                onTap: _sendMessage,
-                              )
-                            : IconBubble(
-                                key: const ValueKey('mic'),
-                                icon: Icons.mic_rounded,
-                                tooltip: 'Voice message',
-                                size: 44,
-                                onTap: () => _comingSoon('Voice messaging'),
-                              ),
-                      );
-                    },
-                  ),
-                ],
+      body: DecoratedBox(
+        // A faint wash of the accent behind the top of the thread, so the
+        // frosted header has something to frost. Both ends solid: fading a
+        // see-through blue into solid white mixes a strong blue half way.
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            stops: const [0, 0.45],
+            colors: [
+              Color.alphaBlend(
+                kAccent.withValues(alpha: dark ? 0.09 : 0.05),
+                Theme.of(context).scaffoldBackgroundColor,
               ),
-            ),
+              Theme.of(context).scaffoldBackgroundColor,
+            ],
           ),
-        ],
+        ),
+        child: Column(
+          children: [
+            // Messages
+            Expanded(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _messages.isEmpty
+                      ? Padding(
+                          padding: EdgeInsets.only(top: top),
+                          child: _EmptyThread(
+                            name: widget.otherUsername,
+                            onPick: _sendMessage,
+                          ),
+                        )
+                      : Stack(
+                          children: [
+                            ListView.builder(
+                              controller: _scrollCtrl,
+                              padding: EdgeInsets.fromLTRB(12, top + 8, 12, 8),
+                              itemCount: _messages.length + 1,
+                              itemBuilder: (_, i) {
+                                if (i == _messages.length) {
+                                  return _TypingBubble(
+                                    visible: _theyType,
+                                    name: widget.otherUsername,
+                                  );
+                                }
+                                return _messageAt(i);
+                              },
+                            ),
+                            Positioned(
+                              right: 14,
+                              bottom: 10,
+                              child: _JumpToLatest(
+                                visible: _awayFromBottom,
+                                count: _missed,
+                                onTap: () {
+                                  setState(() => _missed = 0);
+                                  _scrollToBottom();
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+            ),
+
+            // Replying to…
+            if (_replyingTo != null)
+              _ComposerBanner(
+                icon: Icons.reply_rounded,
+                title: _replyingTo!['senderId'] == _myId
+                    ? 'Replying to yourself'
+                    : 'Replying to ${widget.otherUsername}',
+                body: _replyingTo!['message'] ?? '',
+                onClose: () => setState(() => _replyingTo = null),
+              ),
+
+            // Editing…
+            if (_editingMsgId != null)
+              _ComposerBanner(
+                icon: Icons.edit_rounded,
+                title: 'Editing message',
+                onClose: () => setState(() {
+                  _editingMsgId = null;
+                  _msgCtrl.clear();
+                }),
+              ),
+
+            _composer(cs),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _messageAt(int i) {
+    final msg = _messages[i];
+    final isMe = msg['senderId'] == _myId;
+    final showHeader = _needsTimeHeader(i == 0 ? null : _messages[i - 1], msg);
+    // Grouping: consecutive bubbles from one sender (with no time caption
+    // splitting them) tighten their facing corners.
+    final prevSame =
+        i > 0 && !showHeader && _messages[i - 1]['senderId'] == msg['senderId'];
+    final nextSame = i < _messages.length - 1 &&
+        _messages[i + 1]['senderId'] == msg['senderId'] &&
+        !_needsTimeHeader(msg, _messages[i + 1]);
+    final isNewest = i == _messages.length - 1;
+    final failed = msg['status'] == 'failed';
+    final bubble = _MessageBubble(
+      message: msg,
+      isMe: isMe,
+      otherUsername: widget.otherUsername,
+      groupedWithPrev: prevSame,
+      groupedWithNext: nextSame,
+      // The seen sign lives under your last message only while it's the
+      // newest thing in the thread. A failed one always says so.
+      showStatus: isMe && (isNewest || failed),
+      onLongPress: () => _showMessageActions(msg),
+      onReply: () => setState(() => _replyingTo = msg),
+      onRetry: failed ? () => _retry(msg) : null,
+    );
+    return Column(
+      key: ValueKey('msg_${identityHashCode(msg)}'),
+      children: [
+        if (showHeader) _TimeHeader(date: msg['createdAt'] ?? ''),
+        _fresh.contains(msg['id'])
+            ? _PopIn(fromRight: isMe, child: bubble)
+            : bubble,
+      ],
+    );
+  }
+
+  /// The composer, on frosted glass: photo, the text box, and a send button
+  /// that appears the moment there is something to send.
+  Widget _composer(ColorScheme cs) {
+    return _Frost(
+      border: const Border(top: BorderSide(width: 0.5)),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              IconBubble(
+                icon: Icons.add_photo_alternate_rounded,
+                tooltip: 'Photo',
+                size: 44,
+                onTap: () => _comingSoon('Photo messaging'),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Container(
+                  constraints: const BoxConstraints(minHeight: 44),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+                  decoration: BoxDecoration(
+                    color: cs.onSurface.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(AppTheme.radiusXxl),
+                    border:
+                        Border.all(color: cs.onSurface.withValues(alpha: 0.08)),
+                  ),
+                  child: TextField(
+                    controller: _msgCtrl,
+                    minLines: 1,
+                    maxLines: 5,
+                    cursorColor: AppTheme.primary,
+                    textCapitalization: TextCapitalization.sentences,
+                    decoration: const InputDecoration(
+                      hintText: 'Message…',
+                      filled: false,
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      isCollapsed: true,
+                      // Zero, explicitly. The app's theme gives every text box 20
+                      // pixels of padding at the side and 16 above and below, and a
+                      // collapsed field still takes it — which pushed the words
+                      // right and off-centre inside this slim bar.
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                    style: const TextStyle(fontSize: 15),
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _sendMessage(),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Send appears the moment there is something to send (Save
+              // while editing); until then, the microphone. It turns in as
+              // it swaps.
+              ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _msgCtrl,
+                builder: (_, value, _) {
+                  final ready =
+                      value.text.trim().isNotEmpty || _editingMsgId != null;
+                  return AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 200),
+                    transitionBuilder: (c, a) => RotationTransition(
+                      turns: Tween(begin: 0.75, end: 1.0).animate(a),
+                      child: ScaleTransition(scale: a, child: c),
+                    ),
+                    child: ready
+                        ? IconBubble(
+                            key: const ValueKey('send'),
+                            icon: _editingMsgId != null
+                                ? Icons.check_rounded
+                                : Icons.arrow_upward_rounded,
+                            tooltip: _editingMsgId != null ? 'Save' : 'Send',
+                            filled: true,
+                            size: 44,
+                            onTap: _sendMessage,
+                          )
+                        : IconBubble(
+                            key: const ValueKey('mic'),
+                            icon: Icons.mic_rounded,
+                            tooltip: 'Voice message',
+                            size: 44,
+                            onTap: () => _comingSoon('Voice messaging'),
+                          ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 }
 
-/// What an empty chat shows: who it is with, and a few openers that send
-/// as real messages with one tap.
-class _EmptyThread extends StatelessWidget {
+/// Frosted glass: whatever scrolls behind shows through, blurred.
+class _Frost extends StatelessWidget {
+  final Widget child;
+  final Border border;
+  const _Frost({required this.child, required this.border});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final bg = Theme.of(context).scaffoldBackgroundColor;
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: bg.withValues(alpha: 0.78),
+            border: Border(
+              top: border.top == BorderSide.none
+                  ? BorderSide.none
+                  : BorderSide(
+                      color: cs.onSurface.withValues(alpha: 0.08),
+                      width: 0.5,
+                    ),
+              bottom: border.bottom == BorderSide.none
+                  ? BorderSide.none
+                  : BorderSide(
+                      color: cs.onSurface.withValues(alpha: 0.08),
+                      width: 0.5,
+                    ),
+            ),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+/// A message arriving: it springs out of its own side of the screen,
+/// tipped back in 3D, and settles flat.
+class _PopIn extends StatefulWidget {
+  final bool fromRight;
+  final Widget child;
+  const _PopIn({required this.fromRight, required this.child});
+
+  @override
+  State<_PopIn> createState() => _PopInState();
+}
+
+class _PopInState extends State<_PopIn> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 420),
+  )..forward();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+      return widget.child;
+    }
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (_, child) {
+        final t = Curves.easeOutBack.transform(_c.value);
+        final f = Curves.easeOut.transform(_c.value);
+        return Opacity(
+          opacity: f,
+          child: Transform(
+            alignment: widget.fromRight
+                ? Alignment.bottomRight
+                : Alignment.bottomLeft,
+            transform: Matrix4.identity()
+              ..setEntry(3, 2, 0.0015)
+              ..multiply(Matrix4.translationValues(0, (1 - f) * 18, 0))
+              ..multiply(Matrix4.rotationX((1 - f) * 0.5))
+              ..multiply(Matrix4.diagonal3Values(
+                  0.6 + 0.4 * t, 0.6 + 0.4 * t, 1)),
+            child: child,
+          ),
+        );
+      },
+      child: widget.child,
+    );
+  }
+}
+
+/// Their "typing…" bubble: three dots rising and falling in turn.
+class _TypingBubble extends StatefulWidget {
+  final bool visible;
+  final String name;
+  const _TypingBubble({required this.visible, required this.name});
+
+  @override
+  State<_TypingBubble> createState() => _TypingBubbleState();
+}
+
+class _TypingBubbleState extends State<_TypingBubble>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _dots = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.visible) _dots.repeat();
+  }
+
+  @override
+  void didUpdateWidget(_TypingBubble old) {
+    super.didUpdateWidget(old);
+    if (widget.visible && !_dots.isAnimating) _dots.repeat();
+    if (!widget.visible && _dots.isAnimating) _dots.stop();
+  }
+
+  @override
+  void dispose() {
+    _dots.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final cs = Theme.of(context).colorScheme;
+    final incoming = dark ? const Color(0xFF26252A) : const Color(0xFFE9E9EB);
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      alignment: Alignment.bottomLeft,
+      child: !widget.visible
+          ? const SizedBox(width: double.infinity)
+          : Padding(
+              key: const ValueKey('typing_bubble'),
+              padding: const EdgeInsets.only(top: 6, bottom: 4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  ArenaAvatar(name: widget.name, size: 26),
+                  const SizedBox(width: 8),
+                  _PopIn(
+                    fromRight: false,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 13),
+                      decoration: BoxDecoration(
+                        color: incoming,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: AnimatedBuilder(
+                        animation: _dots,
+                        builder: (_, _) => Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (var k = 0; k < 3; k++) ...[
+                              if (k > 0) const SizedBox(width: 4),
+                              _dot(cs, (_dots.value - k * 0.18) % 1),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+    );
+  }
+
+  Widget _dot(ColorScheme cs, double v) {
+    final lift = math.sin(v * math.pi * 2).clamp(0.0, 1.0);
+    return Transform.translate(
+      offset: Offset(0, -4 * lift),
+      child: Container(
+        width: 7,
+        height: 7,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: cs.onSurface.withValues(alpha: 0.35 + 0.35 * lift),
+        ),
+      ),
+    );
+  }
+}
+
+/// Back to the newest message, with how many came in while scrolled up.
+class _JumpToLatest extends StatelessWidget {
+  final bool visible;
+  final int count;
+  final VoidCallback onTap;
+  const _JumpToLatest({
+    required this.visible,
+    required this.count,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return IgnorePointer(
+      ignoring: !visible,
+      child: AnimatedScale(
+        scale: visible ? 1 : 0.4,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutBack,
+        child: AnimatedOpacity(
+          opacity: visible ? 1 : 0,
+          duration: const Duration(milliseconds: 180),
+          child: Tooltip(
+            message: 'Newest messages',
+            child: Pressable(
+              onTap: onTap,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Theme.of(context).colorScheme.surface,
+                      border: Border.all(
+                          color: cs.onSurface.withValues(alpha: 0.08)),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x33000000),
+                          blurRadius: 14,
+                          offset: Offset(0, 6),
+                        ),
+                      ],
+                    ),
+                    child: Icon(Icons.keyboard_arrow_down_rounded,
+                        color: cs.onSurface),
+                  ),
+                  if (count > 0)
+                    Positioned(
+                      top: -4,
+                      right: -4,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: kAccent,
+                          borderRadius:
+                              BorderRadius.circular(AppTheme.radiusFull),
+                        ),
+                        child: Text(
+                          count > 99 ? '99+' : '$count',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// What an empty chat shows: their picture on a glass card that swings up
+/// into place in 3D — drag across it and it leans after the finger — and a
+/// few openers that send as real messages with one tap.
+class _EmptyThread extends StatefulWidget {
   final String name;
   final ValueChanged<String> onPick;
 
@@ -736,34 +1279,92 @@ class _EmptyThread extends StatelessWidget {
   ];
 
   @override
+  State<_EmptyThread> createState() => _EmptyThreadState();
+}
+
+class _EmptyThreadState extends State<_EmptyThread>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _enter = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  )..forward();
+
+  @override
+  void dispose() {
+    _enter.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final name = widget.name;
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ArenaAvatar(name: name, size: 88),
-            const SizedBox(height: 14),
-            Text(
-              name,
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+            AnimatedBuilder(
+              animation: _enter,
+              builder: (_, child) {
+                final t = Curves.easeOutBack.transform(_enter.value);
+                final f = Curves.easeOut.transform(_enter.value);
+                return Opacity(
+                  opacity: f,
+                  child: Transform(
+                    alignment: Alignment.center,
+                    transform: Matrix4.identity()
+                      ..setEntry(3, 2, 0.0012)
+                      ..multiply(Matrix4.translationValues(0, (1 - t) * 40, 0))
+                      ..multiply(Matrix4.rotationX((1 - t) * 0.9)),
+                    child: child,
+                  ),
+                );
+              },
+              child: SizedBox(
+                width: 240,
+                child: TiltCard(
+                  radius: 28,
+                  child: Container(
+                    width: 240,
+                    padding: const EdgeInsets.fromLTRB(20, 24, 20, 22),
+                    decoration: BoxDecoration(
+                      color: cs.surface,
+                      borderRadius: BorderRadius.circular(28),
+                      border: Border.all(
+                          color: cs.onSurface.withValues(alpha: 0.06)),
+                    ),
+                    child: Column(
+                      children: [
+                        ArenaAvatar(name: name, size: 88),
+                        const SizedBox(height: 14),
+                        Text(
+                          name,
+                          style: const TextStyle(
+                              fontSize: 20, fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Say hello to $name',
+                          style: TextStyle(
+                              color: cs.onSurface.withValues(alpha: 0.55)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              'Say hello to $name',
-              style: TextStyle(color: cs.onSurface.withValues(alpha: 0.55)),
-            ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 26),
             Wrap(
               alignment: WrapAlignment.center,
               spacing: 8,
               runSpacing: 8,
               children: [
-                for (final o in openers)
+                for (final o in _EmptyThread.openers)
                   Pressable(
-                    onTap: () => onPick(o),
+                    onTap: () => widget.onPick(o),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 14, vertical: 9),
@@ -920,10 +1521,11 @@ class _TimeHeader extends StatelessWidget {
   }
 }
 
-/// One message: the brand gradient for yours, a soft surface for theirs,
+/// One message: the accent blue for yours, a soft surface for theirs,
 /// corners tightened on the side facing a grouped neighbour, their picture
 /// once at the end of their run, a quoted reply and "Edited" above, and
-/// Seen / Delivered / Sent below when [showStatus].
+/// Seen / Delivered / Sent below when [showStatus] — or, when it could not
+/// be sent, "Not sent · Tap to retry".
 ///
 /// Drag it sideways to reply: a reply arrow fades in as it moves, and past
 /// the line it snaps back and the reply opens.
@@ -936,6 +1538,7 @@ class _MessageBubble extends StatefulWidget {
   final bool showStatus;
   final VoidCallback onLongPress;
   final VoidCallback onReply;
+  final VoidCallback? onRetry;
 
   const _MessageBubble({
     required this.message,
@@ -946,6 +1549,7 @@ class _MessageBubble extends StatefulWidget {
     required this.showStatus,
     required this.onLongPress,
     required this.onReply,
+    this.onRetry,
   });
 
   @override
@@ -1164,33 +1768,75 @@ class _MessageBubbleState extends State<_MessageBubble> {
             ),
           ),
 
-          // The seen sign under your newest message.
+          // The seen sign under your newest message. It changes the moment
+          // it changes on their phone, so the change is animated.
           if (widget.showStatus && !isDeleted)
             Padding(
               padding: const EdgeInsets.only(top: 4, right: 6),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    _statusIcon(),
-                    size: 14,
-                    color: message['isRead'] == true
-                        ? kAccent
-                        : cs.onSurface.withValues(alpha: 0.45),
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 240),
+                transitionBuilder: (c, a) => FadeTransition(
+                  opacity: a,
+                  child: SlideTransition(
+                    position: Tween(
+                      begin: const Offset(0, 0.4),
+                      end: Offset.zero,
+                    ).animate(a),
+                    child: c,
                   ),
-                  const SizedBox(width: 3),
-                  Text(
-                    _statusLabel(),
-                    style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                        color: cs.onSurface.withValues(alpha: 0.45)),
-                  ),
-                ],
+                ),
+                child: _status(cs),
               ),
             ),
         ],
       ),
+    );
+  }
+
+  Widget _status(ColorScheme cs) {
+    final message = widget.message;
+    if (message['status'] == 'failed') {
+      return GestureDetector(
+        key: const ValueKey('failed'),
+        onTap: widget.onRetry,
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_rounded, size: 14, color: AppTheme.error),
+            SizedBox(width: 3),
+            Text(
+              'Not sent · Tap to retry',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: AppTheme.error,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    final label = _statusLabel();
+    return Row(
+      key: ValueKey(label),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          _statusIcon(),
+          size: 14,
+          color: message['isRead'] == true
+              ? kAccent
+              : cs.onSurface.withValues(alpha: 0.45),
+        ),
+        const SizedBox(width: 3),
+        Text(
+          label,
+          style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+              color: cs.onSurface.withValues(alpha: 0.45)),
+        ),
+      ],
     );
   }
 

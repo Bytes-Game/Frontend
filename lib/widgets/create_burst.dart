@@ -31,7 +31,8 @@ class CreateBurst {
   CreateBurst._();
 
   /// Opens the burst at [anchor], the centre of the button that opened it,
-  /// in global coordinates. [onChoose] runs after the burst has closed.
+  /// in global coordinates. [onChoose] runs after the burst has closed with
+  /// a choice; [onDismiss] when it closed without one.
   ///
   /// [title] is the line shown above the choices on a tap. [anchorSize] and
   /// [anchorRadius] are the shape of that button, so the × that closes the
@@ -41,6 +42,7 @@ class CreateBurst {
     required Offset anchor,
     required bool fromHold,
     required void Function(CreateChoice) onChoose,
+    VoidCallback? onDismiss,
     String title = 'Create a challenge',
     Size anchorSize = const Size(44, 30),
     double anchorRadius = 9,
@@ -58,7 +60,11 @@ class CreateBurst {
         onDone: (choice) {
           entry.remove();
           handle._closed = true;
-          if (choice != null) onChoose(choice);
+          if (choice != null) {
+            onChoose(choice);
+          } else {
+            onDismiss?.call();
+          }
         },
       ),
     );

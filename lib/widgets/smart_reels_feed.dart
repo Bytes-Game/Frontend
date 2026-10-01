@@ -2202,7 +2202,14 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       pageName: 'home_page',
       params: {'contentId': item.id},
     );
+    // Kept so the reel starts again once the menu, or the page it leads to,
+    // is closed — but only if it was playing.
+    final wasPlaying = VideoPlayerService.instance.activeIsPlaying;
     VideoPlayerService.instance.pauseAll();
+    void resume() {
+      if (mounted && wasPlaying) _playCurrent(fromStart: false);
+    }
+
     CreateBurst.show(
       context,
       anchor: anchor,
@@ -2210,15 +2217,17 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       title: 'Accept challenge',
       anchorSize: const Size(34, 34),
       anchorRadius: 17,
-      onChoose: (how) {
+      onChoose: (how) async {
         if (!mounted) return;
-        Navigator.of(context).push(
+        await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) =>
                 ChallengeDetailPage(challengeId: item.id, acceptWith: how),
           ),
         );
+        resume();
       },
+      onDismiss: resume,
     );
   }
 

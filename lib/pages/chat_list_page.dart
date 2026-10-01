@@ -10,19 +10,24 @@ import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
 import 'package:myapp/pages/chat_conversation_page.dart';
 import 'package:myapp/widgets/arena_ui.dart';
+import 'package:myapp/widgets/fold_in.dart';
 import 'package:myapp/widgets/league_badge.dart';
 import 'package:myapp/widgets/shimmer_loading.dart';
 
 /// The inbox.
 ///
 /// From the top:
-///   * "Messages", and a new-message button in the brand gradient.
+///   * "Messages", large, shrinking into the bar as the list scrolls under
+///     it, and a new-message button.
 ///   * The app's search bar, filtering your chats as you type.
 ///   * "Active now": the people you talk to who are online right now, as a
 ///     row of pictures — tap one to open the chat. Only there when someone
 ///     is online, so it never takes space to say nothing.
-///   * Your chats. A chat with something unread gets a gradient ring round
-///     the picture, a bold name and a count; the time sits top right.
+///   * Your chats. Each row folds up into place in 3D the first time it
+///     scrolls into view, and leans away as it leaves the top (FoldIn).
+///     Something unread: a bold name, the time in blue and a count. Your
+///     own last message: "You:" and how far it got — a blue double tick
+///     once seen. Somebody typing: "typing…" in blue, live.
 ///
 /// Every icon here does something. The old row had a camera on every line
 /// and a "Requests" link, and neither did anything but say "not yet".
@@ -38,7 +43,16 @@ class _ChatListPageState extends State<ChatListPage>
   List<Map<String, dynamic>> _conversations = [];
   bool _loading = true;
   StreamSubscription? _wsSub;
+  StreamSubscription? _liveSub;
   final Map<String, bool> _onlineStatus = {};
+
+  /// Who is typing to you right now, by user id; each clears itself after a
+  /// few seconds in case their "stopped" is lost.
+  final Map<String, Timer> _typing = {};
+
+  /// How far the list has scrolled, for the shrinking title.
+  final _listScroll = ScrollController();
+  double _scrolled = 0;
   final _searchCtrl = TextEditingController();
   String _query = '';
 
@@ -48,6 +62,10 @@ class _ChatListPageState extends State<ChatListPage>
   @override
   void initState() {
     super.initState();
+    _listScroll.addListener(() {
+      final v = _listScroll.offset.clamp(0.0, 60.0);
+      if ((v - _scrolled).abs() > 0.5) setState(() => _scrolled = v);
+    });
     _load();
     _listenForNewMessages();
   }
@@ -55,6 +73,11 @@ class _ChatListPageState extends State<ChatListPage>
   @override
   void dispose() {
     _wsSub?.cancel();
+    _liveSub?.cancel();
+    for (final t in _typing.values) {
+      t.cancel();
+    }
+    _listScroll.dispose();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -90,9 +113,39 @@ class _ChatListPageState extends State<ChatListPage>
     final ws = Provider.of<WebSocketService>(context, listen: false);
     _wsSub = ws.notificationStream.listen((notif) {
       if (notif.type == 'chat') {
+        _typing.remove(notif.senderId ?? '')?.cancel();
         _load();
       }
     });
+    _liveSub = ws.events.listen(_onLive);
+  }
+
+  /// "Seen", "Delivered" and "typing…" on the rows, as they happen.
+  void _onLive(Map<String, dynamic> ev) {
+    if (!mounted) return;
+    switch (ev['type']) {
+      case 'chat_read':
+        _markLast('${ev['readerId']}', 'read');
+      case 'chat_delivered':
+        _markLast('${ev['receiverId']}', 'delivered');
+      case 'typing':
+        final from = '${ev['from']}';
+        _typing.remove(from)?.cancel();
+        if (ev['typing'] == true) {
+          _typing[from] = Timer(const Duration(seconds: 6), () {
+            if (mounted) setState(() => _typing.remove(from));
+          });
+        }
+        setState(() {});
+    }
+  }
+
+  void _markLast(String userId, String status) {
+    final i = _conversations.indexWhere((c) => '${c['userId']}' == userId);
+    if (i < 0) return;
+    final c = _conversations[i];
+    if (c['lastFromMe'] != true || c['lastStatus'] == 'read') return;
+    setState(() => c['lastStatus'] = status);
   }
 
   /// Search filters the loaded conversations as you type.
@@ -156,18 +209,26 @@ class _ChatListPageState extends State<ChatListPage>
       body: SafeArea(
         child: Column(
           children: [
-            // ── Header: title left, new message right ──
+            // ── Header: title left, new message right. The title shrinks
+            // as the list scrolls up under it. ──
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 10, 16, 6),
+              padding: EdgeInsets.fromLTRB(20, 10 - _scrolled / 12, 16, 6),
               child: Row(
                 children: [
-                  const Expanded(
-                    child: Text(
-                      'Messages',
-                      style: TextStyle(
-                        fontSize: 30,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -0.6,
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Transform.scale(
+                        scale: 1 - _scrolled / 60 * 0.3,
+                        alignment: Alignment.centerLeft,
+                        child: const Text(
+                          'Messages',
+                          style: TextStyle(
+                            fontSize: 30,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.6,
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -208,6 +269,8 @@ class _ChatListPageState extends State<ChatListPage>
                       : RefreshIndicator(
                           onRefresh: _load,
                           child: ListView(
+                            controller: _listScroll,
+                            physics: const AlwaysScrollableScrollPhysics(),
                             padding: const EdgeInsets.only(bottom: 16),
                             children: [
                               if (showActive) ...[
@@ -228,10 +291,13 @@ class _ChatListPageState extends State<ChatListPage>
                                       final c = active[i];
                                       final name =
                                           c['username'] as String? ?? '';
-                                      return _ActivePerson(
-                                        name: name,
-                                        onTap: () => _openChat(
-                                            c['userId'] ?? '', name),
+                                      return FoldIn(
+                                        order: i,
+                                        child: _ActivePerson(
+                                          name: name,
+                                          onTap: () => _openChat(
+                                              c['userId'] ?? '', name),
+                                        ),
                                       );
                                     },
                                   ),
@@ -254,15 +320,22 @@ class _ChatListPageState extends State<ChatListPage>
                                     ),
                                   ),
                                 ),
-                              for (final c in _filtered)
-                                _ConversationTile(
-                                  conversation: c,
-                                  isOnline:
-                                      _onlineStatus[c['username'] ?? ''] ??
-                                          false,
-                                  onTap: () => _openChat(
-                                    c['userId'] ?? '',
-                                    c['username'] ?? '',
+                              for (final (i, c) in _filtered.indexed)
+                                FoldIn(
+                                  key: ValueKey('chat_${c['userId']}'),
+                                  order: i,
+                                  depth: true,
+                                  child: _ConversationTile(
+                                    conversation: c,
+                                    isOnline:
+                                        _onlineStatus[c['username'] ?? ''] ??
+                                            false,
+                                    typing: _typing
+                                        .containsKey('${c['userId']}'),
+                                    onTap: () => _openChat(
+                                      c['userId'] ?? '',
+                                      c['username'] ?? '',
+                                    ),
                                   ),
                                 ),
                             ],
@@ -315,11 +388,13 @@ class _ActivePerson extends StatelessWidget {
 class _ConversationTile extends StatelessWidget {
   final Map<String, dynamic> conversation;
   final bool isOnline;
+  final bool typing;
   final VoidCallback onTap;
 
   const _ConversationTile({
     required this.conversation,
     required this.isOnline,
+    required this.typing,
     required this.onTap,
   });
 
@@ -331,6 +406,8 @@ class _ConversationTile extends StatelessWidget {
     final unread = (conversation['unreadCount'] ?? 0) as int;
     final time = _relativeTime(conversation['lastTime'] ?? '');
     final hasUnread = unread > 0;
+    final mine = conversation['lastFromMe'] == true;
+    final status = conversation['lastStatus'] as String? ?? '';
 
     return Pressable(
       onTap: onTap,
@@ -385,21 +462,68 @@ class _ConversationTile extends StatelessWidget {
                   const SizedBox(height: 3),
                   Row(
                     children: [
+                      // Your own last message: how far it got.
+                      if (mine && !typing) ...[
+                        Icon(
+                          status == 'sent'
+                              ? Icons.check_rounded
+                              : Icons.done_all_rounded,
+                          size: 15,
+                          color: status == 'read'
+                              ? kAccent
+                              : cs.onSurface.withValues(alpha: 0.4),
+                        ),
+                        const SizedBox(width: 4),
+                      ],
                       Expanded(
-                        child: Text(
-                          lastMsg.isEmpty ? 'Say hi' : lastMsg,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 13.5,
-                            fontWeight:
-                                hasUnread ? FontWeight.w600 : FontWeight.w400,
-                            color: hasUnread
-                                ? cs.onSurface
-                                : cs.onSurface.withValues(alpha: 0.55),
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 180),
+                          layoutBuilder: (current, previous) => Stack(
+                            alignment: Alignment.centerLeft,
+                            children: [...previous, ?current],
                           ),
+                          child: typing
+                              ? const Text(
+                                  'typing…',
+                                  key: ValueKey('typing'),
+                                  style: TextStyle(
+                                    fontSize: 13.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: kAccent,
+                                  ),
+                                )
+                              : Text(
+                                  lastMsg.isEmpty
+                                      ? 'Say hi'
+                                      : mine
+                                          ? 'You: $lastMsg'
+                                          : lastMsg,
+                                  key: const ValueKey('last'),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 13.5,
+                                    fontWeight: hasUnread
+                                        ? FontWeight.w600
+                                        : FontWeight.w400,
+                                    color: hasUnread
+                                        ? cs.onSurface
+                                        : cs.onSurface.withValues(alpha: 0.55),
+                                  ),
+                                ),
                         ),
                       ),
+                      if (mine && status == 'read' && !typing)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 6),
+                          child: Text(
+                            'Seen',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: cs.onSurface.withValues(alpha: 0.45),
+                            ),
+                          ),
+                        ),
                       if (hasUnread)
                         Container(
                           margin: const EdgeInsets.only(left: 8),
@@ -520,13 +644,11 @@ class _NewChatSheetState extends State<_NewChatSheet> {
                           u.username,
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
+                        // The league in its colour, with no shield: the
+                        // shield is only in the profile's own box.
                         subtitle: Align(
                           alignment: Alignment.centerLeft,
-                          child: InfoChip(
-                            label: u.league,
-                            icon: Icons.shield_rounded,
-                            color: league,
-                          ),
+                          child: InfoChip(label: u.league, color: league),
                         ),
                         trailing: Icon(Icons.chevron_right_rounded,
                             color: quietText(context)),

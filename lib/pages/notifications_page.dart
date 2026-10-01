@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'package:myapp/pages/chat_conversation_page.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/models/notification_model.dart';
 import 'package:myapp/models/user_model.dart';
@@ -81,6 +82,19 @@ class _NotificationsPageState extends State<NotificationsPage>
       notificationType: n.type,
       position: position,
     );
+    // A missed call opens the chat with them: that is where the call
+    // buttons are, to ring back.
+    if (n.type == 'missed_call' && n.actorId.isNotEmpty) {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ChatConversationPage(
+            otherUserId: n.actorId,
+            otherUsername: n.actorUsername,
+          ),
+        ),
+      );
+      return;
+    }
     if (n.challengeId.isNotEmpty) {
       await Navigator.of(context).push(
         MaterialPageRoute(
@@ -211,6 +225,9 @@ class _Heading extends StatelessWidget {
     // A heads-up that your video may not match, before anybody reports it.
     case 'off_topic_warning':
       return (icon: Icons.flag_rounded, color: const Color(0xFFFF9F0A));
+    // Somebody rang while you were away, or you did not pick up.
+    case 'missed_call':
+      return (icon: Icons.phone_missed_rounded, color: const Color(0xFFFF453A));
     case 'like':
       return (icon: Icons.favorite_rounded, color: const Color(0xFFFF375F));
     case 'comment':

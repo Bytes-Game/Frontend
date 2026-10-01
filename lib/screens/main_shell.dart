@@ -119,7 +119,11 @@ class _MainShellState extends State<MainShell> {
   void _openBurst({required bool fromHold}) {
     if (_burst != null && !_burst!.isClosed) return;
     // Mute the reels feed while the pop-out sits on top — the home tab is
-    // still mounted underneath, but nobody is watching it.
+    // still mounted underneath, but nobody is watching it. Whether it was
+    // playing is kept, so it can start again when the pop-out closes, or
+    // when recording or uploading is over: nothing used to, and the video
+    // behind stayed stopped.
+    final wasPlaying = VideoPlayerService.instance.activeIsPlaying;
     VideoPlayerService.instance.pauseAll();
     EventTracker.instance.trackTap(
       target: 'nav_create_challenge',
@@ -135,16 +139,30 @@ class _MainShellState extends State<MainShell> {
       context,
       anchor: anchor,
       fromHold: fromHold,
-      onChoose: (choice) {
+      onChoose: (choice) async {
         if (!mounted) return;
-        switch (choice) {
-          case CreateChoice.record:
-            CreateFlow.record(context, from: 'create_burst');
-          case CreateChoice.upload:
-            CreateFlow.upload(context, from: 'create_burst');
+        // Even if recording or uploading fails part-way, the video behind
+        // starts again when the person is back here.
+        try {
+          switch (choice) {
+            case CreateChoice.record:
+              await CreateFlow.record(context, from: 'create_burst');
+            case CreateChoice.upload:
+              await CreateFlow.upload(context, from: 'create_burst');
+          }
+        } finally {
+          _resumeIf(wasPlaying);
         }
       },
+      onDismiss: () => _resumeIf(wasPlaying),
     );
+  }
+
+  /// Start the video that was playing before the pop-out covered it.
+  void _resumeIf(bool wasPlaying) {
+    if (!mounted || !wasPlaying) return;
+    // ignore: discarded_futures
+    VideoPlayerService.instance.resumeActive();
   }
 
   /// The + itself. A tap goes through the bar and opens the pop-out; a
