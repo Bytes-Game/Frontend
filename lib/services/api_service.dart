@@ -1686,6 +1686,34 @@ class ApiService {
     }
   }
 
+  /// Where a phone finds its own network address for a call, and the relay
+  /// to fall back on when the server has one. Google's free address-finder
+  /// when the server cannot be asked, so a call still has its best chance.
+  static Future<({List<Map<String, dynamic>> servers, bool relay})>
+      getIceServers() async {
+    const fallback = [
+      {
+        'urls': ['stun:stun.l.google.com:19302'],
+      },
+    ];
+    try {
+      final res = await _authHttp.get(Uri.parse('$_base/api/v1/calls/ice'));
+      if (res.statusCode == 200) {
+        final body = json.decode(res.body) as Map<String, dynamic>;
+        final servers = (body['iceServers'] as List? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .toList();
+        if (servers.isNotEmpty) {
+          return (servers: servers, relay: body['relay'] == true);
+        }
+      }
+    } catch (e) {
+      debugPrint('[call] could not ask for call servers: $e; '
+          'using the public address-finder only');
+    }
+    return (servers: fallback, relay: false);
+  }
+
   // —— Search ————————————————————————————————————————————————————
 
   /// GET /search?q=...&type=all|accounts|battles|shorts[&userId=X]

@@ -3,6 +3,7 @@ import 'package:myapp/models/user_model.dart';
 import 'package:myapp/models/notification_model.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/websocket_service.dart';
 
 /// Central state holder for user data, following list, and notifications.
 ///
@@ -139,7 +140,11 @@ class DataProvider with ChangeNotifier {
   /// — they have their own list and badge — and one the list already has
   /// (same server id) is not added twice.
   void addNotification(NotificationModel n) {
-    if (n.type == 'chat') return;
+    // Chat messages live in the chats; the live signals ("Seen", typing, a
+    // call ringing) are moments, not things to list.
+    if (n.type == 'chat' || WebSocketService.liveSignals.contains(n.type)) {
+      return;
+    }
     if (n.id.isNotEmpty && _notifications.any((x) => x.id == n.id)) return;
     _notifications.insert(0, n);
     _unreadNotifications++;

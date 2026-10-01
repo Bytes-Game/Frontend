@@ -30,6 +30,10 @@ import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/widgets/smart_reels_feed.dart';
+import 'package:myapp/services/call_service.dart';
+import 'package:myapp/widgets/call_host.dart';
+
+import 'support/call_fakes.dart';
 
 /// A platform that knows which players are playing.
 class _Platform extends VideoPlayerPlatform {
@@ -153,8 +157,9 @@ void main() {
     }
   }
 
-  /// The real shell, opened on Home with its reel playing.
-  Future<void> openHome(WidgetTester t) async {
+  /// The real shell, opened on Home with its reel playing. With [calls],
+  /// built the way main.dart builds it, with the call screen host on top.
+  Future<void> openHome(WidgetTester t, {CallService? calls}) async {
     // Shutdowns queued, not run: see VideoPlayerService.deferRelease.
     final queued = <VoidCallback>[];
     final before = VideoPlayerService.deferRelease;
@@ -176,10 +181,22 @@ void main() {
         ),
       );
     EventTracker.instance.dispose();
+    final navigator = GlobalKey<NavigatorState>();
     await t.pumpWidget(
       ChangeNotifierProvider<DataProvider>.value(
         value: dp,
-        child: const MaterialApp(home: MainShell()),
+        child: MaterialApp(
+          navigatorKey: navigator,
+          builder: calls == null
+              ? null
+              : (_, child) => CallHost(
+                    call: calls,
+                    navigator: navigator,
+                    sounds: SilentSounds(),
+                    child: child!,
+                  ),
+          home: const MainShell(),
+        ),
       ),
     );
     await frames(t, 20);
@@ -250,6 +267,36 @@ void main() {
     await t.tapAt(const Offset(30, 120));
     await frames(t, 8);
     expect(find.text('Record'), findsNothing);
+    expect(platform.sounding, {_video});
+    await close(t);
+  });
+
+  testWidgets('a call stops the reel, and it plays again when the call ends', (
+    t,
+  ) async {
+    final socket = RecordingSocket();
+    final calls = fakeCalls(socket);
+    addTearDown(() {
+      calls.dispose();
+      socket.dispose();
+    });
+    await openHome(t, calls: calls);
+    socket.debugReceive({
+      'type': 'call_offer',
+      'callId': 'c1',
+      'from': '5',
+      'fromUsername': 'maya',
+      'video': false,
+      'sdp': 'O',
+    });
+    await frames(t, 6);
+    expect(find.text('Incoming call'), findsOneWidget);
+    expect(platform.sounding, isEmpty, reason: 'the reel plays over the ring');
+    await t.tap(find.byTooltip('Decline'));
+    await frames(t, 4);
+    await t.pump(calls.endedFor);
+    await frames(t, 8);
+    expect(find.text('Incoming call'), findsNothing);
     expect(platform.sounding, {_video});
     await close(t);
   });

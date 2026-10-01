@@ -116,6 +116,10 @@ dependencies:
   # Without a DSN configured at runtime the SDK no-ops cleanly, so
   # the app keeps working when you haven't set SENTRY_DSN yet.
   sentry_flutter: ^8.10.0
+  # flutter_webrtc: audio and video calls. The sound and picture go
+  # straight between the two phones; the server only introduces them (see
+  # lib/services/call_service.dart).
+  flutter_webrtc: ^1.6.2+hotfix.3
 
 dev_dependencies:
   flutter_test:
@@ -139,6 +143,12 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # The ring for an incoming call, and the tone the caller hears while it
+  # rings. Made for this app (tools/make_call_sounds.py), so there is no
+  # licence to worry about.
+  assets:
+    - assets/sounds/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

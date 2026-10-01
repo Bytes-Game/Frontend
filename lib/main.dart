@@ -24,6 +24,9 @@ import 'package:myapp/services/session_store.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
+import 'package:myapp/services/call_service.dart';
+import 'package:myapp/services/webrtc_call_media.dart';
+import 'package:myapp/widgets/call_host.dart';
 import 'package:myapp/pages/onboarding_interests_page.dart';
 import 'package:myapp/screens/login_screen.dart';
 import 'package:myapp/screens/main_shell.dart';
@@ -224,6 +227,11 @@ class MyApp extends StatefulWidget {
   /// the same observer (otherwise they'd miss events on inner stacks).
   static final AnalyticsRouteObserver routeObserver = AnalyticsRouteObserver();
 
+  /// The app's navigator, so a call can put its screen up from anywhere —
+  /// including a call that rings while nobody is on a page that knows.
+  static final GlobalKey<NavigatorState> navigatorKey =
+      GlobalKey<NavigatorState>();
+
   @override
   State<MyApp> createState() => _MyAppState();
 }
@@ -292,6 +300,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
             theme: AppTheme.lightTheme,
             darkTheme: AppTheme.darkTheme,
             themeMode: theme.themeMode,
+            navigatorKey: MyApp.navigatorKey,
             navigatorObservers: [MyApp.routeObserver],
             // UploadStatusOverlay is mounted INSIDE the WebSocket wrapper
             // so the floating "Posting…" banner sits above every routed
@@ -375,6 +384,8 @@ class _WebSocketWrapper extends StatefulWidget {
 class _WebSocketWrapperState extends State<_WebSocketWrapper>
     with WidgetsBindingObserver {
   late WebSocketService _ws;
+  late CallService _calls;
+  final _sounds = AssetCallSounds();
 
   @override
   void initState() {
@@ -388,6 +399,12 @@ class _WebSocketWrapperState extends State<_WebSocketWrapper>
     final dp = Provider.of<DataProvider>(context, listen: false);
     final username = dp.user?.username ?? '';
     _ws = WebSocketService(AppConstants.wsBaseUrl, username);
+    _calls = CallService(
+      events: _ws.events,
+      send: _ws.send,
+      media: WebRtcCallMedia.new,
+      iceServers: ApiService.getIceServers,
+    );
     if (username.isNotEmpty) {
       _ws.connect();
       // The list and the bell's count, from the server — what happened
@@ -415,6 +432,7 @@ class _WebSocketWrapperState extends State<_WebSocketWrapper>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _calls.dispose();
     _ws.dispose();
     super.dispose();
   }
@@ -439,9 +457,17 @@ class _WebSocketWrapperState extends State<_WebSocketWrapper>
 
   @override
   Widget build(BuildContext context) {
-    return Provider<WebSocketService>.value(
-      value: _ws,
-      child: widget.child,
+    return MultiProvider(
+      providers: [
+        Provider<WebSocketService>.value(value: _ws),
+        ChangeNotifierProvider<CallService>.value(value: _calls),
+      ],
+      child: CallHost(
+        call: _calls,
+        navigator: MyApp.navigatorKey,
+        sounds: _sounds,
+        child: widget.child,
+      ),
     );
   }
 }

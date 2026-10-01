@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'dart:developer' as developer;
 
@@ -36,6 +37,32 @@ class WebSocketService {
 
   final _notifCtrl = StreamController<NotificationModel>.broadcast();
   Stream<NotificationModel> get notificationStream => _notifCtrl.stream;
+
+  /// Everything that arrives, as the server sent it. The live signals
+  /// below arrive only here: they are moments, not notifications.
+  final _eventsCtrl = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get events => _eventsCtrl.stream;
+
+  /// Signals that change what is on screen right now — "Seen", "typing…",
+  /// a call ringing — and must never land in the notifications list.
+  static const liveSignals = {
+    'chat_read',
+    'chat_delivered',
+    'typing',
+    'call_offer',
+    'call_ringing',
+    'call_answer',
+    'call_ice',
+    'call_decline',
+    'call_busy',
+    'call_end',
+    'call_unavailable',
+  };
+
+  bool _open = false;
+
+  /// Whether [send] has a connection to send on.
+  bool get isConnected => _open;
 
   WebSocketService(this._baseUrl, this._username);
 
@@ -101,6 +128,7 @@ class WebSocketService {
     // actually dead.
     channel.ready.then((_) {
       if (_isDisposed || _statusCtrl.isClosed) return;
+      _open = true;
       _reconnectDelayStep = 0; // a real connection resets the backoff
       _statusCtrl.add(WebSocketStatus.connected);
       developer.log('WS: Connected', name: 'ws');
@@ -124,6 +152,7 @@ class WebSocketService {
   /// Single exit path for "the socket is not usable" — from a synchronous
   /// throw, a refused handshake, a stream error, or a clean close.
   void _handleDrop(String why) {
+    _open = false;
     if (_isDisposed || _statusCtrl.isClosed) return;
     developer.log('WS: $why', name: 'ws');
     _statusCtrl.add(WebSocketStatus.disconnected);
@@ -133,12 +162,50 @@ class WebSocketService {
   void _listen() {
     _channel?.stream.listen(
       (msg) {
-        final data = json.decode(msg);
-        _notifCtrl.add(NotificationModel.fromJson(data));
+        final Object? data;
+        try {
+          data = json.decode(msg as String);
+        } catch (e) {
+          // One bad message used to throw here and take the listener with
+          // it. Say what it was and carry on.
+          developer.log('WS: could not read a message, skipped: $e', name: 'ws');
+          return;
+        }
+        if (data is Map<String, dynamic>) _dispatch(data);
       },
       onDone: () => _handleDrop('closed by peer'),
       onError: (Object error) => _handleDrop('stream error: $error'),
     );
+  }
+
+  void _dispatch(Map<String, dynamic> data) {
+    if (_isDisposed) return;
+    _eventsCtrl.add(data);
+    if (liveSignals.contains(data['type'])) return;
+    _notifCtrl.add(NotificationModel.fromJson(data));
+  }
+
+  /// Hands [data] to everything listening, exactly as if it had arrived
+  /// from the server. For tests, and for nothing else.
+  @visibleForTesting
+  void debugReceive(Map<String, dynamic> data) => _dispatch(data);
+
+  /// Sends one live signal — "typing", or part of setting up a call — to
+  /// the server, which passes it on to the person in its "to". False when
+  /// there is no connection to send it on.
+  bool send(Map<String, dynamic> event) {
+    final channel = _channel;
+    if (!_open || channel == null) {
+      developer.log('WS: not connected, could not send ${event['type']}', name: 'ws');
+      return false;
+    }
+    try {
+      channel.sink.add(json.encode(event));
+      return true;
+    } catch (e) {
+      developer.log('WS: sending ${event['type']} failed: $e', name: 'ws');
+      return false;
+    }
   }
 
   void _scheduleReconnect() {
@@ -161,8 +228,10 @@ class WebSocketService {
   void dispose() {
     _isDisposed = true;
     _reconnectTimer?.cancel();
+    _open = false;
     _statusCtrl.close();
     _notifCtrl.close();
+    _eventsCtrl.close();
     _channel?.sink.close();
   }
-}
+}
