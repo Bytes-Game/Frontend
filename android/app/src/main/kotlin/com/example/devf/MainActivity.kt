@@ -1,17 +1,44 @@
 package com.example.devf
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.media.MediaCodec
 import android.media.MediaCodecList
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.os.Build
+import android.os.Bundle
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.nio.ByteBuffer
 
 class MainActivity : FlutterActivity() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        createMessagesChannel()
+    }
+
+    /**
+     * The "Messages" notification channel: new messages and missed calls.
+     * High importance, so one pops up on screen with a sound instead of
+     * only appearing in the list. The server sends chat pushes to this
+     * channel by name ("messages"); the manifest makes it the default.
+     * Creating it again on every start is harmless, and keeps whatever the
+     * person changed in their phone's settings for it.
+     */
+    private fun createMessagesChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val channel = NotificationChannel(
+            "messages",
+            "Messages",
+            NotificationManager.IMPORTANCE_HIGH,
+        )
+        channel.description = "New messages and missed calls"
+        getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)

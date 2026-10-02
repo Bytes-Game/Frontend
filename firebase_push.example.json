@@ -1,0 +1,7 @@
+{
+  "FIREBASE_API_KEY": "AIza...from Firebase console, Project settings, Your apps",
+  "FIREBASE_APP_ID": "1:123456789012:android:abc123...",
+  "FIREBASE_IOS_APP_ID": "",
+  "FIREBASE_SENDER_ID": "123456789012",
+  "FIREBASE_PROJECT_ID": "your-project-id"
+}

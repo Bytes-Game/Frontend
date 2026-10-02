@@ -62,6 +62,31 @@ flutter run --dart-define=SENTRY_DSN=https://...
 With no DSN the Sentry SDK does nothing and errors just print to the console,
 which is what you want locally.
 
+### Phone notifications
+
+New messages and missed calls arrive as notifications on the phone — on the
+lock screen, outside the app — and a tap opens the chat. They never go to
+the app's notifications page. They come through Google's push service,
+Firebase, which needs setting up once:
+
+1. In the [Firebase console](https://console.firebase.google.com) make a
+   project, then add an Android app with the package name `com.example.devf`.
+2. From that app's settings copy four values into a file called
+   `firebase_push.json` next to `pubspec.yaml` (see
+   `firebase_push.example.json`):
+   `FIREBASE_API_KEY`, `FIREBASE_APP_ID`, `FIREBASE_SENDER_ID` (the
+   "project number") and `FIREBASE_PROJECT_ID`.
+3. Build with it: `tools\run_profile.bat` passes it in on its own; by hand,
+   `flutter run --dart-define-from-file=firebase_push.json`.
+4. On the server (Render), set `NOTIFICATION_SENDER=fcm` and
+   `FCM_SERVICE_ACCOUNT_JSON` to a service-account key from the same project
+   (Project settings → Service accounts → Generate new private key).
+
+Without the file the app works exactly as before, with no phone
+notifications, and says so once in its log. For iPhones, also add an iOS
+app in the same project (`FIREBASE_IOS_APP_ID`), upload an APNs key in
+Firebase, and turn on the Push Notifications capability in Xcode.
+
 ### Checks
 
 ```bash

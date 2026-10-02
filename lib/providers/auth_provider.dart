@@ -7,6 +7,7 @@ import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/session_store.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
 import 'package:myapp/services/own_uploads.dart';
+import 'package:myapp/services/push_service.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/providers/theme_provider.dart';
@@ -195,6 +196,9 @@ class AuthProvider with ChangeNotifier {
 
   /// Clears all state and returns to login screen.
   void logout(BuildContext context) {
+    // This phone stops getting their messages as notifications. First,
+    // while the session is still theirs.
+    unawaited(PushService.instance.signingOut());
     // ignore: use_build_context_synchronously
     Provider.of<DataProvider>(context, listen: false).clearData();
     // Drop the session token so no stale Authorization header lingers for the

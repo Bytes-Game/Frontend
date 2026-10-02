@@ -120,6 +120,8 @@ dependencies:
   # straight between the two phones; the server only introduces them (see
   # lib/services/call_service.dart).
   flutter_webrtc: ^1.6.2+hotfix.3
+  firebase_core: ^4.15.0
+  firebase_messaging: ^16.7.0
 
 dev_dependencies:
   flutter_test:

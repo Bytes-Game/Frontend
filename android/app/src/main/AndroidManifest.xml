@@ -10,6 +10,9 @@
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
+    <!-- Notifications outside the app (new messages, missed calls).
+         Android 13 and newer ask the person for this. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
@@ -19,6 +22,11 @@
         android:icon="@mipmap/ic_launcher"
         android:largeHeap="true"
         android:networkSecurityConfig="@xml/network_security_config">
+        <!-- Messages and missed calls go to the "Messages" channel, which
+             MainActivity creates: it pops up on screen and makes a sound. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="messages"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"
