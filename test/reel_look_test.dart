@@ -83,6 +83,16 @@ bool decided = false;
 /// the moment the app waits for it, as on a slow server.
 bool standingsSlow = false;
 
+/// What the server says a video's views are after a watch; null says
+/// nothing, as an older server did.
+int? watchViews;
+
+/// When true the comments cannot be read.
+bool commentsDown = false;
+
+/// Laid over the video when the battle page reads it — what was done there.
+Map<String, dynamic> detailOverride = {};
+
 /// Lists asked for (likes, votes, shares) and shares sent.
 List<String> peopleAsked = [];
 List<Map<String, dynamic>> sharesSent = [];
@@ -110,7 +120,7 @@ void fakeServer(Map<String, dynamic> first) {
         return http.Response.bytes(
           utf8.encode(
             json.encode({
-              'challenge': first,
+              'challenge': {...first, ...detailOverride},
               'responses': [
                 if (first['topResponseId'] != null)
                   {
@@ -166,7 +176,10 @@ void fakeServer(Map<String, dynamic> first) {
       }
       if (req.url.path.endsWith('/watch')) {
         watchesSent.add(json.decode(req.body) as Map<String, dynamic>);
-        return http.Response('{}', 201);
+        return http.Response(
+          json.encode({'message': 'ok', 'views': ?watchViews}),
+          201,
+        );
       }
       if (req.url.path.endsWith('/challenges/share')) {
         sharesSent.add(json.decode(req.body) as Map<String, dynamic>);
@@ -176,6 +189,7 @@ void fakeServer(Map<String, dynamic> first) {
         return http.Response('{"saved": true}', 200);
       }
       if (req.url.path.endsWith('/comments') && req.method == 'GET') {
+        if (commentsDown) return http.Response('down', 503);
         return http.Response.bytes(
           utf8.encode(
             json.encode([
@@ -315,6 +329,9 @@ void main() {
     answerLeads = false;
     decided = false;
     standingsSlow = false;
+    watchViews = null;
+    commentsDown = false;
+    detailOverride = {};
   });
 
   group('reporting a video that doesn\'t match the challenge', () {
@@ -1039,5 +1056,119 @@ void main() {
         reason: 'the battle page closed');
     expect(find.text('940'), findsOneWidget, reason: "leo's side now");
     await closeReel(t);
+  });
+
+  // "I commented but that did not count." Every number under a video moves
+  // when it should — and only then.
+  group('the numbers move', () {
+    String count(WidgetTester t, String key) =>
+        t.widget<Text>(find.byKey(ValueKey(key))).data!;
+
+    Future<void> pumpFor(WidgetTester t, int tenths) async {
+      for (var i = 0; i < tenths; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    Future<void> comment(WidgetTester t, String text) async {
+      await t.enterText(find.byType(TextField), text);
+      await t.pump();
+      await t.tap(find.byTooltip('Post'));
+      await pumpFor(t, 4);
+    }
+
+    testWidgets('posting a comment adds one under the comment button',
+        (t) async {
+      await openReel(t, battle()..['commentCount'] = 1);
+      expect(count(t, 'count_comments'), '1');
+      await t.tap(find.byTooltip('Comments'));
+      await pumpFor(t, 8);
+      await comment(t, 'nice');
+      expect(posted, ['nice']);
+      expect(find.text('2 comments'), findsOneWidget);
+      expect(count(t, 'count_comments'), '2',
+          reason: 'the number under the button, not only the sheet');
+      await comment(t, 'again');
+      expect(count(t, 'count_comments'), '3');
+      await closeReel(t);
+    });
+
+    testWidgets('opening the comments shows the real count', (t) async {
+      // The video arrived saying 46; the server has one comment now.
+      await openReel(t, battle());
+      expect(count(t, 'count_comments'), '46');
+      await t.tap(find.byTooltip('Comments'));
+      await pumpFor(t, 8);
+      expect(count(t, 'count_comments'), '1');
+      await closeReel(t);
+    });
+
+    testWidgets('a comment the server refused adds nothing', (t) async {
+      await openReel(t, battle()..['commentCount'] = 1);
+      refuseComments = true;
+      await t.tap(find.byTooltip('Comments'));
+      await pumpFor(t, 8);
+      await comment(t, 'nice');
+      expect(find.textContaining("Couldn't post"), findsOneWidget);
+      expect(count(t, 'count_comments'), '1');
+      await closeReel(t);
+    });
+
+    testWidgets('comments that could not be read leave the number alone, '
+        'not at 0', (t) async {
+      await openReel(t, battle());
+      commentsDown = true;
+      await t.tap(find.byTooltip('Comments'));
+      await pumpFor(t, 8);
+      expect(count(t, 'count_comments'), '46');
+      await closeReel(t);
+    });
+
+    testWidgets('views show what the server counted after a watch', (t) async {
+      watchViews = 18523;
+      await openReel(t, battle());
+      expect(find.text('18.4K views'), findsOneWidget);
+      // A video watched for 1.5 seconds is a view; the server answers with
+      // the total.
+      await pumpFor(t, 20);
+      expect(watchesSent, isNotEmpty);
+      expect(find.text('18.5K views'), findsOneWidget);
+      await closeReel(t);
+    });
+
+    testWidgets('a server that does not say leaves the views alone',
+        (t) async {
+      await openReel(t, battle());
+      await pumpFor(t, 20);
+      expect(watchesSent, isNotEmpty);
+      expect(find.text('18.4K views'), findsOneWidget);
+      await closeReel(t);
+    });
+
+    testWidgets('back from the battle page, the video shows what was done '
+        'there', (t) async {
+      await openReel(t, battle());
+      expect(count(t, 'count_likes'), '1.3K');
+      expect(count(t, 'count_comments'), '46');
+      await t.tap(find.byKey(const ValueKey('battle_score')));
+      await pumpFor(t, 8);
+      expect(find.byKey(const ValueKey('card_answer')), findsOneWidget);
+      // On the battle page: a like, two comments, a save.
+      detailOverride = {
+        'likes': 1281,
+        'isLiked': true,
+        'commentCount': 48,
+        'saveCount': 8,
+        'isSaved': true,
+      };
+      t.state<NavigatorState>(find.byType(Navigator).first).pop();
+      await pumpFor(t, 10);
+      expect(find.byKey(const ValueKey('card_answer')), findsNothing);
+      expect(count(t, 'count_comments'), '48');
+      expect(count(t, 'count_saves'), '8');
+      expect(find.byTooltip('Unlike'), findsOneWidget,
+          reason: 'the heart is on: it was liked on the battle page');
+      await closeReel(t);
+    });
   });
 }

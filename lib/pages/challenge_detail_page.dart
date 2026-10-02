@@ -139,7 +139,8 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     final standings = await ApiService.getBattleStandings(id);
     if (!mounted) return;
     setState(() {
-      _comments = comments;
+      // Not read: keep what is on screen rather than show none.
+      if (comments != null) _comments = comments;
       if (standings != null) _standings = standings;
     });
   }
