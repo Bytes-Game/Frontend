@@ -115,16 +115,25 @@ void main() {
     expect(fadeOf(t, const ValueKey('row3')), isNull);
   });
 
-  test('the search grids and the chat list use it', () {
+  test('the chat list uses it; the search grid does not', () {
     String code(String path) => File(path)
         .readAsLinesSync()
         .where((l) => !l.trimLeft().startsWith('//'))
         .join('\n');
+    // The owner asked for the search grid to just be there, no animation.
+    // Checked both ways: no fold, and the plain tile still in its place.
     final search = code('lib/pages/search_page.dart');
-    expect(bodyOf(search, 'Widget _buildEmptyStateGrid'),
-        contains('FoldIn('), reason: 'the explore grid lost it');
-    expect(bodyOf(search, 'Widget _challengeGrid'), contains('FoldIn('),
-        reason: 'the results grid lost it');
+    for (final grid in ['Widget _buildEmptyStateGrid', 'Widget _challengeGrid']) {
+      final body = bodyOf(search, grid);
+      expect(body, isNot(contains('FoldIn(')), reason: '$grid animates again');
+      expect(body, contains('_PreviewableTile('), reason: '$grid lost its tiles');
+    }
+    // Nor does each tile's picture fade in: it is there when it is there.
+    final tile = search.substring(search.indexOf('class _PreviewableTileState'));
+    final picture = bodyOf(tile, 'Widget build(BuildContext context)');
+    expect(picture, isNot(contains('AnimatedOpacity(')),
+        reason: 'the tile picture fades in again');
+    expect(picture, contains('frameBuilder:'), reason: 'the tile lost its picture');
     final chats = code('lib/pages/chat_list_page.dart');
     expect(bodyOf(chats, 'Widget build(BuildContext context)'),
         contains('FoldIn('), reason: 'the chat list lost it');

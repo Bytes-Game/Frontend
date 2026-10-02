@@ -72,6 +72,11 @@ class ChallengeModel {
   /// The answer's own likes. See _ReelItem.opponentLikes.
   final int topResponseLikes;
 
+  /// Which side of the battle is ahead, as the server counted it when it
+  /// sent this: "creator", "answer" (the answer above), or "" when nobody
+  /// is ahead yet or it was not counted. The reel opens on that side.
+  final String leader;
+
   /// What the person looking has done to this video, as the server knows
   /// it: liked it, saved it, voted in it (and for whom), liked the answer.
   /// Without these every heart started empty, so a video you had liked came
@@ -127,6 +132,7 @@ class ChallengeModel {
   this.topResponseUsername = '',
   this.topResponseLeague = '',
   this.topResponseLikes = 0,
+  this.leader = '',
   this.isLiked = false,
   this.isSaved = false,
   this.hasVoted = false,
@@ -192,6 +198,7 @@ class ChallengeModel {
       topResponseUsername: json['topResponseUsername'] ?? '',
       topResponseLeague: json['topResponseLeague'] ?? '',
       topResponseLikes: json['topResponseLikes'] as int? ?? 0,
+      leader: json['leader'] as String? ?? '',
       isLiked: json['isLiked'] == true,
       isSaved: json['isSaved'] == true,
       hasVoted: json['hasVoted'] == true,

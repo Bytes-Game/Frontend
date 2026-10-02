@@ -1218,9 +1218,11 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // The index is re-checked afterwards: 400ms is long enough for somebody
     // to swipe, and opening a player for a reel they have left is worse than
     // the cold open this is avoiding.
-    // A battle opens on whoever is ahead. The score is usually here already
-    // (read ahead with the videos); a battle opened on purpose — a tap on a
-    // profile or in search — gives it a moment, alongside the video's.
+    // A battle opens on whoever is ahead. The server says who with the
+    // video itself ([_ReelItem.leader]), so usually there is nothing to
+    // wait for. Only when it did not say — an older server, or it could not
+    // count in time — does a battle opened on purpose (a tap on a profile
+    // or in search) give the live score a moment, alongside the video's.
     //
     // The two waits run side by side, each with its own short limit, so a
     // battle opened this way never waits longer than any other video.
@@ -1231,6 +1233,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
           arriving &&
           item.isBattle &&
           item.id.isNotEmpty &&
+          item.leader.isEmpty &&
           _BattleScores.of(item.id) == null)
         _BattleScores.fetch(
           item.id,
@@ -1241,8 +1244,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       if (!mounted || _currentIndex != index) return;
     }
     if (arriving) {
-      item.opensOnAnswer =
-          item.isBattle && _BattleScores.leaderOf(item.id) == 'answer';
+      item.opensOnAnswer = item.isBattle && item.ahead == 'answer';
     }
     if (arriving && item.opensOnAnswer) {
       // The answer is ahead: the card opens on it and starts it. The
@@ -1805,7 +1807,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       // A battle opens on whoever is ahead, so that side is the one a
       // swipe needs first. Its score is read ahead here too, for the next
       // two battles, so the side is known before the swipe lands.
-      final answerFirst = _BattleScores.leaderOf(entry.id) == 'answer';
+      final answerFirst = entry.ahead == 'answer';
       final u = answerFirst ? entry.opponentVideoUrl : entry.videoUrl;
       if (u.isNotEmpty) challengers.add(u);
       final opp = answerFirst ? entry.videoUrl : entry.opponentVideoUrl;
@@ -2756,6 +2758,19 @@ class _ReelItem implements _FeedEntry {
   /// battle arrives.
   bool opensOnAnswer = false;
 
+  /// Who the server said was ahead when it sent this battle: "creator",
+  /// "answer", or "" for nobody yet or not counted.
+  final String leader;
+
+  /// Who is ahead, as far as the app knows right now: the live score once
+  /// it has come, and until then what the server said with the video.
+  ///
+  /// The live score used to be the only source, and it is a second request
+  /// that the app waits only 0.4 seconds for. On a slow server it often
+  /// missed, and the battle opened on the challenger whoever was winning.
+  String get ahead =>
+      _BattleScores.of(id) != null ? _BattleScores.leaderOf(id) : leader;
+
   /// Which side of a battle is on screen, and for how long. The card turns
   /// it on every flip; views, completions and shares read it so the server
   /// can count them for the side that was actually watched.
@@ -2831,6 +2846,7 @@ class _ReelItem implements _FeedEntry {
     this.opponentThumbnailUrl = '',
     this.opponentUsername = '',
     this.opponentLeague = '',
+    this.leader = '',
     required this.likes,
     required this.views,
     required this.comments,
@@ -2950,6 +2966,7 @@ class _ReelItem implements _FeedEntry {
         creatorUsername: (c['creatorUsername'] as String?) ?? '',
         creatorLeague: (c['creatorLeague'] as String?) ?? '',
         opponentResponseId: (c['topResponseId'] as String?) ?? '',
+        leader: (c['leader'] as String?) ?? '',
         // Same MP4-first ordering as the challenger side, so a battle
         // side-switch is cache-warmable too.
         opponentVideoUrl: ownAnswer ??
@@ -3036,6 +3053,7 @@ class _ReelItem implements _FeedEntry {
       creatorUsername: c.creatorUsername,
       creatorLeague: c.creatorLeague,
       opponentResponseId: c.topResponseId,
+      leader: c.leader,
       opponentVideoUrl: ownAnswer ??
           (opponentVariantPick?.isNotEmpty == true
               ? opponentVariantPick!
@@ -3474,7 +3492,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   BattleStandings? get _score => _BattleScores.of(widget.item.id);
 
   /// Who is ahead in the live score: "creator", "answer", or "".
-  String get _leader => _BattleScores.leaderOf(widget.item.id);
+  String get _leader => widget.item.ahead;
 
   /// Opens who liked, voted or shared — for the people in the video: who
   /// posted it, and on a battle who answered. Null for everyone else, whose
