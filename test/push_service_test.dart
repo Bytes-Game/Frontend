@@ -236,6 +236,18 @@ void main() {
     await end(t);
   });
 
+  // Every build has the Firebase project built in, and its values must
+  // all come from one project: an app id from another project would start
+  // Firebase fine and then never get a push address.
+  test('this build is set up for Firebase, all from one project', () {
+    expect(FirebasePushPlatform.configured, isTrue);
+    final v = FirebasePushPlatform.debugValues;
+    expect(v.apiKey, startsWith('AIza'));
+    expect(v.appId, startsWith('1:${v.senderId}:android:'),
+        reason: 'the app id is not from project ${v.senderId}');
+    expect(v.projectId, isNotEmpty);
+  });
+
   // The screen tests build their own app, so none of them goes through
   // main.dart or the real sign-out. These read the source, comments
   // stripped, so a comment describing the wiring cannot stand in for it.
