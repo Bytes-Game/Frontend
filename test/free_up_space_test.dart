@@ -473,29 +473,8 @@ void main() {
     expect(formatBytes(1300 * mb), '1.27 GB');
   });
 
-  // ── The way in ──────────────────────────────────────────────────────
-
-  test('Settings has a Free up space row, and it opens the screen', () {
-    // Comment lines are dropped first, so this can only pass on code.
-    final code = File(
-      'lib/pages/profile_page.dart',
-    ).readAsLinesSync().where((l) => !l.trimLeft().startsWith('//')).join('\n');
-
-    expect(
-      RegExp(
-        r"_row\(\s*Icons\.\w+,\s*'Free up space',[^)]*onFreeUpSpace,",
-      ).hasMatch(code),
-      isTrue,
-      reason: 'the settings sheet draws the row with the callback',
-    );
-    expect(
-      RegExp(
-        r'onFreeUpSpace:\s*\(\)\s*\{[^}]*FreeUpSpacePage\(\)',
-      ).hasMatch(code),
-      isTrue,
-      reason: 'the profile page hands the sheet a callback that opens it',
-    );
-  });
+  // The way in — the Settings row — is tested with every other row in
+  // settings_page_test.dart, by tapping it.
 }
 
 class _RealSockets extends HttpOverrides {}

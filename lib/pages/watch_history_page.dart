@@ -1,19 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
-import 'package:myapp/pages/video_player_page.dart';
+import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/page_tracker.dart';
+import 'package:myapp/widgets/arena_ui.dart';
+import 'package:myapp/widgets/video_grid_tile.dart';
 
-/// Watch history surface — fully wired.
+/// Watch history: the videos you watched, newest first, as a grid of videos
+/// like Search and the profile.
 ///
-/// Cursor-paginated against `GET /api/v1/users/{id}/history`. Each
-/// row shows the challenge thumbnail + title + relative timestamp of
-/// when the user watched it. The trailing action clears ALL history;
-/// per-row delete is left for a follow-up because the row-level
-/// DELETE endpoint isn't built yet (the wholesale DELETE shares the
-/// same handler so it's a one-line addition when we need it).
+/// It used to be a list of titles, and a tap opened a bare player on that
+/// one video. Now a tap plays your history, from the one tapped, one after
+/// another — the next swipe is the next video you watched, never a
+/// recommendation.
+///
+/// The server sends each as the same full record every feed sends (counts,
+/// encoded versions, a battle's answer), so it plays like any other video.
 class WatchHistoryPage extends StatefulWidget {
   const WatchHistoryPage({super.key});
 
@@ -26,8 +30,12 @@ class _WatchHistoryPageState extends State<WatchHistoryPage>
   @override
   String get pageName => 'watch_history_page';
 
-  final List<Map<String, dynamic>> _items = [];
+  final List<ChallengeModel> _videos = [];
+
+  /// When each was watched, by video id.
+  final Map<String, DateTime> _watchedAt = {};
   bool _loadingFirstPage = true;
+  bool _failed = false;
   bool _loadingMore = false;
   bool _clearing = false;
   bool _hasMore = true;
@@ -50,21 +58,39 @@ class _WatchHistoryPageState extends State<WatchHistoryPage>
   String? get _userId =>
       Provider.of<DataProvider>(context, listen: false).user?.id;
 
+  /// The videos in a page from the server, and when each was watched.
+  List<ChallengeModel> _take(Map<String, dynamic> res) {
+    final out = <ChallengeModel>[];
+    for (final it in (res['items'] as List?) ?? const []) {
+      if (it is! Map<String, dynamic>) continue;
+      final c = it['challenge'];
+      if (c is! Map<String, dynamic>) continue;
+      final video = ChallengeModel.fromJson(c);
+      if (video.id.isEmpty || _watchedAt.containsKey(video.id)) continue;
+      final at = DateTime.tryParse('${it['watchedAt'] ?? ''}');
+      if (at != null) _watchedAt[video.id] = at.toLocal();
+      out.add(video);
+    }
+    return out;
+  }
+
   Future<void> _loadFirstPage() async {
     final uid = _userId;
     if (uid == null || uid.isEmpty) {
       setState(() => _loadingFirstPage = false);
       return;
     }
+    setState(() => _failed = false);
     final res = await ApiService.getWatchHistory(userId: uid, limit: 30);
     if (!mounted) return;
     setState(() {
-      _items
+      _watchedAt.clear();
+      _videos
         ..clear()
-        ..addAll((res['items'] as List?)?.cast<Map<String, dynamic>>() ??
-            const []);
+        ..addAll(_take(res));
       _hasMore = res['hasMore'] == true;
       _nextCursor = (res['nextCursor'] as String?) ?? '';
+      _failed = res['_ok'] == false && _videos.isEmpty;
       _loadingFirstPage = false;
     });
   }
@@ -81,8 +107,7 @@ class _WatchHistoryPageState extends State<WatchHistoryPage>
     );
     if (!mounted) return;
     setState(() {
-      _items.addAll((res['items'] as List?)?.cast<Map<String, dynamic>>() ??
-          const []);
+      _videos.addAll(_take(res));
       _hasMore = res['hasMore'] == true;
       _nextCursor = (res['nextCursor'] as String?) ?? '';
       _loadingMore = false;
@@ -91,8 +116,7 @@ class _WatchHistoryPageState extends State<WatchHistoryPage>
 
   void _maybePrefetch() {
     if (!_scroll.hasClients) return;
-    if (_scroll.position.pixels >
-        _scroll.position.maxScrollExtent - 600) {
+    if (_scroll.position.pixels > _scroll.position.maxScrollExtent - 600) {
       _loadMore();
     }
   }
@@ -105,8 +129,8 @@ class _WatchHistoryPageState extends State<WatchHistoryPage>
       builder: (ctx) => AlertDialog(
         title: const Text('Clear watch history?'),
         content: const Text(
-          'This permanently removes every watch event you\'ve generated. '
-          'This cannot be undone.',
+          "Every video you've watched comes off this list. "
+          "This can't be undone.",
         ),
         actions: [
           TextButton(
@@ -114,7 +138,8 @@ class _WatchHistoryPageState extends State<WatchHistoryPage>
             child: const Text('Cancel'),
           ),
           TextButton(
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            key: const ValueKey('history_clear_confirm'),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.error),
             onPressed: () => Navigator.of(ctx).pop(true),
             child: const Text('Clear'),
           ),
@@ -128,7 +153,8 @@ class _WatchHistoryPageState extends State<WatchHistoryPage>
     setState(() {
       _clearing = false;
       if (ok) {
-        _items.clear();
+        _videos.clear();
+        _watchedAt.clear();
         _hasMore = false;
         _nextCursor = '';
       }
@@ -136,202 +162,92 @@ class _WatchHistoryPageState extends State<WatchHistoryPage>
     if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Could not clear. Try again.'),
+          content: Text("Couldn't clear it. Try again."),
           behavior: SnackBarBehavior.floating,
         ),
       );
     }
   }
 
-  void _openItem(Map<String, dynamic> challenge) {
-    final videoUrl = (challenge['videoUrl'] as String?) ?? '';
-    final title =
-        '${challenge['prefix'] ?? ''} ${challenge['subject'] ?? ''}'.trim();
-    if (videoUrl.isEmpty) return;
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => VideoPlayerPage(videoUrl: videoUrl, title: title),
-      ),
-    );
+  /// "now", "5m", "3h", "2d", "4w".
+  static String ago(DateTime at, {DateTime? now}) {
+    final d = (now ?? DateTime.now()).difference(at);
+    if (d.inMinutes < 1) return 'now';
+    if (d.inMinutes < 60) return '${d.inMinutes}m ago';
+    if (d.inHours < 24) return '${d.inHours}h ago';
+    if (d.inDays < 7) return '${d.inDays}d ago';
+    return '${d.inDays ~/ 7}w ago';
   }
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final Widget body;
+    if (_loadingFirstPage) {
+      body = const VideoGridPlaceholder();
+    } else if (_videos.isEmpty) {
+      body = RefreshIndicator(
+        onRefresh: _loadFirstPage,
+        child: ListView(
+          children: [
+            const SizedBox(height: 80),
+            ArenaEmptyState(
+              icon: _failed ? Icons.cloud_off_rounded : Icons.history_rounded,
+              title: _failed ? "Couldn't load your history" : 'Nothing here yet',
+              subtitle: _failed
+                  ? 'Pull down to try again.'
+                  : 'Videos you watch will show up here.',
+            ),
+          ],
+        ),
+      );
+    } else {
+      body = RefreshIndicator(
+        onRefresh: _loadFirstPage,
+        child: PreloadVideoStarts(
+          videos: _videos,
+          child: GridView.builder(
+            controller: _scroll,
+            padding: videoGridPadding,
+            gridDelegate: videoGridDelegate,
+            itemCount: _videos.length,
+            itemBuilder: (_, i) {
+              final v = _videos[i];
+              final at = _watchedAt[v.id];
+              return VideoGridTile(
+                key: ValueKey('history_tile_${v.id}'),
+                video: v,
+                trailing: at == null ? null : ago(at),
+                onTap: () => openVideoPlaylist(context, List.of(_videos), i),
+              );
+            },
+          ),
+        ),
+      );
+    }
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Watch History'),
+        title: const Text('Watch history'),
         actions: [
           if (_clearing)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16),
               child: Center(
                 child: SizedBox(
-                  width: 16,
-                  height: 16,
+                  width: 18,
+                  height: 18,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
               ),
             )
-          else if (_items.isNotEmpty)
-            IconButton(
-              tooltip: 'Clear history',
-              icon: const Icon(Icons.delete_sweep_outlined),
+          else if (_videos.isNotEmpty)
+            TextButton(
+              key: const ValueKey('history_clear'),
               onPressed: _clearAll,
+              child: const Text('Clear all'),
             ),
         ],
       ),
-      body: _loadingFirstPage
-          ? const Center(child: CircularProgressIndicator())
-          : _items.isEmpty
-              ? _empty(cs)
-              : ListView.builder(
-                  controller: _scroll,
-                  itemCount: _items.length + (_hasMore ? 1 : 0),
-                  itemBuilder: (_, i) {
-                    if (i >= _items.length) {
-                      return const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 16),
-                        child: Center(
-                          child: SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        ),
-                      );
-                    }
-                    return _HistoryRow(
-                      entry: _items[i],
-                      onTap: () => _openItem(
-                          (_items[i]['challenge'] as Map<String, dynamic>?) ??
-                              const {}),
-                    );
-                  },
-                ),
+      body: body,
     );
-  }
-
-  Widget _empty(ColorScheme cs) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppTheme.space24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.history_rounded,
-                size: 72, color: cs.onSurfaceVariant),
-            const SizedBox(height: AppTheme.space16),
-            Text(
-              'No watch history yet',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-            ),
-            const SizedBox(height: AppTheme.space8),
-            Text(
-              'Reels you watch will show up here.',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: cs.onSurfaceVariant,
-                  ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _HistoryRow extends StatelessWidget {
-  final Map<String, dynamic> entry;
-  final VoidCallback onTap;
-  const _HistoryRow({required this.entry, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final challenge = (entry['challenge'] as Map<String, dynamic>?) ?? const {};
-    final thumb = (challenge['thumbnailUrl'] as String?) ?? '';
-    final title =
-        '${challenge['prefix'] ?? ''} ${challenge['subject'] ?? ''}'.trim();
-    final creator = (challenge['creatorUsername'] as String?) ?? '';
-    final watchedAt = (entry['watchedAt'] as String?) ?? '';
-    final completed = entry['completed'] == true;
-    return ListTile(
-      onTap: onTap,
-      contentPadding: const EdgeInsets.symmetric(
-          horizontal: AppTheme.space16, vertical: 4),
-      leading: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: SizedBox(
-          width: 72,
-          height: 96,
-          child: thumb.isNotEmpty
-              ? Image.network(
-                  thumb,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => Container(
-                    color: cs.surfaceContainerHighest,
-                    child: const Icon(Icons.videocam_outlined),
-                  ),
-                )
-              : Container(
-                  color: cs.surfaceContainerHighest,
-                  child: const Icon(Icons.videocam_outlined),
-                ),
-        ),
-      ),
-      title: Text(
-        title.isEmpty ? '(untitled)' : title,
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontWeight: FontWeight.w600),
-      ),
-      subtitle: Padding(
-        padding: const EdgeInsets.only(top: 4),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (creator.isNotEmpty) Text('@$creator'),
-            Row(
-              children: [
-                Icon(
-                  completed
-                      ? Icons.check_circle_outline
-                      : Icons.watch_later_outlined,
-                  size: 14,
-                  color: cs.onSurfaceVariant,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  '${completed ? "Finished" : "Watched"} · ${_relative(watchedAt)}',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: cs.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Cheap relative-time string for a backend ISO timestamp. Good
-  /// enough for a history list ("2h ago", "3d ago"). Avoids pulling
-  /// in intl just for this one surface.
-  static String _relative(String iso) {
-    if (iso.isEmpty) return '';
-    final t = DateTime.tryParse(iso);
-    if (t == null) return '';
-    final diff = DateTime.now().difference(t);
-    if (diff.inMinutes < 1) return 'just now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    if (diff.inHours < 24) return '${diff.inHours}h ago';
-    if (diff.inDays < 7) return '${diff.inDays}d ago';
-    if (diff.inDays < 30) return '${(diff.inDays / 7).floor()}w ago';
-    return '${(diff.inDays / 30).floor()}mo ago';
   }
 }

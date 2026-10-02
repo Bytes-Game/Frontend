@@ -200,9 +200,9 @@ class _EditProfilePageState extends State<EditProfilePage>
             vertical: AppTheme.space16,
           ),
           children: [
-            // Avatar block. Image uploads are gated on the presigned
-            // image-upload endpoint we explicitly deferred — surface
-            // the affordance but tell the user clearly it's pending.
+            // Your picture: the first letter of your username. Photo
+            // uploads are not built, so there is no camera button offering
+            // one (it used to be there and only said "pending").
             Center(
               child: Stack(
                 children: [
@@ -220,39 +220,16 @@ class _EditProfilePageState extends State<EditProfilePage>
                       ),
                     ),
                   ),
-                  Positioned(
-                    right: 0,
-                    bottom: 0,
-                    child: Material(
-                      color: cs.primary,
-                      shape: const CircleBorder(),
-                      child: InkWell(
-                        customBorder: const CircleBorder(),
-                        onTap: () => _toast(
-                          'Avatar upload is pending the image-upload '
-                          'endpoint — we skipped it to keep storage free.',
-                        ),
-                        child: const Padding(
-                          padding: EdgeInsets.all(8),
-                          child: Icon(
-                            Icons.camera_alt_outlined,
-                            color: Colors.white,
-                            size: 18,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
                 ],
               ),
             ),
             const SizedBox(height: AppTheme.space16),
 
-            // Username readback. Editable username is gated on the
-            // backend uniqueness-check + rename audit log; we surface
-            // it as read-only here so the form is honest about what
-            // it can persist.
+            // Your username, shown but not editable. It used to have a
+            // Change button that only said "coming soon" in developer
+            // words; usernames cannot be changed, so it says that plainly.
             ListTile(
+              key: const ValueKey('edit_username'),
               contentPadding: EdgeInsets.zero,
               title: const Text('Username'),
               subtitle: Text(
@@ -261,12 +238,9 @@ class _EditProfilePageState extends State<EditProfilePage>
                   color: cs.onSurfaceVariant,
                 ),
               ),
-              trailing: TextButton(
-                onPressed: () => _toast(
-                  'Username changes are coming soon — needs the '
-                  'backend uniqueness-check + audit endpoint.',
-                ),
-                child: const Text('Change'),
+              trailing: Text(
+                "Can't be changed",
+                style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
               ),
             ),
 

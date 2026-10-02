@@ -20,11 +20,13 @@ import 'package:myapp/pages/challenge_detail_page.dart';
 import 'package:myapp/pages/chat_conversation_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/chat_notifications.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/push_service.dart';
 import 'package:myapp/services/websocket_service.dart';
 
 import 'support/dart_source.dart';
+import 'chat_notifications_test.dart' show FakeNotifier;
 
 class FakePush implements PushPlatform {
   bool setUp = true;
@@ -105,15 +107,23 @@ Widget app() {
 
 void main() {
   late FakePush push;
+  late FakeNotifier drawn;
 
   setUp(() {
     server();
     push = FakePush();
     PushService.instance.platform = push;
+    drawn = FakeNotifier();
+    ChatNotifications.instance
+      ..notifier = drawn
+      ..supported = true
+      // Nothing kept on disk: the lines are not what these tests are about.
+      ..directory = () async => throw const FileSystemException('none');
   });
 
   tearDown(() async {
     await PushService.instance.debugReset();
+    ChatNotifications.instance.debugReset();
     ApiService.useClient(http.Client());
   });
 
@@ -147,6 +157,50 @@ void main() {
     push.refresh.add('phone-2');
     await t.pump();
     expect(sentTo('/api/v1/notifications/register').last['token'], 'phone-2');
+    await end(t);
+  });
+
+  testWidgets('this phone tells the server it draws messages itself, with '
+      'Reply', (t) async {
+    await t.pumpWidget(app());
+    await PushService.instance.signedIn(navigator: nav);
+    await t.pump();
+    expect(sentTo('/api/v1/notifications/register').single['drawsOwn'], isTrue);
+    await end(t);
+  });
+
+  testWidgets("a phone that can't draw its own says so, and keeps plain "
+      'notifications', (t) async {
+    drawn.startsOk = false;
+    await t.pumpWidget(app());
+    await PushService.instance.signedIn(navigator: nav);
+    await t.pump();
+    final got = sentTo('/api/v1/notifications/register');
+    expect(got.single['token'], 'phone-1');
+    expect(got.single['drawsOwn'], isFalse);
+    await end(t);
+  });
+
+  testWidgets('tapping a message notification the app drew opens that chat',
+      (t) async {
+    await t.pumpWidget(app());
+    await PushService.instance.signedIn(navigator: nav);
+    drawn.onTap!(json.encode(
+        {'type': 'chat', 'senderId': 'u7', 'senderUsername': 'maya'}));
+    await settle(t);
+    final chat = t.widget<ChatConversationPage>(find.byType(ChatConversationPage));
+    expect(chat.otherUserId, 'u7');
+    await end(t);
+  });
+
+  testWidgets('a drawn message notification that started the app opens its '
+      'chat', (t) async {
+    drawn.launched = json.encode(
+        {'type': 'chat', 'senderId': 'u7', 'senderUsername': 'maya'});
+    await t.pumpWidget(app());
+    await PushService.instance.signedIn(navigator: nav);
+    await settle(t);
+    expect(find.byType(ChatConversationPage), findsOneWidget);
     await end(t);
   });
 
@@ -229,6 +283,8 @@ void main() {
     await PushService.instance.signingOut();
     expect(sentTo('/api/v1/notifications/unregister').single['token'], 'phone-1');
     expect(PushService.instance.token, isNull);
+    expect(drawn.removedAll, 1,
+        reason: "the old account's messages stay on the phone");
     // And taps no longer do anything for the old session.
     push.taps.add({'type': 'chat', 'senderId': 'u7', 'senderUsername': 'maya'});
     await settle(t);

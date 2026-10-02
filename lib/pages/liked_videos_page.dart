@@ -5,6 +5,7 @@ import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/page_tracker.dart';
+import 'package:myapp/services/profile_cache.dart';
 import 'package:myapp/widgets/video_grid_tile.dart';
 
 /// Liked videos surface — fully wired.
@@ -40,6 +41,12 @@ class _LikedVideosPageState extends State<LikedVideosPage>
   void initState() {
     super.initState();
     _scroll.addListener(_maybePrefetch);
+    // Your likes as last seen, at once; the fresh first page replaces them.
+    final kept = ProfileCache.instance.liked(_userId ?? '');
+    if (kept != null) {
+      _items.addAll(kept);
+      _loadingFirstPage = false;
+    }
     _loadFirstPage();
   }
 
@@ -59,11 +66,12 @@ class _LikedVideosPageState extends State<LikedVideosPage>
       return;
     }
     final res = await ApiService.getLikedChallenges(userId: uid, limit: 24);
+    ProfileCache.instance.keepLiked(uid, _videos(res));
     if (!mounted) return;
     setState(() {
       _items
         ..clear()
-        ..addAll(_videos(res));
+        ..addAll(ProfileCache.instance.liked(uid) ?? _videos(res));
       _hasMore = res['hasMore'] == true;
       _nextCursor = (res['nextCursor'] as String?) ?? '';
       _loadingFirstPage = false;

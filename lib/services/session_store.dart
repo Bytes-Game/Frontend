@@ -156,6 +156,11 @@ class SessionStore {
     return _pending ??= _read();
   }
 
+  /// What is in storage right now, read again even if [prefetch] already
+  /// read it. For the part of the app that answers a notification, which
+  /// can outlive a sign-out.
+  static Future<StoredSession?> loadFresh() => _read();
+
   static Future<StoredSession?> _read() async {
     try {
       final raw = await _storage.read(key: _key);

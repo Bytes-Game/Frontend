@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A release build throws away pictures nothing in the Android code points
+     at. The notification mark is named only from Dart, so without this it
+     would be thrown away and message notifications would fail to show. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_notification" />

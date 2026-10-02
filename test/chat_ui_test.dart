@@ -355,20 +355,22 @@ void main() {
       expect(find.text('Seen'), findsNothing);
     });
 
-    testWidgets('composer swaps the mic for a Send button once text is typed',
-        (tester) async {
+    testWidgets('Send lights up once text is typed; no buttons that only say '
+        '"coming soon"', (tester) async {
       await openThread(tester);
+      IconBubble send() => tester.widget<IconBubble>(
+          find.ancestor(of: find.byTooltip('Send'), matching: find.byType(IconBubble)));
 
-      // At rest: photo and voice, no Send.
-      expect(find.byTooltip('Photo'), findsOneWidget);
-      expect(find.byTooltip('Voice message'), findsOneWidget);
-      expect(find.byTooltip('Send'), findsNothing);
+      // At rest: Send is there but does nothing yet.
+      expect(find.byTooltip('Send'), findsOneWidget);
+      expect(send().onTap, isNull);
+      expect(find.byTooltip('Photo'), findsNothing);
+      expect(find.byTooltip('Voice message'), findsNothing);
 
       await tester.enterText(find.byType(TextField), 'hello');
       await tester.pumpAndSettle();
 
-      expect(find.byTooltip('Send'), findsOneWidget);
-      expect(find.byTooltip('Voice message'), findsNothing);
+      expect(send().onTap, isNotNull);
     });
 
     testWidgets('sending appends the message optimistically', (tester) async {

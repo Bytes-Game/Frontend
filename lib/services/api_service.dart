@@ -2026,6 +2026,8 @@ class ApiService {
     required String userId,
     required String token,
     required String platform, // 'fcm' or 'apns'
+    // The app draws message notifications itself, with Reply.
+    bool drawsOwn = false,
   }) async {
     try {
       final res = await _authHttp.post(
@@ -2035,6 +2037,7 @@ class ApiService {
           'userId': userId,
           'token': token,
           'platform': platform,
+          'drawsOwn': drawsOwn,
         }),
       );
       return res.statusCode == 200;
@@ -2263,9 +2266,12 @@ class ApiService {
       if (res.statusCode == 200) {
         return json.decode(res.body) as Map<String, dynamic>;
       }
-      return const {'items': [], 'hasMore': false, 'nextCursor': ''};
-    } catch (_) {
-      return const {'items': [], 'hasMore': false, 'nextCursor': ''};
+      // Marked as failed, so the page can say so rather than show an empty
+      // history as if nothing had been watched.
+      return const {'items': [], 'hasMore': false, 'nextCursor': '', '_ok': false};
+    } catch (e) {
+      debugPrint('[history] could not read watch history: $e');
+      return const {'items': [], 'hasMore': false, 'nextCursor': '', '_ok': false};
     }
   }
 

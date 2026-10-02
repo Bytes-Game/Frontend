@@ -193,19 +193,33 @@ class VideoGridTile extends StatelessWidget {
                         ),
                       ),
                       if (trailing != null) ...[
-                        const Spacer(),
-                        const Icon(
-                          Icons.schedule_rounded,
-                          color: Colors.white70,
-                          size: 11,
-                        ),
-                        const SizedBox(width: 2),
-                        Text(
-                          trailing!,
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
+                        const SizedBox(width: 4),
+                        // Takes what room is left and shortens itself to
+                        // fit: on a narrow phone "2h ago" beside the views
+                        // ran off the edge of the tile.
+                        Expanded(
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              const Icon(
+                                Icons.schedule_rounded,
+                                color: Colors.white70,
+                                size: 11,
+                              ),
+                              const SizedBox(width: 2),
+                              Flexible(
+                                child: Text(
+                                  trailing!,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],

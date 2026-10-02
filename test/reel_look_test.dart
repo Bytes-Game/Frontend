@@ -18,6 +18,7 @@ import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/next_up_store.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/widgets/battle_record_panel.dart' show LeagueEmblem;
 import 'package:myapp/widgets/smart_reels_feed.dart';
@@ -93,6 +94,10 @@ bool commentsDown = false;
 /// Laid over the video when the battle page reads it — what was done there.
 Map<String, dynamic> detailOverride = {};
 
+/// How many feed pages the app asked for, and how long each takes.
+int feedAsked = 0;
+Duration feedDelay = Duration.zero;
+
 /// Lists asked for (likes, votes, shares) and shares sent.
 List<String> peopleAsked = [];
 List<Map<String, dynamic>> sharesSent = [];
@@ -114,6 +119,7 @@ void fakeServer(Map<String, dynamic> first) {
   standingsAsked = 0;
   refuseComments = false;
   posted = [];
+  feedAsked = 0;
   ApiService.useClient(
     MockClient((req) async {
       if (req.url.path.endsWith('/challenges/${first['id']}')) {
@@ -258,6 +264,10 @@ void fakeServer(Map<String, dynamic> first) {
           headers: {'content-type': 'application/json; charset=utf-8'},
         );
       }
+      if (req.url.path.contains('/feed')) {
+        feedAsked++;
+        if (feedDelay > Duration.zero) await Future<void>.delayed(feedDelay);
+      }
       final body = req.url.path.contains('/like')
           ? {'liked': true, 'likes': 1281}
           : req.url.path.contains('/feed')
@@ -332,6 +342,7 @@ void main() {
     watchViews = null;
     commentsDown = false;
     detailOverride = {};
+    feedDelay = Duration.zero;
   });
 
   group('reporting a video that doesn\'t match the challenge', () {
@@ -1056,6 +1067,130 @@ void main() {
         reason: 'the battle page closed');
     expect(find.text('940'), findsOneWidget, reason: "leo's side now");
     await closeReel(t);
+  });
+
+  // The app opens on a video, and Home comes back on one, with no loading
+  // screen in between — the way TikTok and Instagram do.
+  group('opens at once', () {
+    testWidgets('back on Home: the same video, at once, with no request',
+        (t) async {
+      await openReel(t, battle());
+      expect(feedAsked, 1);
+      expect(find.textContaining('dance on a moving bus'), findsWidgets);
+      // Another tab: Home is taken down.
+      await t.pumpWidget(const MaterialApp(home: SizedBox()));
+      await t.pump(const Duration(seconds: 1));
+      // And back. One frame later the video is there.
+      await openReel(t, battle());
+      expect(feedAsked, 0, reason: 'nothing asked of the server');
+      expect(find.textContaining('dance on a moving bus'), findsWidgets);
+      await closeReel(t);
+    });
+
+    testWidgets('something changed every feed meanwhile (a post): fetched '
+        'afresh', (t) async {
+      await openReel(t, battle());
+      await t.pumpWidget(const MaterialApp(home: SizedBox()));
+      await t.pump(const Duration(seconds: 1));
+      final dp = DataProvider()
+        ..setUser(UserModel(
+          id: '1',
+          username: 'me',
+          wins: 0,
+          losses: 0,
+          followersCount: 0,
+          followingCount: 0,
+        ))
+        ..bumpFeedRefresh();
+      EventTracker.instance.dispose();
+      fakeServer(battle());
+      await t.pumpWidget(ChangeNotifierProvider<DataProvider>.value(
+        value: dp,
+        child: const MaterialApp(
+          home: Scaffold(body: SmartReelsFeed(userId: '1')),
+        ),
+      ));
+      for (var i = 0; i < 6; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+      expect(feedAsked, 1);
+      await closeReel(t);
+    });
+
+    group('the app opening', () {
+      late Directory dir;
+      setUp(() {
+        dir = Directory.systemTemp.createTempSync('reel_next_up');
+        NextUpStore.directory = () async => dir;
+        NextUpStore.download = (url) async => null;
+        NextUpStore.instance.debugReset();
+      });
+      tearDown(() {
+        NextUpStore.instance.debugReset();
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
+
+      testWidgets('starts on the videos kept from last time while the fresh '
+          'page is still coming', (t) async {
+        await t.runAsync(() async {
+          await NextUpStore.instance
+              .save('1', [{'type': 'challenge', 'challenge': short()}]);
+          NextUpStore.instance.debugReset();
+          await NextUpStore.instance.load();
+        });
+        feedDelay = const Duration(seconds: 3);
+        await openReel(t, battle());
+        expect(feedAsked, 1);
+        // Before the server has answered: the kept video, not a loader.
+        expect(find.text('Who can cook pasta in 5 minutes?'), findsOneWidget);
+        // The fresh page arrives behind it.
+        await t.pump(const Duration(seconds: 4));
+        await t.drag(find.byType(PageView), const Offset(0, -700));
+        for (var i = 0; i < 8; i++) {
+          await t.pump(const Duration(milliseconds: 100));
+        }
+        expect(find.textContaining('dance on a moving bus'), findsWidgets);
+        await closeReel(t);
+      });
+
+      testWidgets('leaving keeps the videos not reached yet for next time',
+          (t) async {
+        await openReel(t, battle());
+        // Only one video on the page: nothing after it to keep.
+        await closeReel(t);
+        expect(NextUpStore.instance.debugLastSaved, isEmpty);
+      });
+
+      testWidgets('their pictures, kept on the phone, are what is shown',
+          (t) async {
+        // The smallest PNG there is.
+        final png = base64Decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
+        NextUpStore.download = (url) async => png;
+        final kept = {
+          'type': 'challenge',
+          'challenge': {...short(), 'thumbnailUrl': 'https://x/2.jpg'},
+        };
+        await t.runAsync(() async {
+          await NextUpStore.instance.save('1', [kept]);
+          NextUpStore.instance.debugReset();
+          await NextUpStore.instance.load();
+        });
+        await openReel(t, battle());
+        final shown = t.widgetList<Image>(find.byType(Image));
+        expect(shown.any((i) => i.image is FileImage), isTrue,
+            reason: "the kept picture, from the phone, not the internet");
+        await closeReel(t);
+      });
+
+      testWidgets('nothing kept: the ordinary first load', (t) async {
+        await t.runAsync(NextUpStore.instance.load);
+        await openReel(t, battle());
+        expect(feedAsked, 1);
+        expect(find.textContaining('dance on a moving bus'), findsWidgets);
+        await closeReel(t);
+      });
+    });
   });
 
   // "I commented but that did not count." Every number under a video moves

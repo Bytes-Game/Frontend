@@ -9,26 +9,20 @@ import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/models/battle_model.dart';
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
-import 'package:myapp/pages/blocked_users_page.dart';
 import 'package:myapp/pages/challenge_detail_page.dart';
 import 'package:myapp/pages/chat_conversation_page.dart';
 import 'package:myapp/pages/edit_profile_page.dart';
 import 'package:myapp/pages/followers_page.dart';
 import 'package:myapp/pages/following_page.dart';
-import 'package:myapp/pages/free_up_space_page.dart';
 import 'package:myapp/pages/liked_videos_page.dart';
-import 'package:myapp/pages/notification_settings_page.dart';
-import 'package:myapp/pages/preferences_pages.dart';
-import 'package:myapp/pages/static_content_pages.dart';
-import 'package:myapp/pages/two_factor_setup_page.dart';
+import 'package:myapp/pages/settings_page.dart';
 import 'package:myapp/pages/video_player_page.dart';
-import 'package:myapp/pages/watch_history_page.dart';
-import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/create_flow.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
+import 'package:myapp/services/profile_cache.dart';
 import 'package:myapp/services/upload_job_manager.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/battle_record_panel.dart';
@@ -141,6 +135,16 @@ class _ProfilePageState extends State<ProfilePage>
       _fetchFreshUser();
     }
 
+    // Open on what was kept from last time — no placeholders — and let
+    // the fresh answers replace it. See ProfileCache.
+    final cache = ProfileCache.instance;
+    final uid = widget.user.id;
+    final keptShorts = cache.shorts(uid);
+    if (keptShorts != null) _myChallenges = List.of(keptShorts);
+    _record = cache.record(uid);
+    final keptSaved = cache.saved(uid);
+    if (isOwn && keptSaved != null) _savedChallenges = List.of(keptSaved);
+
     _fetchMyChallenges();
     _fetchRecord();
     if (isOwn) _fetchSavedChallenges();
@@ -170,6 +174,7 @@ class _ProfilePageState extends State<ProfilePage>
         _myChallenges = [c, ..._myChallenges];
       }
     });
+    ProfileCache.instance.replaceShorts(widget.user.id, _myChallenges);
   }
 
   /// Your posts on their way up: pressed Post, not finished yet.
@@ -181,14 +186,17 @@ class _ProfilePageState extends State<ProfilePage>
   // ── Network ────────────────────────────────────────────────────────
 
   Future<void> _fetchSavedChallenges() async {
-    setState(() => _isLoadingSaved = true);
-    final saved = await ApiService.getSavedChallenges(widget.user.id);
+    final uid = widget.user.id;
+    // Placeholders only when there is nothing kept to show meanwhile.
+    if (ProfileCache.instance.saved(uid) == null) {
+      setState(() => _isLoadingSaved = true);
+    }
+    final saved = await ApiService.getSavedChallenges(uid);
+    ProfileCache.instance
+        .keepSaved(uid, [for (final m in saved) ChallengeModel.fromJson(m)]);
     if (mounted) {
       setState(() {
-        _savedChallenges = [
-          for (final m in saved)
-            ChallengeModel.fromJson(m),
-        ];
+        _savedChallenges = List.of(ProfileCache.instance.saved(uid) ?? []);
         _isLoadingSaved = false;
       });
     }
@@ -197,7 +205,9 @@ class _ProfilePageState extends State<ProfilePage>
   Future<void> _fetchRecord() async {
     final page = await ApiService.getUserBattles(
         userId: widget.user.id, tab: 'live', limit: 1);
-    if (mounted && page != null) setState(() => _record = page.record);
+    if (page == null) return;
+    ProfileCache.instance.keepRecord(widget.user.id, page.record);
+    if (mounted) setState(() => _record = page.record);
   }
 
   BattleRecord get _shownRecord =>
@@ -224,11 +234,16 @@ class _ProfilePageState extends State<ProfilePage>
   }
 
   Future<void> _fetchMyChallenges() async {
-    setState(() => _isLoadingMyChallenges = true);
-    final list = await ApiService.getUserChallenges(widget.user.id);
+    final uid = widget.user.id;
+    // Placeholders only when there is nothing kept to show meanwhile.
+    if (ProfileCache.instance.shorts(uid) == null) {
+      setState(() => _isLoadingMyChallenges = true);
+    }
+    final list = await ApiService.getUserChallenges(uid);
+    ProfileCache.instance.keepShorts(uid, list);
     if (mounted) {
       setState(() {
-        _myChallenges = list;
+        _myChallenges = List.of(ProfileCache.instance.shorts(uid) ?? list);
         _isLoadingMyChallenges = false;
       });
     }
@@ -290,6 +305,7 @@ class _ProfilePageState extends State<ProfilePage>
       return;
     }
     setState(() => _myChallenges.removeWhere((x) => x.id == c.id));
+    ProfileCache.instance.replaceShorts(widget.user.id, _myChallenges);
     dp.bumpFeedRefresh();
     _toast('Post deleted');
   }
@@ -374,125 +390,25 @@ class _ProfilePageState extends State<ProfilePage>
       target: 'settings_menu_open',
       pageName: pageName,
     );
-    // Read the provider HERE, not inside the sheet's builder. The builder
-    // captured this page's `context` and ran a provider lookup on every
-    // rebuild of the sheet — and an inherited-widget lookup against an
-    // element that is no longer mounted returns null, which Provider reports
-    // as "Could not find the correct Provider<DataProvider> above this
-    // ProfilePage Widget". That is the crash seen on device: the message
-    // points at a missing provider, but the provider is installed above
-    // MaterialApp and was never missing; the context had simply gone away.
-    // Resolving the value up front means the sheet holds a plain bool and
-    // cannot outlive anything.
-    final twoFactorEnabled =
-        Provider.of<DataProvider>(context, listen: false)
-                .user
-                ?.twoFactorEnabled ==
-            true;
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => _SettingsSheet(
-        twoFactorEnabled: twoFactorEnabled,
-        onEditProfile: () {
-          Navigator.pop(ctx);
-          _openEditProfile();
-        },
-        onShareProfile: () {
-          Navigator.pop(ctx);
-          _shareProfile();
-        },
-        onSaved: () {
-          Navigator.pop(ctx);
-          _tabs.animateTo(6); // Saved tab index
-        },
-        onHistory: () {
-          Navigator.pop(ctx);
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const WatchHistoryPage()),
-          );
-        },
-        onLiked: () {
-          Navigator.pop(ctx);
-          _tabs.animateTo(5); // Liked tab
-        },
-        onNotifications: () {
-          Navigator.pop(ctx);
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => const NotificationSettingsPage(),
-            ),
-          );
-        },
-        onPrivacy: () {
-          Navigator.pop(ctx);
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const BlockedUsersPage()),
-          );
-        },
-        onAppearance: () {
-          Navigator.pop(ctx);
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const AppearancePage()),
-          );
-        },
-        onLanguage: () {
-          Navigator.pop(ctx);
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const LanguagePage()),
-          );
-        },
-        onFreeUpSpace: () {
-          Navigator.pop(ctx);
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const FreeUpSpacePage()),
-          );
-        },
-        onTwoFactor: () {
-          Navigator.pop(ctx);
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const TwoFactorSetupPage()),
-          );
-        },
-        onHelp: () {
-          Navigator.pop(ctx);
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const HelpCenterPage()),
-          );
-        },
-        onReportBug: () {
-          Navigator.pop(ctx);
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const BugReportPage()),
-          );
-        },
-        onTerms: () {
-          Navigator.pop(ctx);
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const TermsOfServicePage()),
-          );
-        },
-        onPrivacyPolicy: () {
-          Navigator.pop(ctx);
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const PrivacyPolicyPage()),
-          );
-        },
-        onAbout: () {
-          Navigator.pop(ctx);
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const AboutPage()),
-          );
-        },
-        onLogout: () {
-          Navigator.pop(ctx);
-          Provider.of<AuthProvider>(context, listen: false)
-              .logout(context);
-        },
+    // A page of its own now, not a sheet over the profile. Saved and Liked
+    // come back here, onto their tabs.
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (ctx) => SettingsPage(
+          onEditProfile: () {
+            Navigator.of(ctx).pop();
+            _openEditProfile();
+          },
+          onShareProfile: _shareProfile,
+          onSaved: () {
+            Navigator.of(ctx).pop();
+            _tabs.animateTo(6); // Saved tab
+          },
+          onLiked: () {
+            Navigator.of(ctx).pop();
+            _tabs.animateTo(5); // Liked tab
+          },
+        ),
       ),
     );
   }
@@ -1460,340 +1376,6 @@ class _PostingTile extends StatelessWidget {
 // ────────────────────────────────────────────────────────────────────
 // Settings sheet
 // ────────────────────────────────────────────────────────────────────
-
-/// Modal bottom sheet listing every account-level action for the
-/// owner. Grouped into sections (Profile / Activity / Preferences /
-/// Account / Support) so the option list reads as a settings menu,
-/// not a dump.
-///
-/// Many entries are intentionally toasts-only — see the per-call-site
-/// comments for the backend work needed to finish each one.
-class _SettingsSheet extends StatelessWidget {
-  final VoidCallback onEditProfile;
-  final VoidCallback onShareProfile;
-  final VoidCallback onSaved;
-  final VoidCallback onLiked;
-  final VoidCallback onHistory;
-  final VoidCallback onNotifications;
-  final VoidCallback onPrivacy;
-  final VoidCallback onAppearance;
-  final VoidCallback onLanguage;
-  final VoidCallback onFreeUpSpace;
-  final VoidCallback onTwoFactor;
-  final VoidCallback onHelp;
-  final VoidCallback onReportBug;
-  final VoidCallback onTerms;
-  final VoidCallback onPrivacyPolicy;
-  final VoidCallback onAbout;
-  final VoidCallback onLogout;
-  /// Backend-truth: has the signed-in user enrolled in 2FA? Drives the
-  /// "On" subtitle on the Two-step verification row.
-  final bool twoFactorEnabled;
-
-  const _SettingsSheet({
-    required this.onEditProfile,
-    required this.onShareProfile,
-    required this.onSaved,
-    required this.onLiked,
-    required this.onHistory,
-    required this.onNotifications,
-    required this.onPrivacy,
-    required this.onAppearance,
-    required this.onLanguage,
-    required this.onFreeUpSpace,
-    required this.onTwoFactor,
-    required this.onHelp,
-    required this.onReportBug,
-    required this.onTerms,
-    required this.onPrivacyPolicy,
-    required this.onAbout,
-    required this.onLogout,
-    required this.twoFactorEnabled,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return DraggableScrollableSheet(
-      initialChildSize: 0.85,
-      minChildSize: 0.5,
-      maxChildSize: 0.95,
-      expand: false,
-      builder: (ctx, scroll) {
-        return Column(
-          children: [
-            const _SheetGrabber(),
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppTheme.space20,
-                vertical: AppTheme.space8,
-              ),
-              child: Row(
-                children: [
-                  Text(
-                    'Settings & Privacy',
-                    style: Theme.of(context).textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w800),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(height: 0),
-            Expanded(
-              child: ListView(
-                controller: scroll,
-                children: [
-                  _section('Profile', cs),
-                  _row(
-                    Icons.person_outline,
-                    'Edit profile',
-                    'Username, name, bio, avatar',
-                    onEditProfile,
-                  ),
-                  _row(
-                    Icons.share_outlined,
-                    'Share profile',
-                    'Copy your profile link',
-                    onShareProfile,
-                  ),
-
-                  _section('Activity', cs),
-                  _row(
-                    Icons.bookmark_border,
-                    'Saved',
-                    'Videos you bookmarked',
-                    onSaved,
-                  ),
-                  _row(
-                    Icons.favorite_border,
-                    'Liked',
-                    'Videos you tapped the heart on',
-                    onLiked,
-                  ),
-                  _row(
-                    Icons.history_rounded,
-                    'Watch history',
-                    'Reels you watched recently',
-                    onHistory,
-                  ),
-
-                  _section('Preferences', cs),
-                  _row(
-                    Icons.notifications_outlined,
-                    'Notifications',
-                    'Push and in-app categories',
-                    onNotifications,
-                  ),
-                  _row(
-                    Icons.lock_outline,
-                    'Privacy',
-                    'Account visibility, blocked accounts',
-                    onPrivacy,
-                  ),
-                  _row(
-                    Icons.dark_mode_outlined,
-                    'Appearance',
-                    'Theme follows your system setting',
-                    onAppearance,
-                  ),
-                  _row(
-                    Icons.language_outlined,
-                    'Language',
-                    'English (default)',
-                    onLanguage,
-                  ),
-                  _row(
-                    Icons.cleaning_services_outlined,
-                    'Free up space',
-                    'Clear saved videos and leftover recordings',
-                    onFreeUpSpace,
-                  ),
-
-                  _section('Account & security', cs),
-                  _row(
-                    Icons.shield_outlined,
-                    'Two-step verification',
-                    twoFactorEnabled
-                        ? 'On — managed by an authenticator app'
-                        : 'Add an extra layer to sign-in',
-                    onTwoFactor,
-                  ),
-                  _row(
-                    Icons.devices_other_outlined,
-                    'Login activity',
-                    'Where you\'re signed in',
-                    () => _stub(context,
-                        'Login activity needs session-token issuance + device-list endpoint.'),
-                    badge: _BackendStubBadge.coming,
-                  ),
-                  _row(
-                    Icons.account_balance_wallet_outlined,
-                    'Personal information',
-                    'Email, phone (not collected)',
-                    () => _stub(context,
-                        'We don\'t collect email or phone today. When we do, this surface manages them.'),
-                    badge: _BackendStubBadge.coming,
-                  ),
-
-                  _section('Support', cs),
-                  _row(
-                    Icons.help_outline,
-                    'Help center',
-                    'Browse FAQs and guides',
-                    onHelp,
-                  ),
-                  _row(
-                    Icons.bug_report_outlined,
-                    'Report a problem',
-                    'Tell us what went wrong',
-                    onReportBug,
-                  ),
-                  _row(
-                    Icons.description_outlined,
-                    'Terms of service',
-                    '',
-                    onTerms,
-                  ),
-                  _row(
-                    Icons.privacy_tip_outlined,
-                    'Privacy policy',
-                    '',
-                    onPrivacyPolicy,
-                  ),
-                  _row(
-                    Icons.info_outline,
-                    'About',
-                    '',
-                    onAbout,
-                  ),
-                  const Divider(),
-                  _row(
-                    Icons.logout,
-                    'Log out',
-                    '',
-                    onLogout,
-                    iconColor: cs.error,
-                    textColor: cs.error,
-                  ),
-                  const SizedBox(height: 24),
-                ],
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _section(String title, ColorScheme cs) => Padding(
-        padding: const EdgeInsets.fromLTRB(
-          AppTheme.space20,
-          AppTheme.space16,
-          AppTheme.space20,
-          AppTheme.space4,
-        ),
-        child: Text(
-          title.toUpperCase(),
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            color: cs.primary,
-            letterSpacing: 1.2,
-          ),
-        ),
-      );
-
-  Widget _row(
-    IconData icon,
-    String title,
-    String subtitle,
-    VoidCallback onTap, {
-    _BackendStubBadge? badge,
-    Color? iconColor,
-    Color? textColor,
-  }) {
-    return ListTile(
-      // Each setting's icon sits in a small grey square, so the list reads
-      // as a set of places to go rather than a wall of text.
-      leading: Builder(
-        builder: (context) => Container(
-          width: 32,
-          height: 32,
-          decoration: BoxDecoration(
-            color: (iconColor ?? Theme.of(context).colorScheme.onSurface)
-                .withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-          ),
-          alignment: Alignment.center,
-          child: Icon(icon, size: 18, color: iconColor),
-        ),
-      ),
-      title: Row(
-        children: [
-          Expanded(
-            child: Text(
-              title,
-              style: TextStyle(color: textColor),
-            ),
-          ),
-          if (badge != null) _BadgeChip(kind: badge),
-        ],
-      ),
-      subtitle: subtitle.isEmpty ? null : Text(subtitle),
-      trailing: const Icon(Icons.chevron_right_rounded, size: 20),
-      onTap: onTap,
-    );
-  }
-
-  void _stub(BuildContext context, String message) {
-    EventTracker.instance.trackTap(
-      target: 'settings_stub_tapped',
-      pageName: 'settings_sheet',
-      params: {'message': message},
-    );
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 3),
-      ),
-    );
-  }
-
-}
-
-enum _BackendStubBadge { coming }
-
-class _BadgeChip extends StatelessWidget {
-  final _BackendStubBadge kind;
-  const _BadgeChip({required this.kind});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      margin: const EdgeInsets.only(right: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: cs.tertiary.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        'Soon',
-        style: TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
-          color: cs.tertiary,
-        ),
-      ),
-    );
-  }
-}
 
 class _SheetGrabber extends StatelessWidget {
   const _SheetGrabber();

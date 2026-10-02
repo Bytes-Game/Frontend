@@ -22,6 +22,7 @@ import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/next_up_store.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/widgets/smart_reels_feed.dart';
 
@@ -123,17 +124,30 @@ void main() {
     );
 
     // Off to Search and back: the feed is rebuilt, as it is in the app.
+    // It carries on exactly where it was — the same videos, put straight
+    // back — so nothing is asked of the server at all, and certainly not a
+    // reshuffle.
     await t.pumpWidget(const MaterialApp(home: SizedBox()));
     asked.clear();
     await t.pumpWidget(feed(FeedKind.forYou));
     await settle(t);
-    expect(asked, isNotEmpty);
-    expect(
-      isRefresh(asked.first),
-      isFalse,
-      reason: 'a tab switch carries on; it does not reshuffle',
-    );
+    expect(asked, isEmpty, reason: 'a tab switch carries on; it does not '
+        'reshuffle, or even reload');
+    expect(find.text('Who can dance?'), findsWidgets,
+        reason: 'and the videos are there');
     await closeFeed(t);
+  });
+
+  testWidgets('leaving Home keeps the videos not reached yet for the next '
+      'open', (t) async {
+    NextUpStore.instance.debugReset();
+    await t.pumpWidget(feed(FeedKind.forYou));
+    await settle(t);
+    await closeFeed(t);
+    final saved = NextUpStore.instance.debugLastSaved;
+    expect(saved, isNotNull, reason: 'nothing was kept');
+    expect(saved!.map((e) => (e['challenge'] as Map)['id']), ['2', '3'],
+        reason: 'the two after the one on screen, as the server sent them');
   });
 
   testWidgets('each feed tab gets its own fresh first page', (t) async {

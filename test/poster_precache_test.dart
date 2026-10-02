@@ -97,11 +97,17 @@ void main() {
           reason: 'the reel draws a plain Image.network, so a resized '
               'provider is a different key and a silent no-op');
 
-      // And the display side has to stay plain for the same reason.
+      // And the display side has to stay plain for the same reason. The
+      // face draws its poster through _posterOf, which uses a plain
+      // Image.network unless the picture is kept on the phone.
       final face = bodyOf(src, 'Widget _videoFace({required bool opponent})');
-      expect(face, contains('Image.network(\n            poster,'),
+      expect(face, contains('_posterOf(poster)'),
+          reason: 'the reel no longer draws its poster through _posterOf');
+      final poster = bodyOf(src, 'static Widget _posterOf(String url)');
+      expect(poster, contains('Image.network(\n          url,'),
           reason: 'the reel no longer draws the poster with a plain '
               'Image.network, so the precached key may not match');
+      expect(poster, isNot(contains('ResizeImage')));
     });
   });
 }
