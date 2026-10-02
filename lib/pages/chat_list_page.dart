@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/models/notification_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
@@ -114,10 +115,34 @@ class _ChatListPageState extends State<ChatListPage>
     _wsSub = ws.notificationStream.listen((notif) {
       if (notif.type == 'chat') {
         _typing.remove(notif.senderId ?? '')?.cancel();
+        _bringToTop(notif);
         _load();
       }
     });
     _liveSub = ws.events.listen(_onLive);
+  }
+
+  /// A new message puts its chat at the top straight away, with the new
+  /// text and one more unread, the way every chat app's list moves. The
+  /// reload that follows only confirms it.
+  void _bringToTop(NotificationModel n) {
+    final from = n.senderId ?? '';
+    if (from.isEmpty || !mounted) return;
+    final i = _conversations.indexWhere((c) => '${c['userId']}' == from);
+    final old = i < 0 ? <String, dynamic>{} : _conversations[i];
+    setState(() {
+      if (i >= 0) _conversations.removeAt(i);
+      _conversations.insert(0, {
+        ...old,
+        'userId': from,
+        'username': old['username'] ?? n.senderUsername ?? '',
+        'lastMessage': n.message,
+        'lastTime': n.timestamp.toUtc().toIso8601String(),
+        'lastFromMe': false,
+        'lastStatus': '',
+        'unreadCount': ((old['unreadCount'] as num?)?.toInt() ?? 0) + 1,
+      });
+    });
   }
 
   /// "Seen", "Delivered" and "typing…" on the rows, as they happen.

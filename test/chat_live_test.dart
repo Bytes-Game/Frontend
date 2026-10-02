@@ -332,6 +332,51 @@ void main() {
     });
   });
 
+  testWidgets('a new message puts that chat on top at once, before the '
+      'list reloads', (t) async {
+    var loads = 0;
+    final held = Completer<http.Response>();
+    ApiService.useClient(MockClient((req) async {
+      final p = req.url.path;
+      if (p.contains('/chat/conversations/')) {
+        loads++;
+        if (loads > 1) return held.future; // the reload, held back
+        return http.Response(json.encode([
+          {'userId': 'u2', 'username': 'alice', 'lastMessage': 'newest',
+           'unreadCount': 0, 'lastTime': _ago(1)},
+          {'userId': 'u3', 'username': 'bob', 'lastMessage': 'older',
+           'unreadCount': 0, 'lastTime': _ago(60)},
+        ]), 200);
+      }
+      if (p.contains('/chat/online/')) {
+        return http.Response(json.encode({'online': false, 'lastSeen': ''}), 200);
+      }
+      return http.Response('{}', 200);
+    }));
+    await t.pumpWidget(_app(const ChatListPage(), socket, calls));
+    await _settle(t);
+    double y(String name) => t.getTopLeft(find.text(name)).dy;
+    expect(y('alice'), lessThan(y('bob')), reason: 'newest first to begin with');
+
+    socket.debugReceive({
+      'type': 'chat',
+      'message': 'hey, rematch?',
+      'senderId': 'u3',
+      'senderUsername': 'bob',
+      'receiverId': 'u1',
+      'messageId': '77',
+      'timestamp': DateTime.now().toUtc().toIso8601String(),
+    });
+    await _settle(t, 3);
+    expect(loads, 2, reason: 'the list did not ask for the new order');
+    expect(y('bob'), lessThan(y('alice')), reason: 'bob did not move to the top');
+    expect(find.text('hey, rematch?'), findsOneWidget);
+    expect(find.text('1'), findsOneWidget, reason: 'no unread count');
+
+    held.complete(http.Response('[]', 200));
+    await end(t);
+  });
+
   group('calls', () {
     testWidgets('the video button rings them and the call screen comes up',
         (t) async {

@@ -92,6 +92,13 @@ if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
 
 $flutterArgs = @('run', "--$Mode") + $Extra
 
+# Notifications outside the app (new messages, missed calls) need this
+# app's Firebase values - see README, "Phone notifications". They live in
+# firebase_push.json next to pubspec.yaml and are passed in when it is there.
+if (Test-Path -LiteralPath (Join-Path $projectRoot 'firebase_push.json')) {
+    $flutterArgs += '--dart-define-from-file=firebase_push.json'
+}
+
 # Start the phone-side recording before the app launches, so nothing from
 # the first seconds is missed. Runs as its own process, writing its own
 # file, and is stopped in the finally block below whatever happens.

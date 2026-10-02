@@ -25,6 +25,7 @@ import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
 import 'package:myapp/services/call_service.dart';
+import 'package:myapp/services/push_service.dart';
 import 'package:myapp/services/webrtc_call_media.dart';
 import 'package:myapp/widgets/call_host.dart';
 import 'package:myapp/pages/onboarding_interests_page.dart';
@@ -407,6 +408,10 @@ class _WebSocketWrapperState extends State<_WebSocketWrapper>
     );
     if (username.isNotEmpty) {
       _ws.connect();
+      // Notifications outside the app: this phone is registered for a new
+      // message or a missed call, and a tapped one opens the chat.
+      // ignore: discarded_futures
+      PushService.instance.signedIn(navigator: MyApp.navigatorKey);
       // The list and the bell's count, from the server — what happened
       // while the app was closed is in it too.
       // ignore: discarded_futures
