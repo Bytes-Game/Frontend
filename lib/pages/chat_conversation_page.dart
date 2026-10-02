@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/call_service.dart';
+import 'package:myapp/services/chat_notifications.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
@@ -114,6 +115,9 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     _loadMessages();
     _listenForRealTime();
     _checkOnlineStatus();
+    // The chat is open: its notifications on the phone have done their job.
+    // ignore: discarded_futures
+    ChatNotifications.instance.forget(widget.otherUserId);
   }
 
   @override
@@ -409,18 +413,6 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     final createdAt = DateTime.tryParse(msg['createdAt'] ?? '');
     if (createdAt == null) return false;
     return DateTime.now().toUtc().difference(createdAt).inMinutes < 15;
-  }
-
-  /// Photo and voice messages are not built yet. Tapping says so instead
-  /// of silently doing nothing.
-  void _comingSoon(String what) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$what is coming soon'),
-        duration: const Duration(seconds: 1),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
   }
 
   /// Rings them. The call screen comes up over everything (CallHost).
@@ -904,8 +896,12 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     );
   }
 
-  /// The composer, on frosted glass: photo, the text box, and a send button
-  /// that appears the moment there is something to send.
+  /// The composer, on frosted glass: the text box, and a send button that
+  /// lights up the moment there is something to send.
+  ///
+  /// There used to be a photo button and a microphone here that only said
+  /// "coming soon". Photo and voice messages are not built, so nothing on
+  /// screen offers them.
   Widget _composer(ColorScheme cs) {
     return _Frost(
       border: const Border(top: BorderSide(width: 0.5)),
@@ -916,13 +912,7 @@ class _ChatConversationPageState extends State<ChatConversationPage>
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              IconBubble(
-                icon: Icons.add_photo_alternate_rounded,
-                tooltip: 'Photo',
-                size: 44,
-                onTap: () => _comingSoon('Photo messaging'),
-              ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 4),
               Expanded(
                 child: Container(
                   constraints: const BoxConstraints(minHeight: 44),
@@ -960,38 +950,31 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                 ),
               ),
               const SizedBox(width: 8),
-              // Send appears the moment there is something to send (Save
-              // while editing); until then, the microphone. It turns in as
-              // it swaps.
+              // Send lights up the moment there is something to send (it is
+              // Save while editing); until then it is dimmed and does
+              // nothing.
               ValueListenableBuilder<TextEditingValue>(
                 valueListenable: _msgCtrl,
                 builder: (_, value, _) {
                   final ready =
                       value.text.trim().isNotEmpty || _editingMsgId != null;
-                  return AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 200),
-                    transitionBuilder: (c, a) => RotationTransition(
-                      turns: Tween(begin: 0.75, end: 1.0).animate(a),
-                      child: ScaleTransition(scale: a, child: c),
+                  return AnimatedOpacity(
+                    duration: const Duration(milliseconds: 160),
+                    opacity: ready ? 1 : 0.35,
+                    child: AnimatedScale(
+                      duration: const Duration(milliseconds: 160),
+                      scale: ready ? 1 : 0.9,
+                      child: IconBubble(
+                        key: const ValueKey('send'),
+                        icon: _editingMsgId != null
+                            ? Icons.check_rounded
+                            : Icons.arrow_upward_rounded,
+                        tooltip: _editingMsgId != null ? 'Save' : 'Send',
+                        filled: true,
+                        size: 44,
+                        onTap: ready ? _sendMessage : null,
+                      ),
                     ),
-                    child: ready
-                        ? IconBubble(
-                            key: const ValueKey('send'),
-                            icon: _editingMsgId != null
-                                ? Icons.check_rounded
-                                : Icons.arrow_upward_rounded,
-                            tooltip: _editingMsgId != null ? 'Save' : 'Send',
-                            filled: true,
-                            size: 44,
-                            onTap: _sendMessage,
-                          )
-                        : IconBubble(
-                            key: const ValueKey('mic'),
-                            icon: Icons.mic_rounded,
-                            tooltip: 'Voice message',
-                            size: 44,
-                            onTap: () => _comingSoon('Voice messaging'),
-                          ),
                   );
                 },
               ),

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The small mark at the top of every notification from the app: a
+     lightning bolt, for Battle Arena. Android shows it white (or tinted
+     with the app's blue), so only its shape matters. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M13.5,2L4.5,13.5H11L10,22L19.5,10.5H13L13.5,2Z" />
+</vector>

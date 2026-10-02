@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:myapp/pages/challenge_detail_page.dart';
 import 'package:myapp/pages/chat_conversation_page.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/chat_notifications.dart';
 
 /// Notifications on the phone itself — the ones that show outside the app.
 ///
@@ -20,6 +21,9 @@ import 'package:myapp/services/api_service.dart';
 ///     address from Google's push service (Firebase) and gives it to our
 ///     server, which is what lets the server reach this phone at all;
 ///   * when that address changes, gives the new one;
+///   * on Android, draws new messages itself, with Reply and Mark as read
+///     right in the notification (ChatNotifications), and tells the server
+///     so — only then does the server send messages that way;
 ///   * opens the right screen when a push is tapped — a chat, or the battle
 ///     a battle push is about — whether the app was open, in the
 ///     background, or closed;
@@ -58,9 +62,13 @@ class PushService {
           'notifications outside the app (see README "Phone notifications")');
       return;
     }
+    await ChatNotifications.instance.start();
     _subs.add(platform.opened.listen(open));
-    // A push tapped while the app was closed is what started it.
-    final launched = await platform.launchedFrom();
+    _subs.add(ChatNotifications.instance.taps.listen(open));
+    // A notification tapped while the app was closed is what started it:
+    // one the app drew (a message), or one Android drew (a battle).
+    final launched = await ChatNotifications.instance.launchedFrom() ??
+        await platform.launchedFrom();
     if (launched != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => open(launched));
     }
@@ -83,6 +91,7 @@ class PushService {
       userId: '',
       token: token,
       platform: 'fcm',
+      drawsOwn: ChatNotifications.instance.drawsOwn,
     );
     if (ok) {
       _token = token;
@@ -99,6 +108,7 @@ class PushService {
     _token = null;
     _started = false;
     _stopListening();
+    await ChatNotifications.instance.clearAll();
     if (token != null) await ApiService.unregisterPushToken(token);
   }
 
@@ -221,6 +231,11 @@ class FirebasePushPlatform implements PushPlatform {
             projectId: _projectId,
           ),
         );
+      }
+      // Messages arrive as data the app draws (with Reply); Android hands
+      // them to this even with the app closed.
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        FirebaseMessaging.onBackgroundMessage(chatPushArrived);
       }
       return true;
     } catch (e) {

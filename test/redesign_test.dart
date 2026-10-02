@@ -330,6 +330,12 @@ void main() {
       await t.tap(find.byTooltip('Edit profile'));
       await settle(t);
       expect(find.byType(EditProfilePage), findsOneWidget);
+      // No buttons that only say "coming soon": the username says plainly
+      // it can't be changed, and there is no camera offering a photo.
+      expect(find.byKey(const ValueKey('edit_username')), findsOneWidget);
+      expect(find.text("Can't be changed"), findsOneWidget);
+      expect(find.text('Change'), findsNothing);
+      expect(find.byIcon(Icons.camera_alt_outlined), findsNothing);
     });
 
     testWidgets('someone else\'s: follow, plus message and battle as icons', (

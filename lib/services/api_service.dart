@@ -2026,6 +2026,8 @@ class ApiService {
     required String userId,
     required String token,
     required String platform, // 'fcm' or 'apns'
+    // The app draws message notifications itself, with Reply.
+    bool drawsOwn = false,
   }) async {
     try {
       final res = await _authHttp.post(
@@ -2035,6 +2037,7 @@ class ApiService {
           'userId': userId,
           'token': token,
           'platform': platform,
+          'drawsOwn': drawsOwn,
         }),
       );
       return res.statusCode == 200;
