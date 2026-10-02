@@ -23,6 +23,7 @@ import 'package:myapp/services/connection_prewarm_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/feed_paging.dart';
 import 'package:myapp/services/network_quality_service.dart';
+import 'package:myapp/services/next_up_store.dart';
 import 'package:myapp/services/own_uploads.dart';
 import 'package:myapp/services/playback_reporter.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
@@ -193,6 +194,38 @@ class SmartReelsFeed extends StatefulWidget {
   /// rebuilt on every tab switch and "since the app opened" is what matters.
   static final Set<FeedKind> _freshSinceOpen = <FeedKind>{};
 
+  /// Where each Home feed was the last time it was on screen.
+  ///
+  /// Switching tabs takes Home down, and coming back used to build it from
+  /// nothing: a black screen with the loading shimmer while the server was
+  /// asked for the first page again, every single time. Now leaving Home
+  /// writes down the videos it had and which one was on screen, and coming
+  /// back puts them straight back — the same video, its picture at once —
+  /// with no request at all.
+  static final Map<FeedKind, _KeptFeed> _kept = <FeedKind, _KeptFeed>{};
+
+  /// For tests: whether any feed's place is kept.
+  @visibleForTesting
+  static bool get debugHasKept => _kept.isNotEmpty;
+
+  /// For tests: keep a place for [kind], as leaving Home would.
+  @visibleForTesting
+  static void debugKeepPlace(FeedKind kind) => _kept[kind] = _KeptFeed(
+        items: const [],
+        index: 0,
+        page: 1,
+        hasMore: false,
+        refreshTick: 0,
+        userId: '1',
+      );
+
+  /// Signing out: forget every feed's place, so the next person to sign in
+  /// starts on their own videos.
+  static void forgetAll() {
+    _kept.clear();
+    _freshSinceOpen.clear();
+  }
+
   /// The address a reel of [c] will play, so a page can fetch the start of
   /// it before the tap — the same address, or the fetch is wasted. Empty
   /// when there is nothing to play.
@@ -232,6 +265,7 @@ class SmartReelsFeed extends StatefulWidget {
   @visibleForTesting
   static void debugForgetAppOpen() {
     _freshSinceOpen.clear();
+    _kept.clear();
     _BattleScores.forget();
   }
 
@@ -417,13 +451,71 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _pageController = PageController(initialPage: _playlistStart());
     // Seed the tick at the current value so we don't trigger an immediate
     // refresh on the very first build (the initial _loadInitialPage call
     // below is already pulling page 1).
     _cachedDp = Provider.of<DataProvider>(context, listen: false);
     _lastSeenRefreshTick = _cachedDp!.feedRefreshTick;
-    _loadInitialPage();
+    // Back on Home: carry on exactly where it was. Not when something has
+    // asked every feed to refresh meanwhile (a post, a delete) — then the
+    // old list is wrong, and a fresh one is fetched as before.
+    final kept = _keepable ? SmartReelsFeed._kept.remove(widget.kind) : null;
+    final restore = kept != null &&
+        kept.items.isNotEmpty &&
+        kept.userId == widget.userId &&
+        kept.refreshTick == _lastSeenRefreshTick;
+    _pageController = PageController(
+      initialPage: restore
+          ? kept.index.clamp(0, kept.items.length - 1)
+          : _playlistStart(),
+    );
+    if (restore) {
+      _restore(kept);
+    } else {
+      _loadInitialPage();
+    }
+  }
+
+  /// A feed of its own — Home's — rather than a profile's or saved videos
+  /// opened on top. Only those are kept between visits and between runs.
+  bool get _keepable =>
+      widget.playlist == null && widget.seedChallenge == null;
+
+  /// Put back what this feed had the last time it was on screen. No
+  /// loading screen, no request: the same video, picture first, then
+  /// playing.
+  void _restore(_KeptFeed kept) {
+    _items.addAll(kept.items);
+    _currentIndex = kept.index.clamp(0, _items.length - 1);
+    _page = kept.page;
+    _hasMore = kept.hasMore;
+    _loadingFirstPage = false;
+    _currentItemStart = DateTime.now();
+    _lastLoadWhy = 'back';
+    debugPrint('[reel] feed ${widget.kind.name}: back where it was, on video '
+        '${_currentIndex + 1} of ${_items.length}, with no loading');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _prefetchUpcomingVideos();
+      _playCurrent(waitForWarm: true, arriving: true);
+    });
+  }
+
+  /// Write down the videos after the one on screen — the ones not reached
+  /// yet — so the next time the app opens it starts on them at once. Home's
+  /// For You only.
+  void _saveNextUp() {
+    if (!_keepable || widget.kind != FeedKind.forYou) return;
+    final next = <Map<String, dynamic>>[];
+    for (var i = _currentIndex + 1;
+        i < _items.length && next.length < NextUpStore.keep;
+        i++) {
+      final e = _items[i];
+      if (e is _ReelItem && e.source != null && e.videoUrl.isNotEmpty) {
+        next.add(e.source!);
+      }
+    }
+    unawaited(NextUpStore.instance.save(widget.userId, next));
   }
 
   /// True from the start of [dispose]. `mounted` is still true while
@@ -434,6 +526,19 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   @override
   void dispose() {
     _leaving = true;
+    // Keep this feed's place for when Home comes back, and its next videos
+    // for when the app next opens.
+    if (_keepable && _items.isNotEmpty) {
+      SmartReelsFeed._kept[widget.kind] = _KeptFeed(
+        items: List.of(_items),
+        index: _currentIndex,
+        page: _page,
+        hasMore: _hasMore,
+        refreshTick: _lastSeenRefreshTick,
+        userId: widget.userId,
+      );
+    }
+    _saveNextUp();
     _initialWatchTimer?.cancel();
     _prefetchDebounce?.cancel();
     _detachPlaybackListener();
@@ -472,6 +577,8 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       // anyway so a resume-into-a-different-reel can't double-listen.
       _detachPlaybackListener();
       _flushCurrentItemEvent(isSkip: false);
+      // Leaving the app: keep the next videos for the next open.
+      if (state == AppLifecycleState.paused) _saveNextUp();
     } else if (state == AppLifecycleState.resumed) {
       _currentItemStart = DateTime.now();
       // Not from the start. The viewer never left this reel — the app was
@@ -550,6 +657,20 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // way a pull-to-refresh does. See [_freshSinceOpen].
     final freshOnOpen =
         !hasSeed && !SmartReelsFeed._freshSinceOpen.contains(widget.kind);
+    // Opening the app: start on the videos kept from last time, if there
+    // are any, and fetch the fresh page behind them. See [NextUpStore].
+    if (freshOnOpen && !refresh && widget.kind == FeedKind.forYou) {
+      final kept = NextUpStore.instance.takeReady(widget.userId);
+      final reels = <_FeedEntry>[];
+      for (final e in kept) {
+        final r = _FeedEntry.fromJson(e);
+        if (r != null) reels.add(r);
+      }
+      if (reels.isNotEmpty) {
+        await _openOnKept(reels);
+        return;
+      }
+    }
     _lastLoadWhy = refresh
         ? 'pull'
         : freshOnOpen
@@ -630,6 +751,60 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     }
   }
 
+  /// Open on [reels], the videos kept from last time, straight away — then
+  /// ask for the fresh page and put it behind them.
+  Future<void> _openOnKept(List<_FeedEntry> reels) async {
+    _lastLoadWhy = 'kept';
+    setState(() {
+      _items
+        ..clear()
+        ..addAll(reels);
+      _currentIndex = 0;
+      _page = 0;
+      _hasMore = true;
+      _loadingFirstPage = false;
+      _currentItemStart = DateTime.now();
+    });
+    debugPrint('[reel] opened on ${reels.length} videos kept from last time, '
+        'with no loading; fetching a fresh page behind them');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _prefetchUpcomingVideos();
+      _playCurrent(waitForWarm: true, arriving: true);
+    });
+    // The fresh page goes behind. Not the kept videos again: a video
+    // straight after itself is a bug, not a repeat. A server still waking
+    // up is asked again, as a first load would be, rather than leaving the
+    // feed to end after the kept ones.
+    _skipKeys = {for (final r in reels) '${r.type}:${r.id}'};
+    for (var attempt = 0; attempt <= _maxAutoRetries; attempt++) {
+      if (attempt > 0) {
+        await Future<void>.delayed(Duration(seconds: 4 * (1 << (attempt - 1))));
+      }
+      if (!mounted) return;
+      _hasMore = true;
+      await _loadNextPage(refresh: true);
+      if (!mounted) return;
+      if (!_lastPageFailed) break;
+      debugPrint('[reel] the fresh page behind the kept videos did not come '
+          '(try ${attempt + 1}); asking again');
+    }
+    _skipKeys = const {};
+    if (!_lastPageFailed) SmartReelsFeed._freshSinceOpen.add(widget.kind);
+    for (final entry in _items.take(4)) {
+      if (entry is _ReelItem && entry.videoUrl.isNotEmpty) {
+        ConnectionPrewarmService.instance.prewarmUrlOrigin(entry.videoUrl);
+      }
+    }
+  }
+
+  /// Feed items a page should not add again — the kept videos the app
+  /// opened on, while their fresh page is fetched.
+  Set<String> _skipKeys = const {};
+
+  /// Whether the last page asked for failed outright.
+  bool _lastPageFailed = false;
+
   /// [SmartReelsFeed.playlist]: everything is already here. A refresh puts
   /// the same list back from the top.
   void _loadPlaylist({required bool refresh}) {
@@ -707,8 +882,10 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       final item = _FeedEntry.fromJson(x as Map<String, dynamic>);
       if (item == null) continue;
       if (!seenInThisPage.add('${item.type}:${item.id}')) continue;
+      if (_skipKeys.contains('${item.type}:${item.id}')) continue;
       parsed.add(item);
     }
+    _lastPageFailed = data['_ok'] == false;
     final more = FeedPaging.hasMoreAfter(
       declared: data['hasMore'],
       rawCount: raw.length,
@@ -1752,6 +1929,8 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     }
 
     for (final url in wanted) {
+      // Already on the phone (a video the app opened on): nothing to fetch.
+      if (NextUpStore.instance.posterFile(url) != null) continue;
       // ignore: discarded_futures
       precacheImage(NetworkImage(url), context).catchError((Object _) {});
     }
@@ -2734,10 +2913,32 @@ abstract class _FeedEntry {
       return _AccountsCard.fromJson(entry);
     }
     if (type == 'post' || type == 'challenge') {
-      return _ReelItem.fromFeedEntry(entry);
+      // Kept exactly as sent, so the videos not reached yet can be written
+      // down for the next open (NextUpStore).
+      return _ReelItem.fromFeedEntry(entry)?..source = entry;
     }
     return null;
   }
+}
+
+/// What a Home feed had when it last left the screen. See
+/// [SmartReelsFeed._kept].
+class _KeptFeed {
+  final List<_FeedEntry> items;
+  final int index;
+  final int page;
+  final bool hasMore;
+  final int refreshTick;
+  final String userId;
+
+  const _KeptFeed({
+    required this.items,
+    required this.index,
+    required this.page,
+    required this.hasMore,
+    required this.refreshTick,
+    required this.userId,
+  });
 }
 
 class _ReelItem implements _FeedEntry {
@@ -2811,6 +3012,10 @@ class _ReelItem implements _FeedEntry {
   /// Whether this visit opened on the answer. Decided by the feed as the
   /// battle arrives.
   bool opensOnAnswer = false;
+
+  /// The feed item exactly as the server sent it, when it came from a feed
+  /// page — what [NextUpStore] keeps for the next open.
+  Map<String, dynamic>? source;
 
   /// Who the server said was ahead when it sent this battle: "creator",
   /// "answer", or "" for nobody yet or not counted.
@@ -4214,6 +4419,28 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   /// The poster stays in the tree while the video buffers (no black
   /// screen on slow networks) and doubles as the whole face when the
   /// opponent's controller hasn't produced a frame yet mid-turn.
+  /// The picture behind a video until its first frame: the copy kept on
+  /// the phone when there is one (the videos the app opens on), so it is
+  /// there at once with nothing to download.
+  static Widget _posterOf(String url) {
+    // Don't show a broken-image icon if the CDN burps — we'd rather fall
+    // through to a black background and let the video load on top of it.
+    Widget network() => Image.network(
+          url,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          errorBuilder: (_, _, _) => const SizedBox.shrink(),
+        );
+    final kept = NextUpStore.instance.posterFile(url);
+    if (kept == null) return network();
+    return Image.file(
+      kept,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+      errorBuilder: (_, _, _) => network(),
+    );
+  }
+
   Widget _videoFace({required bool opponent}) {
     final item = widget.item;
     final url = opponent ? item.opponentVideoUrl : item.videoUrl;
@@ -4225,15 +4452,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
       fit: StackFit.expand,
       children: [
         if (poster.isNotEmpty)
-          Image.network(
-            poster,
-            fit: BoxFit.cover,
-            gaplessPlayback: true,
-            // Don't show a broken-image icon if the CDN burps — we'd
-            // rather fall through to a black background and let the
-            // video load on top of it.
-            errorBuilder: (_, _, _) => const SizedBox.shrink(),
-          )
+          _posterOf(poster)
         else
           const ColoredBox(color: Colors.black),
         if (url.isNotEmpty && st != null)

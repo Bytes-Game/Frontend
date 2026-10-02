@@ -7,6 +7,7 @@ import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
+import 'package:myapp/services/profile_cache.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/pages/home_page.dart';
 import 'package:myapp/pages/chat_list_page.dart';
@@ -74,6 +75,8 @@ class _MainShellState extends State<MainShell> {
       unawaited(
         ExploreGridCache.instance.prefetch(context, dp.user?.id ?? ''),
       );
+      // And your own profile, so opening it is instant too.
+      unawaited(ProfileCache.instance.prefetch(context, dp.user?.id ?? ''));
     });
   }
 

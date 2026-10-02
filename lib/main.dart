@@ -18,6 +18,7 @@ import 'package:myapp/services/leftover_files.dart';
 import 'package:myapp/services/own_uploads.dart';
 import 'package:myapp/services/link_speed_store.dart';
 import 'package:myapp/services/network_quality_service.dart';
+import 'package:myapp/services/next_up_store.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/session_store.dart';
@@ -169,6 +170,10 @@ Future<void> main() async {
   // profile. Until this has read its list they play from the server.
   // ignore: discarded_futures
   OwnUploads.instance.init();
+  // The next videos kept from last time, so Home opens straight onto one
+  // instead of a loading screen. A small file; read before Home asks.
+  // ignore: discarded_futures
+  NextUpStore.instance.load();
 
   // Crash + uncaught-error reporting via Sentry. The SDK installs:
   //   * FlutterError.onError handler   — catches framework errors
@@ -360,11 +365,13 @@ class _RestoreSplashState extends State<_RestoreSplash> {
     });
   }
 
+  // Black, like the video screen it turns into, and with no spinner: it is
+  // only on screen while the saved login is read off the phone — the server
+  // is no longer waited for here — and a spinner for that long only reads
+  // as "loading".
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(child: CircularProgressIndicator()),
-    );
+    return const Scaffold(backgroundColor: Colors.black);
   }
 }
 

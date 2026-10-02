@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:myapp/models/battle_model.dart';
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/profile_cache.dart';
 import 'package:myapp/widgets/battle_scoreboard.dart' show votesText;
 import 'package:myapp/widgets/video_grid_tile.dart';
 
@@ -53,6 +54,8 @@ class _BattlesTabState extends State<BattlesTab>
   @override
   void initState() {
     super.initState();
+    // What this tab showed last time, at once; the fresh list replaces it.
+    _cards = ProfileCache.instance.battles(widget.userId, widget.tab);
     _load();
   }
 
@@ -62,10 +65,16 @@ class _BattlesTabState extends State<BattlesTab>
       userId: widget.userId,
       tab: widget.tab,
     );
+    if (page != null) {
+      ProfileCache.instance.keepRecord(widget.userId, page.record);
+      ProfileCache.instance.keepBattles(widget.userId, widget.tab, page.battles);
+    }
     if (!mounted) return;
     setState(() {
       _failed = page == null;
-      _cards = page?.battles ?? _cards;
+      _cards = page == null
+          ? _cards
+          : ProfileCache.instance.battles(widget.userId, widget.tab);
     });
   }
 

@@ -29,6 +29,7 @@ import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/create_flow.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
+import 'package:myapp/services/profile_cache.dart';
 import 'package:myapp/services/upload_job_manager.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/battle_record_panel.dart';
@@ -141,6 +142,16 @@ class _ProfilePageState extends State<ProfilePage>
       _fetchFreshUser();
     }
 
+    // Open on what was kept from last time — no placeholders — and let
+    // the fresh answers replace it. See ProfileCache.
+    final cache = ProfileCache.instance;
+    final uid = widget.user.id;
+    final keptShorts = cache.shorts(uid);
+    if (keptShorts != null) _myChallenges = List.of(keptShorts);
+    _record = cache.record(uid);
+    final keptSaved = cache.saved(uid);
+    if (isOwn && keptSaved != null) _savedChallenges = List.of(keptSaved);
+
     _fetchMyChallenges();
     _fetchRecord();
     if (isOwn) _fetchSavedChallenges();
@@ -170,6 +181,7 @@ class _ProfilePageState extends State<ProfilePage>
         _myChallenges = [c, ..._myChallenges];
       }
     });
+    ProfileCache.instance.replaceShorts(widget.user.id, _myChallenges);
   }
 
   /// Your posts on their way up: pressed Post, not finished yet.
@@ -181,14 +193,17 @@ class _ProfilePageState extends State<ProfilePage>
   // ── Network ────────────────────────────────────────────────────────
 
   Future<void> _fetchSavedChallenges() async {
-    setState(() => _isLoadingSaved = true);
-    final saved = await ApiService.getSavedChallenges(widget.user.id);
+    final uid = widget.user.id;
+    // Placeholders only when there is nothing kept to show meanwhile.
+    if (ProfileCache.instance.saved(uid) == null) {
+      setState(() => _isLoadingSaved = true);
+    }
+    final saved = await ApiService.getSavedChallenges(uid);
+    ProfileCache.instance
+        .keepSaved(uid, [for (final m in saved) ChallengeModel.fromJson(m)]);
     if (mounted) {
       setState(() {
-        _savedChallenges = [
-          for (final m in saved)
-            ChallengeModel.fromJson(m),
-        ];
+        _savedChallenges = List.of(ProfileCache.instance.saved(uid) ?? []);
         _isLoadingSaved = false;
       });
     }
@@ -197,7 +212,9 @@ class _ProfilePageState extends State<ProfilePage>
   Future<void> _fetchRecord() async {
     final page = await ApiService.getUserBattles(
         userId: widget.user.id, tab: 'live', limit: 1);
-    if (mounted && page != null) setState(() => _record = page.record);
+    if (page == null) return;
+    ProfileCache.instance.keepRecord(widget.user.id, page.record);
+    if (mounted) setState(() => _record = page.record);
   }
 
   BattleRecord get _shownRecord =>
@@ -224,11 +241,16 @@ class _ProfilePageState extends State<ProfilePage>
   }
 
   Future<void> _fetchMyChallenges() async {
-    setState(() => _isLoadingMyChallenges = true);
-    final list = await ApiService.getUserChallenges(widget.user.id);
+    final uid = widget.user.id;
+    // Placeholders only when there is nothing kept to show meanwhile.
+    if (ProfileCache.instance.shorts(uid) == null) {
+      setState(() => _isLoadingMyChallenges = true);
+    }
+    final list = await ApiService.getUserChallenges(uid);
+    ProfileCache.instance.keepShorts(uid, list);
     if (mounted) {
       setState(() {
-        _myChallenges = list;
+        _myChallenges = List.of(ProfileCache.instance.shorts(uid) ?? list);
         _isLoadingMyChallenges = false;
       });
     }
@@ -290,6 +312,7 @@ class _ProfilePageState extends State<ProfilePage>
       return;
     }
     setState(() => _myChallenges.removeWhere((x) => x.id == c.id));
+    ProfileCache.instance.replaceShorts(widget.user.id, _myChallenges);
     dp.bumpFeedRefresh();
     _toast('Post deleted');
   }

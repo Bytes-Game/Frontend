@@ -6,11 +6,14 @@ import 'package:myapp/models/user_model.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/session_store.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
+import 'package:myapp/services/next_up_store.dart';
+import 'package:myapp/services/profile_cache.dart';
 import 'package:myapp/services/own_uploads.dart';
 import 'package:myapp/services/push_service.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/providers/theme_provider.dart';
+import 'package:myapp/widgets/smart_reels_feed.dart';
 
 /// Manages authentication state: login, signup, cold-start session
 /// restore (keystore-backed), and the post-signup onboarding gate.
@@ -87,44 +90,56 @@ class AuthProvider with ChangeNotifier {
       }
 
       ApiService.authToken = stored.token;
-      // Hard 6s cap on the splash screen. A sleeping Render instance
-      // holds requests for 30-60s while it cold-boots; without this cap
-      // the user stares at the splash that whole time ("app shows
-      // nothing"). Timeout is treated as network-down, NOT as a bad
-      // token: keep the stored session optimistically and let the feed's
-      // own retry take over.
-      final outcome = await ApiService.refreshSession().timeout(
-        const Duration(seconds: 6),
-        onTimeout: () => TokenRefresh.unreachable,
-      );
-
-      switch (outcome) {
-        case TokenRefresh.rejected:
-          // The server answered and refused the token. Same destination as
-          // having no session at all.
-          ApiService.clearAuth();
-          await SessionStore.clear();
-          return;
-        case TokenRefresh.refreshed:
-          final fresh = ApiService.authToken;
-          if (fresh != null && fresh.isNotEmpty) {
-            await SessionStore.save(fresh, stored.userJson);
-          }
-        case TokenRefresh.unreachable:
-          // Can't reach the server — say nothing about the token and let
-          // normal request retries sort it out once connectivity returns.
-          break;
-      }
-
+      // Straight into the app. Opening used to wait here for the server to
+      // renew the login — up to six seconds on a sleeping server, with a
+      // spinner — before anything else could start, Home's videos
+      // included. A saved login that has not expired works as it is, so
+      // the app opens on it at once and renews it behind, the way TikTok
+      // and Instagram open. Only if the server then refuses it outright
+      // is the person sent to sign in.
       final user = UserModel.fromJson(stored.userJson);
       // ignore: use_build_context_synchronously
       _hydrateFromStored(context, user);
       _isAuthenticated = true;
-    } catch (_) {
+      unawaited(_renewBehind(stored.token, stored.userJson));
+    } catch (e) {
       // Any restore failure degrades to the login screen.
+      debugPrint('[auth] could not restore the saved login: $e');
     } finally {
       _restoring = false;
       notifyListeners();
+    }
+  }
+
+  /// Renew the saved login without anyone waiting for it.
+  Future<void> _renewBehind(String token, Map<String, dynamic> userJson) async {
+    final outcome = await ApiService.refreshSession().timeout(
+      const Duration(seconds: 60),
+      onTimeout: () => TokenRefresh.unreachable,
+    );
+    // Signed out, or another login, while this was out: not ours to change.
+    if (!_isAuthenticated) return;
+    switch (outcome) {
+      case TokenRefresh.rejected:
+        // The server answered and refused the token: same as having no
+        // session at all.
+        if (ApiService.authToken != token) return;
+        debugPrint('[auth] the server refused the saved login; signing in '
+            'again is needed');
+        ApiService.clearAuth();
+        await SessionStore.clear();
+        _isAuthenticated = false;
+        notifyListeners();
+      case TokenRefresh.refreshed:
+        final fresh = ApiService.authToken;
+        if (fresh != null && fresh.isNotEmpty) {
+          await SessionStore.save(fresh, userJson);
+        }
+      case TokenRefresh.unreachable:
+        // Can't reach the server — say nothing about the token and let
+        // normal request retries sort it out once connectivity returns.
+        debugPrint('[auth] could not renew the saved login yet; carrying on '
+            'with it');
     }
   }
 
@@ -213,6 +228,12 @@ class AuthProvider with ChangeNotifier {
     unawaited(VideoCacheService.instance.clear());
     // And the Search grid kept between visits: it was picked for them.
     ExploreGridCache.instance.clear();
+    // And Home: where each feed was, and the next videos kept for the next
+    // open.
+    SmartReelsFeed.forgetAll();
+    unawaited(NextUpStore.instance.clear());
+    // And the profiles kept for an instant open.
+    ProfileCache.instance.clear();
     // And the copies of their own posts.
     unawaited(OwnUploads.instance.clear());
     _isAuthenticated = false;
