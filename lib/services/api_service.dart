@@ -1647,6 +1647,27 @@ class ApiService {
     }
   }
 
+  /// POST /api/v1/chat/clear — "Delete chat": the whole chat with
+  /// [otherUserId] goes off this person's list. Only for them; the other
+  /// person keeps theirs. False when the server did not take it.
+  static Future<bool> clearChat(String otherUserId) async {
+    try {
+      final res = await _authHttp.post(
+        Uri.parse('$_base/api/v1/chat/clear'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'otherUserId': otherUserId}),
+      );
+      if (res.statusCode != 200) {
+        debugPrint('[chat] the server would not delete the chat with '
+            '$otherUserId: ${res.statusCode} ${res.body}');
+      }
+      return res.statusCode == 200;
+    } catch (e) {
+      debugPrint('[chat] could not delete the chat with $otherUserId: $e');
+      return false;
+    }
+  }
+
   /// POST /api/v1/chat/forward
   static Future<Map<String, dynamic>?> forwardChatMessage({
     required String messageId,

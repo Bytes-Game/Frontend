@@ -12,7 +12,6 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
-import 'package:myapp/widgets/fold_in.dart';
 import 'package:myapp/widgets/profile_card_3d.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/pages/search_reels_viewer_page.dart';
@@ -596,17 +595,13 @@ class _SearchPageState extends State<SearchPage>
             sliver: SliverGrid(
               gridDelegate: _gridDelegate,
               delegate: SliverChildBuilderDelegate(
-                (context, i) => FoldIn(
-                  // A diagonal wave across the grid as it builds itself;
-                  // tiles lean away as they leave the top.
-                  order: i ~/ 3 + i % 3,
-                  depth: true,
-                  child: _PreviewableTile(
-                    challenge: _exploreChallenges[i],
-                    coordinator: _previewCoord,
-                    onTap: () =>
-                        _onChallengeTap(_exploreChallenges[i], i, 'explore'),
-                  ),
+                // Plain tiles, there the moment the page opens: the owner
+                // asked for no animation on the search grid.
+                (context, i) => _PreviewableTile(
+                  challenge: _exploreChallenges[i],
+                  coordinator: _previewCoord,
+                  onTap: () =>
+                      _onChallengeTap(_exploreChallenges[i], i, 'explore'),
                 ),
                 childCount: _exploreChallenges.length,
               ),
@@ -963,14 +958,10 @@ class _SearchPageState extends State<SearchPage>
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 24),
       gridDelegate: _gridDelegate,
       itemCount: items.length,
-      itemBuilder: (context, i) => FoldIn(
-        order: i ~/ 3 + i % 3,
-        depth: true,
-        child: _PreviewableTile(
-          challenge: items[i],
-          coordinator: _previewCoord,
-          onTap: () => _onChallengeTap(items[i], i, resultType),
-        ),
+      itemBuilder: (context, i) => _PreviewableTile(
+        challenge: items[i],
+        coordinator: _previewCoord,
+        onTap: () => _onChallengeTap(items[i], i, resultType),
       ),
     );
   }
@@ -2084,20 +2075,10 @@ class _PreviewableTileState extends State<_PreviewableTile> {
                 Image(
                   image: ExploreGridCache.posterImage(ch.thumbnailUrl!),
                   fit: BoxFit.cover,
-                  frameBuilder: (context, child, frame, sync) {
-                    if (sync) return child;
-                    return Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        _gradientBg(context),
-                        AnimatedOpacity(
-                          opacity: frame == null ? 0 : 1,
-                          duration: const Duration(milliseconds: 180),
-                          child: child,
-                        ),
-                      ],
-                    );
-                  },
+                  // Shown the moment it is there, with no fade: the owner
+                  // asked for no animation on the search grid.
+                  frameBuilder: (context, child, frame, sync) =>
+                      sync || frame != null ? child : _gradientBg(context),
                   errorBuilder: (_, _, _) => _gradientBg(context),
                 )
               else

@@ -24,6 +24,8 @@ import 'package:myapp/widgets/shimmer_loading.dart';
 ///   * "Active now": the people you talk to who are online right now, as a
 ///     row of pictures — tap one to open the chat. Only there when someone
 ///     is online, so it never takes space to say nothing.
+///   * Delete a chat: swipe it to the left, or press and hold it. It goes
+///     off your list only; the other person keeps theirs.
 ///   * Your chats. Each row folds up into place in 3D the first time it
 ///     scrolls into view, and leans away as it leaves the top (FoldIn).
 ///     Something unread: a bold name, the time in blue and a count. Your
@@ -202,6 +204,26 @@ class _ChatListPageState extends State<ChatListPage>
         .then((_) => _load());
   }
 
+  /// "Delete chat?", and if so, asks the server. True once it is deleted.
+  Future<bool> _deleteChat(Map<String, dynamic> c) => deleteChatWith(
+        context,
+        userId: '${c['userId']}',
+        name: '${c['username'] ?? ''}',
+      );
+
+  void _forget(Map<String, dynamic> c) {
+    setState(() => _conversations
+        .removeWhere((x) => '${x['userId']}' == '${c['userId']}'));
+  }
+
+  /// Press and hold a chat: what can be done with it.
+  void _chatOptions(Map<String, dynamic> c) => showChatOptions(
+        context,
+        userId: '${c['userId']}',
+        name: '${c['username'] ?? ''}',
+        onDeleted: () => _forget(c),
+      );
+
   void _showNewChatPicker() {
     EventTracker.instance.trackTap(
       target: 'chat_new_message_fab',
@@ -350,16 +372,25 @@ class _ChatListPageState extends State<ChatListPage>
                                   key: ValueKey('chat_${c['userId']}'),
                                   order: i,
                                   depth: true,
-                                  child: _ConversationTile(
-                                    conversation: c,
-                                    isOnline:
-                                        _onlineStatus[c['username'] ?? ''] ??
-                                            false,
-                                    typing: _typing
-                                        .containsKey('${c['userId']}'),
-                                    onTap: () => _openChat(
-                                      c['userId'] ?? '',
-                                      c['username'] ?? '',
+                                  // Swipe left to delete the chat.
+                                  child: Dismissible(
+                                    key: ValueKey('swipe_${c['userId']}'),
+                                    direction: DismissDirection.endToStart,
+                                    background: const _DeleteBehind(),
+                                    confirmDismiss: (_) => _deleteChat(c),
+                                    onDismissed: (_) => _forget(c),
+                                    child: _ConversationTile(
+                                      conversation: c,
+                                      isOnline:
+                                          _onlineStatus[c['username'] ?? ''] ??
+                                              false,
+                                      typing: _typing
+                                          .containsKey('${c['userId']}'),
+                                      onTap: () => _openChat(
+                                        c['userId'] ?? '',
+                                        c['username'] ?? '',
+                                      ),
+                                      onLongPress: () => _chatOptions(c),
                                     ),
                                   ),
                                 ),
@@ -415,12 +446,14 @@ class _ConversationTile extends StatelessWidget {
   final bool isOnline;
   final bool typing;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
   const _ConversationTile({
     required this.conversation,
     required this.isOnline,
     required this.typing,
     required this.onTap,
+    this.onLongPress,
   });
 
   @override
@@ -436,6 +469,7 @@ class _ConversationTile extends StatelessWidget {
 
     return Pressable(
       onTap: onTap,
+      onLongPress: onLongPress,
       pressedScale: 0.98,
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
@@ -591,6 +625,35 @@ class _ConversationTile extends StatelessWidget {
     if (diff.inHours < 24) return '${diff.inHours}h';
     if (diff.inDays < 7) return '${diff.inDays}d';
     return '${(diff.inDays / 7).floor()}w';
+  }
+}
+
+/// What shows behind a chat as it is swiped away: red, with a bin.
+class _DeleteBehind extends StatelessWidget {
+  const _DeleteBehind();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+      padding: const EdgeInsets.only(right: 24),
+      alignment: Alignment.centerRight,
+      decoration: BoxDecoration(
+        color: AppTheme.error,
+        borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.delete_outline_rounded, color: Colors.white),
+          SizedBox(width: 6),
+          Text(
+            'Delete',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
   }
 }
 

@@ -79,6 +79,10 @@ bool answerLeads = false;
 /// When true the battle is over and decided.
 bool decided = false;
 
+/// When true the live score takes two seconds to come — far longer than
+/// the moment the app waits for it, as on a slow server.
+bool standingsSlow = false;
+
 /// Lists asked for (likes, votes, shares) and shares sent.
 List<String> peopleAsked = [];
 List<Map<String, dynamic>> sharesSent = [];
@@ -197,6 +201,7 @@ void fakeServer(Map<String, dynamic> first) {
       }
       if (req.url.path.endsWith('/standings')) {
         standingsAsked++;
+        if (standingsSlow) await Future<void>.delayed(const Duration(seconds: 2));
         return http.Response.bytes(
           utf8.encode(
             json.encode({
@@ -309,6 +314,7 @@ void main() {
     SmartReelsFeed.debugForgetAppOpen();
     answerLeads = false;
     decided = false;
+    standingsSlow = false;
   });
 
   group('reporting a video that doesn\'t match the challenge', () {
@@ -646,6 +652,55 @@ void main() {
       await openReel(t, battle());
       expect(find.text('1.3K'), findsOneWidget, reason: "maya's likes");
       expect(find.text('940'), findsNothing);
+      await closeReel(t);
+    });
+
+    // The owner saw battles open on the side behind. The live score is a
+    // second request, waited on for only a moment; on a slow server it
+    // missed and the battle opened on the challenger whoever was winning.
+    // Now the server says who is ahead with the video itself.
+    Future<void> opensOn(WidgetTester t, String likes, String notLikes) async {
+      for (var i = 0; i < 10; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+      expect(find.text(likes), findsOneWidget);
+      expect(find.text(notLikes), findsNothing);
+      // Let the slow score arrive before closing.
+      await t.pump(const Duration(seconds: 2));
+    }
+
+    testWidgets('the server says the answer is ahead: it opens on the '
+        'answer, with no wait for the slow live score', (t) async {
+      answerLeads = true;
+      standingsSlow = true;
+      await openReel(t, battle()..['leader'] = 'answer');
+      await opensOn(t, '940', '1.3K');
+      await closeReel(t);
+    });
+
+    testWidgets('the same from a tap in search or a profile', (t) async {
+      answerLeads = true;
+      standingsSlow = true;
+      final b = battle()..['leader'] = 'answer';
+      await openReel(t, b, seed: ChallengeModel.fromJson(b));
+      await opensOn(t, '940', '1.3K');
+      await closeReel(t);
+    });
+
+    testWidgets('the server says nothing and the score is slow: the '
+        'challenger, as before', (t) async {
+      answerLeads = true;
+      standingsSlow = true;
+      await openReel(t, battle());
+      await opensOn(t, '1.3K', '940');
+      await closeReel(t);
+    });
+
+    testWidgets('the server says the challenger is ahead: the challenger',
+        (t) async {
+      standingsSlow = true;
+      await openReel(t, battle()..['leader'] = 'creator');
+      await opensOn(t, '1.3K', '940');
       await closeReel(t);
     });
   });

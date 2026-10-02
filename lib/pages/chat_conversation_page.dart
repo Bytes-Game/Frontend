@@ -33,6 +33,7 @@ import 'package:myapp/widgets/arena_ui.dart';
 ///   * Swipe a message sideways to reply to it. Hold it for everything
 ///     else: reply, copy, forward, edit (for 15 minutes), delete, unsend.
 ///   * An empty chat offers a few one-tap openers, sent as real messages.
+///   * Tap their name or picture at the top: "Delete chat", for you only.
 class ChatConversationPage extends StatefulWidget {
   final String otherUserId;
   final String otherUsername;
@@ -696,7 +697,18 @@ class _ChatConversationPageState extends State<ChatConversationPage>
           border: const Border(bottom: BorderSide(width: 0.5)),
           child: const SizedBox.expand(),
         ),
-        title: Row(
+        // Tap the person: what can be done with this chat (delete it).
+        title: GestureDetector(
+          key: const ValueKey('chat_person'),
+          behavior: HitTestBehavior.opaque,
+          onTap: () => showChatOptions(
+            context,
+            userId: widget.otherUserId,
+            name: widget.otherUsername,
+            // Deleted: nothing left to show here, back to the chat list.
+            onDeleted: () => Navigator.of(context).maybePop(),
+          ),
+          child: Row(
           children: [
             ArenaAvatar(
               name: widget.otherUsername,
@@ -743,6 +755,7 @@ class _ChatConversationPageState extends State<ChatConversationPage>
               ),
             ),
           ],
+          ),
         ),
         actions: [
           IconBubble(
@@ -991,6 +1004,89 @@ class _ChatConversationPageState extends State<ChatConversationPage>
 }
 
 /// Frosted glass: whatever scrolls behind shows through, blurred.
+/// "Delete chat with [name]?", and if so, asks the server to delete it —
+/// the whole chat, for the person asking only. [name] keeps theirs, and a
+/// new message starts the chat again with just that message.
+///
+/// True once it is deleted. False when they changed their mind, or the
+/// server said no (and then they are told, so it never fails silently).
+Future<bool> deleteChatWith(
+  BuildContext context, {
+  required String userId,
+  required String name,
+}) async {
+  final sure = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text('Delete chat with $name?'),
+      content: Text(
+        'This deletes the whole chat for you. $name will still have it.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          key: const ValueKey('delete_chat_confirm'),
+          style: TextButton.styleFrom(foregroundColor: AppTheme.error),
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Delete'),
+        ),
+      ],
+    ),
+  );
+  if (sure != true) return false;
+  final ok = await ApiService.clearChat(userId);
+  if (!ok && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Couldn't delete the chat. Try again."),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+  return ok;
+}
+
+/// What can be done with a chat: for now, delete it. Shown when you hold a
+/// chat in the list, or tap the person at the top of the chat. Calls
+/// [onDeleted] once the server has deleted it.
+void showChatOptions(
+  BuildContext context, {
+  required String userId,
+  required String name,
+  required VoidCallback onDeleted,
+}) {
+  HapticFeedback.mediumImpact();
+  showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    builder: (ctx) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            key: const ValueKey('delete_chat'),
+            leading:
+                const Icon(Icons.delete_outline_rounded, color: AppTheme.error),
+            title: const Text('Delete chat',
+                style: TextStyle(color: AppTheme.error)),
+            subtitle: const Text('Only for you'),
+            onTap: () async {
+              Navigator.of(ctx).pop();
+              if (await deleteChatWith(context, userId: userId, name: name) &&
+                  context.mounted) {
+                onDeleted();
+              }
+            },
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class _Frost extends StatelessWidget {
   final Widget child;
   final Border border;
