@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -82,6 +83,15 @@ class _ProfilePageState extends State<ProfilePage>
   /// one from what the user model already carries.
   BattleRecord? _record;
 
+  /// This person as the server has them now — someone else's profile is
+  /// opened from whatever copy the app had, which may be hours old.
+  UserModel? _fresh;
+
+  /// Whether you followed them when their follower count was read. Following
+  /// or unfollowing since moves the number by one, at once, instead of it
+  /// staying put until the page was opened again.
+  bool _followedWhenRead = false;
+
   // ── Tabs ───────────────────────────────────────────────────────────
   late final TabController _tabs;
 
@@ -125,6 +135,10 @@ class _ProfilePageState extends State<ProfilePage>
     if (isOwn) {
       // ignore: discarded_futures
       dp.refreshUser();
+    } else {
+      _followedWhenRead = dp.following.contains(widget.user.id);
+      // ignore: discarded_futures
+      _fetchFreshUser();
     }
 
     _fetchMyChallenges();
@@ -502,6 +516,23 @@ class _ProfilePageState extends State<ProfilePage>
     return '$n';
   }
 
+  /// Someone else's profile: their follower and following numbers as the
+  /// server has them now.
+  Future<void> _fetchFreshUser() async {
+    final u = await ApiService.getUserByUsername(widget.user.username);
+    if (!mounted) return;
+    if (u == null || u.id != widget.user.id) {
+      debugPrint('[profile] could not read ${widget.user.username} again; '
+          'showing the numbers the app already had');
+      return;
+    }
+    final dp = Provider.of<DataProvider>(context, listen: false);
+    setState(() {
+      _fresh = u;
+      _followedWhenRead = dp.following.contains(u.id);
+    });
+  }
+
   // ── Build ──────────────────────────────────────────────────────────
 
   @override
@@ -562,6 +593,20 @@ class _ProfilePageState extends State<ProfilePage>
                 isOwn: isOwn,
                 isFollowing: isFollowing,
                 postsCount: _myChallenges.length,
+                // Yours: the people you follow right now. Theirs: the
+                // server's count, moved by one if you have followed or
+                // unfollowed them since it was read.
+                followers: isOwn
+                    ? widget.user.followersCount
+                    : math.max(
+                        0,
+                        (_fresh ?? widget.user).followersCount +
+                            (isFollowing ? 1 : 0) -
+                            (_followedWhenRead ? 1 : 0),
+                      ),
+                following: isOwn
+                    ? dp.following.length
+                    : (_fresh ?? widget.user).followingCount,
                 onTapFollowers: _openFollowers,
                 onTapFollowing: _openFollowing,
                 onFollowToggle: () {
@@ -952,6 +997,8 @@ class _ProfileHeader extends StatelessWidget {
   final bool isOwn;
   final bool isFollowing;
   final int postsCount;
+  final int followers;
+  final int following;
   final VoidCallback onTapFollowers;
   final VoidCallback onTapFollowing;
   final VoidCallback onFollowToggle;
@@ -964,6 +1011,8 @@ class _ProfileHeader extends StatelessWidget {
     required this.isOwn,
     required this.isFollowing,
     required this.postsCount,
+    required this.followers,
+    required this.following,
     required this.onTapFollowers,
     required this.onTapFollowing,
     required this.onFollowToggle,
@@ -993,12 +1042,12 @@ class _ProfileHeader extends StatelessWidget {
             children: [
               _StatPill(value: compact(postsCount), label: 'Videos'),
               _StatPill(
-                value: compact(user.followersCount),
+                value: compact(followers),
                 label: 'Followers',
                 onTap: onTapFollowers,
               ),
               _StatPill(
-                value: compact(user.followingCount),
+                value: compact(following),
                 label: 'Following',
                 onTap: onTapFollowing,
               ),
@@ -1043,6 +1092,7 @@ class _StatPill extends StatelessWidget {
       children: [
         Text(
           value,
+          key: ValueKey('stat_$label'),
           style: TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.w700,

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -655,10 +657,16 @@ class ChallengeCommentSheet extends StatefulWidget {
   /// with the conversation underneath, as in any app people know.
   final Widget? header;
 
+  /// Told how many comments the video has: once they are read, and again
+  /// each time one is posted. The number under the video's comment button
+  /// listens, so posting a comment moves it — it used to stay where it was.
+  final ValueChanged<int>? onCount;
+
   const ChallengeCommentSheet({
     super.key,
     required this.challengeId,
     this.header,
+    this.onCount,
   });
 
   @override
@@ -681,6 +689,10 @@ class _ChallengeCommentSheetState extends State<ChallengeCommentSheet> {
   bool _loading = true;
   bool _sending = false;
 
+  /// Whether the list on screen is the server's whole list, so its length
+  /// is the real count.
+  bool _readOk = false;
+
   @override
   void initState() {
     super.initState();
@@ -696,12 +708,15 @@ class _ChallengeCommentSheetState extends State<ChallengeCommentSheet> {
 
   Future<void> _loadComments() async {
     final comments = await ApiService.getChallengeComments(widget.challengeId);
-    if (mounted) {
-      setState(() {
-        _comments = comments;
-        _loading = false;
-      });
-    }
+    if (!mounted) return;
+    setState(() {
+      _comments = comments ?? [];
+      _readOk = comments != null;
+      _loading = false;
+    });
+    // Only a real answer sets the number: one that could not be read would
+    // say "0" about a video people have commented on.
+    if (comments != null) widget.onCount?.call(comments.length);
   }
 
   Future<void> _addComment() async {
@@ -730,6 +745,15 @@ class _ChallengeCommentSheetState extends State<ChallengeCommentSheet> {
     );
     if (!mounted) return;
     setState(() => _sending = false);
+    if (saved != null) {
+      // The list was read, so its length is the count; if it was not, read
+      // it now rather than report a number built on a list we never had.
+      if (_readOk) {
+        widget.onCount?.call(_comments.length);
+      } else {
+        unawaited(_loadComments());
+      }
+    }
     if (saved == null) {
       setState(() => _comments.remove(mine));
       _ctrl.text = text;

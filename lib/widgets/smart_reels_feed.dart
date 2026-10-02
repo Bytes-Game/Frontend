@@ -1125,7 +1125,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
             watchTime: watched,
             completed: totalMs > 0 && watched >= (totalMs * 0.9),
             sides: details,
-          );
+          ).then((n) => _showViews(item, n));
         }
         if (userId.isNotEmpty && firstTime) {
           // Set.add returns true only when the id is brand-new for
@@ -1145,22 +1145,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
             watchTime: watched,
             completed: totalMs > 0 && watched >= (totalMs * 0.9),
             sides: details,
-          );
-          // Optimistic local bump so the right-rail number ticks
-          // immediately. Cap to once-per-session-per-item by piggybacking
-          // on the same setState — re-watches in the same session won't
-          // increment because we wipe _currentItemStart on every page
-          // change and only fire when watched>=300ms.
-          //
-          // Not while the feed is closing: this runs from dispose too (the
-          // save on the way out), and a screen being taken down cannot be
-          // redrawn. Every tab switch did that, and a debug build stopped
-          // on it.
-          if (mounted && !_leaving) {
-            setState(() => item.views = item.views + 1);
-          } else {
-            item.views = item.views + 1;
-          }
+          ).then((n) => _showViews(item, n));
         }
       }
     }
@@ -1342,8 +1327,26 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                 'opponentMs': onAnswer ? 1500 : 0,
               }
             : null,
-      );
+      ).then((n) => _showViews(item, n));
     });
+  }
+
+  /// The views under a video, as the server now counts them.
+  ///
+  /// The app used to add one on its own, and only when a video was left
+  /// before this timer fired — under 1.5 seconds, which the server does not
+  /// count — while a video actually watched never moved. The server's own
+  /// total is right whichever way it went: once a day per person, after
+  /// 1.5 seconds on screen.
+  void _showViews(_ReelItem item, int? views) {
+    if (views == null || views == item.views) return;
+    // Not while the feed is closing: a screen being taken down cannot be
+    // redrawn, and this can land after it has gone.
+    if (mounted && !_leaving) {
+      setState(() => item.views = views);
+    } else {
+      item.views = views;
+    }
   }
 
   /// Fetch (or build) the player state for a reel index. Returns null when
@@ -2227,6 +2230,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                 ChallengeDetailPage(challengeId: item.id, acceptWith: how),
           ),
         );
+        unawaited(_refreshCounts(item));
         resume();
       },
       onDismiss: resume,
@@ -2258,9 +2262,52 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
             if (back == ChallengeDetailPage.backToAnswer) {
               item.showAnswer.value++;
             }
+            // Anything done there — a like, a vote, a comment, a save —
+            // shows here too, instead of the numbers from before.
+            unawaited(_refreshCounts(item));
           });
     }
     // Posts already shown full-bleed — no separate detail page needed for now.
+  }
+
+  /// The numbers under a video, read again from the server. Used after the
+  /// battle page, where any of them may have moved: the video used to come
+  /// back showing the likes, votes and comments from before it was opened.
+  Future<void> _refreshCounts(_ReelItem item) async {
+    if (item.type != 'challenge' || item.id.isEmpty) return;
+    final got = await ApiService.getChallengeDetail(item.id);
+    final c = got?['challenge'];
+    if (c is! ChallengeModel) {
+      debugPrint('[reel] could not read the numbers on ${item.id} again; '
+          'it keeps the ones it has');
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      item
+        ..likes = c.likes
+        ..isLiked = c.isLiked
+        ..comments = c.commentCount
+        ..voteCount = c.voteCount
+        ..hasVoted = c.hasVoted
+        ..votedFor = c.votedFor
+        ..shareCount = c.shareCount
+        ..saveCount = c.saveCount
+        ..isSaved = c.isSaved
+        ..views = c.views;
+      // The answer's likes, if it is still the answer this reel shows.
+      if (c.topResponseId.isNotEmpty &&
+          c.topResponseId == item.opponentResponseId) {
+        item
+          ..opponentLikes = c.topResponseLikes
+          ..opponentLiked = c.topResponseLiked;
+      }
+    });
+    // The live score on a battle, read again too: a vote moves it.
+    if (item.isBattle) {
+      await _BattleScores.fetch(item.id, force: true);
+      if (mounted) setState(() {});
+    }
   }
 
   /// Open the comment sheet for the reel at [index]. Wired into the
@@ -2289,6 +2336,13 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       // it was opened from the caption or the comment button.
       builder: (_) => ChallengeCommentSheet(
         challengeId: item.id,
+        // The number under the comment button follows the sheet: the real
+        // count once the comments are read, and one more for each posted.
+        onCount: (n) {
+          if (mounted && item.comments != n) {
+            setState(() => item.comments = n);
+          }
+        },
         header: CommentSheetCaption(
           username: item.creatorUsername,
           caption: item.fullCaption,

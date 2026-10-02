@@ -1207,7 +1207,11 @@ class ApiService {
   /// [sides], on a battle, says how long each video was on screen —
   /// {creatorMs, opponentMs, responseId} — so the view counts for the
   /// videos actually watched, not the whole card.
-  static Future<bool> recordWatchEvent({
+  ///
+  /// Answers with the video's views as they now stand (the server counts a
+  /// person once a day, and only after 1.5 seconds on screen), or null when
+  /// the server did not take it or did not say.
+  static Future<int?> recordWatchEvent({
     required String userId,
     required String contentId,
     required String contentType,
@@ -1228,9 +1232,16 @@ class ApiService {
           ...?sides,
         }),
       );
-      return res.statusCode == 201;
-    } catch (_) {
-      return false;
+      if (res.statusCode != 201) {
+        debugPrint('[watch] the server did not take a view of $contentId: '
+            '${res.statusCode}');
+        return null;
+      }
+      final views = (json.decode(res.body) as Map<String, dynamic>)['views'];
+      return views is num ? views.toInt() : null;
+    } catch (e) {
+      debugPrint('[watch] could not send a view of $contentId: $e');
+      return null;
     }
   }
 
@@ -1487,7 +1498,11 @@ class ApiService {
   // —— Challenge Comments ——————————————————————————————————————
 
   /// GET /api/v1/challenges/{id}/comments
-  static Future<List<Map<String, dynamic>>> getChallengeComments(
+  ///
+  /// Null when they could not be read — not an empty list, which would look
+  /// exactly like a video nobody has commented on, and set its comment count
+  /// to 0.
+  static Future<List<Map<String, dynamic>>?> getChallengeComments(
       String challengeId) async {
     try {
       final res = await _authHttp.get(
@@ -1496,9 +1511,12 @@ class ApiService {
       if (res.statusCode == 200) {
         return (json.decode(res.body) as List).cast<Map<String, dynamic>>();
       }
-      return [];
-    } catch (_) {
-      return [];
+      debugPrint('[comments] could not read the comments on $challengeId: '
+          '${res.statusCode}');
+      return null;
+    } catch (e) {
+      debugPrint('[comments] could not read the comments on $challengeId: $e');
+      return null;
     }
   }
 
