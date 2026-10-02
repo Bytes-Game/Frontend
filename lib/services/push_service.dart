@@ -174,12 +174,33 @@ abstract class PushPlatform {
 /// Google's push service (Firebase Cloud Messaging), for Android and
 /// iPhone.
 class FirebasePushPlatform implements PushPlatform {
-  // Passed in at build time: --dart-define-from-file=firebase_push.json
-  static const _apiKey = String.fromEnvironment('FIREBASE_API_KEY');
-  static const _appId = String.fromEnvironment('FIREBASE_APP_ID');
+  // This app's Firebase project ("battle-38226"), built in so every build
+  // gets phone notifications with no extra steps. These are not secrets:
+  // every copy of the app carries them, the way every Android app carries
+  // its google-services.json. The secret half (the service-account key)
+  // lives only on the server.
+  //
+  // A different project can still be used for one build:
+  // --dart-define-from-file=firebase_push.json (see README).
+  static const _apiKey = String.fromEnvironment('FIREBASE_API_KEY',
+      defaultValue: 'AIzaSyBGU-hjM5x0rCzbsFbmVs7QmaV7wqN7R5M');
+  static const _appId = String.fromEnvironment('FIREBASE_APP_ID',
+      defaultValue: '1:966321160135:android:3b2f0cb1df4f13957463e2');
   static const _iosAppId = String.fromEnvironment('FIREBASE_IOS_APP_ID');
-  static const _senderId = String.fromEnvironment('FIREBASE_SENDER_ID');
-  static const _projectId = String.fromEnvironment('FIREBASE_PROJECT_ID');
+  static const _senderId = String.fromEnvironment('FIREBASE_SENDER_ID',
+      defaultValue: '966321160135');
+  static const _projectId = String.fromEnvironment('FIREBASE_PROJECT_ID',
+      defaultValue: 'battle-38226');
+
+  /// The values in use, for the check that they belong together.
+  @visibleForTesting
+  static ({String apiKey, String appId, String senderId, String projectId})
+      get debugValues => (
+            apiKey: _apiKey,
+            appId: _appId,
+            senderId: _senderId,
+            projectId: _projectId,
+          );
 
   /// Whether this build was given the Firebase values.
   static bool get configured =>

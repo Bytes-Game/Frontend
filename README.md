@@ -67,25 +67,23 @@ which is what you want locally.
 New messages and missed calls arrive as notifications on the phone — on the
 lock screen, outside the app — and a tap opens the chat. They never go to
 the app's notifications page. They come through Google's push service,
-Firebase, which needs setting up once:
+Firebase.
 
-1. In the [Firebase console](https://console.firebase.google.com) make a
-   project, then add an Android app with the package name `com.example.devf`.
-2. From that app's settings copy four values into a file called
-   `firebase_push.json` next to `pubspec.yaml` (see
-   `firebase_push.example.json`):
-   `FIREBASE_API_KEY`, `FIREBASE_APP_ID`, `FIREBASE_SENDER_ID` (the
-   "project number") and `FIREBASE_PROJECT_ID`.
-3. Build with it: `tools\run_profile.bat` passes it in on its own; by hand,
-   `flutter run --dart-define-from-file=firebase_push.json`.
-4. On the server (Render), set `NOTIFICATION_SENDER=fcm` and
-   `FCM_SERVICE_ACCOUNT_JSON` to a service-account key from the same project
-   (Project settings → Service accounts → Generate new private key).
+It is set up: the app has the Firebase project `battle-38226` built in
+(`lib/services/push_service.dart`), so every build gets notifications with
+no extra steps, and the server has `NOTIFICATION_SENDER=fcm` and the
+project's private key in `FCM_SERVICE_ACCOUNT_JSON` on Render. The values
+built into the app are not secret; the private key must only ever be on the
+server.
 
-Without the file the app works exactly as before, with no phone
-notifications, and says so once in its log. For iPhones, also add an iOS
-app in the same project (`FIREBASE_IOS_APP_ID`), upload an APNs key in
-Firebase, and turn on the Push Notifications capability in Xcode.
+To try a different Firebase project for one build, put its four values in
+`firebase_push.json` next to `pubspec.yaml` (see
+`firebase_push.example.json`); `tools\run_profile.bat` passes it in on its
+own, or use `flutter run --dart-define-from-file=firebase_push.json`.
+
+iPhones need more: an iOS app in the same project (`FIREBASE_IOS_APP_ID`),
+an APNs key uploaded to Firebase, and the Push Notifications capability in
+Xcode.
 
 ### Checks
 
