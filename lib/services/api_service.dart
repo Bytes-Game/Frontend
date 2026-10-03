@@ -1344,10 +1344,24 @@ class ApiService {
       bool refresh = false,
       bool markShown = false,
       }) async {
+    final maps = await getExploreChallengeMaps(userId,
+        page: page, limit: limit, refresh: refresh, markShown: markShown);
+    return [for (final m in maps) ChallengeModel.fromJson(m)];
+  }
+
+  /// [getExploreChallenges], as the server sent each video — so Search can
+  /// write its grid down on the phone exactly as it came.
+  static Future<List<Map<String, dynamic>>> getExploreChallengeMaps(
+      String userId, {
+      int page = 1,
+      int limit = 30,
+      bool refresh = false,
+      bool markShown = false,
+      }) async {
     final body = await getExploreFeed(
       userId, page: page, limit: limit, refresh: refresh, markShown: markShown);
     final items = (body['items'] as List? ?? []);
-    final out = <ChallengeModel>[];
+    final out = <Map<String, dynamic>>[];
     for (final raw in items) {
       if (raw is! Map<String, dynamic>) continue;
       // HomeFeedItem.type == "challenge" carries a populated .challenge.
@@ -1358,7 +1372,7 @@ class ApiService {
       // Defensive: don't surface a tile that has no playable video, since
       // the whole point of this surface is preview-on-scroll.
       if ((ch['videoUrl'] ?? '').toString().isEmpty) continue;
-      out.add(ChallengeModel.fromJson(ch));
+      out.add(ch);
     }
     return out;
   }
@@ -1830,9 +1844,13 @@ class ApiService {
       if (res.statusCode == 200) {
         return json.decode(res.body) as Map<String, dynamic>;
       }
-      return _emptySearchResponse();
-    } catch (_) {
-      return _emptySearchResponse();
+      // Said, not hidden: a search that failed looks exactly like a search
+      // that found nothing. Marked so the page does not remember it.
+      debugPrint('[search] "$query": the server answered ${res.statusCode}');
+      return {..._emptySearchResponse(), '_failed': true};
+    } catch (e) {
+      debugPrint('[search] "$query" did not reach the server: $e');
+      return {..._emptySearchResponse(), '_failed': true};
     }
   }
 

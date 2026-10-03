@@ -131,7 +131,7 @@ void main() {
     });
 
     test('flipping back re-opens the challenger instead of giving up', () {
-      final body = bodyOf(src, 'Future<void> _startSide(bool show) async');
+      final body = bodyOf(src, 'Future<void> _startSide(');
       final ask = body.indexOf('widget.onNeedPlayer()');
       final bail = body.indexOf('if (incoming == null) return;');
       expect(ask, greaterThan(-1),
