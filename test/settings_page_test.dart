@@ -18,6 +18,7 @@ import 'package:myapp/pages/free_up_space_page.dart';
 import 'package:myapp/pages/notification_settings_page.dart';
 import 'package:myapp/pages/preferences_pages.dart';
 import 'package:myapp/pages/privacy_page.dart';
+import 'package:myapp/widgets/settings_kit.dart';
 import 'package:myapp/pages/profile_page.dart';
 import 'package:myapp/pages/settings_page.dart';
 import 'package:myapp/pages/static_content_pages.dart';
@@ -223,6 +224,78 @@ void main() {
       // Saving refreshes the signed-in user, which restarts the app's
       // analytics timer; stop it so the test ends clean.
       EventTracker.instance.dispose();
+    });
+
+    // A private account takes messages only from people it follows, so
+    // "Everyone" no longer applies: it is greyed out, and saved as off.
+    group('a private account and "Everyone"', () {
+      SettingsChoiceTile tile(WidgetTester t, String value) =>
+          t.widget<SettingsChoiceTile>(
+              find.byKey(ValueKey('privacy_messages_$value')));
+      double tick(WidgetTester t, String value) => t
+          .widget<AnimatedOpacity>(find.descendant(
+              of: find.byKey(ValueKey('privacy_messages_$value')),
+              matching: find.byType(AnimatedOpacity)))
+          .opacity;
+
+      testWidgets('going private turns "Everyone" off and greys it out',
+          (t) async {
+        final dp = await pump(t, const PrivacyPage(),
+            user: me(settings: {'theme': 'dark', 'messages': 'everyone'}));
+        expect(tile(t, 'everyone').enabled, isTrue);
+        expect(tick(t, 'everyone'), 1);
+
+        await t.tap(find.byKey(const ValueKey('privacy_private')));
+        await settle(t);
+        // One save: private, and messages from people you follow.
+        expect(patches.single['visibility'], 'friends');
+        expect(patches.single['settings']['messages'], 'following');
+        expect(dp.user!.settings['messages'], 'following');
+        expect(tile(t, 'everyone').enabled, isFalse);
+        expect(tick(t, 'everyone'), 0);
+        expect(tick(t, 'following'), 1);
+        expect(find.text('Off while your account is private'), findsOneWidget);
+
+        // Tapping it does nothing.
+        await t.tap(find.byKey(const ValueKey('privacy_messages_everyone')));
+        await settle(t);
+        expect(patches, hasLength(1));
+        EventTracker.instance.dispose();
+      });
+
+      testWidgets('an account made private before shows "Only people you '
+          'follow", not a tick on a greyed-out "Everyone"', (t) async {
+        await pump(t, const PrivacyPage(),
+            user: me(visibility: 'friends', settings: {'messages': 'everyone'}));
+        expect(tile(t, 'everyone').enabled, isFalse);
+        expect(tick(t, 'everyone'), 0);
+        expect(tick(t, 'following'), 1);
+      });
+
+      testWidgets('going public again lets "Everyone" be picked', (t) async {
+        final dp = await pump(t, const PrivacyPage(),
+            user: me(visibility: 'friends', settings: {'messages': 'following'}));
+        await t.tap(find.byKey(const ValueKey('privacy_private')));
+        await settle(t);
+        expect(patches.single['visibility'], 'public');
+        expect(tile(t, 'everyone').enabled, isTrue);
+        await t.tap(find.byKey(const ValueKey('privacy_messages_everyone')));
+        await settle(t);
+        expect(patches.last['settings']['messages'], 'everyone');
+        expect(dp.user!.settings['messages'], 'everyone');
+        EventTracker.instance.dispose();
+      });
+
+      testWidgets('the server says no to going private: both flip back',
+          (t) async {
+        await pump(t, const PrivacyPage(),
+            user: me(settings: {'theme': 'dark', 'messages': 'everyone'}));
+        refuse = true;
+        await t.tap(find.byKey(const ValueKey('privacy_private')));
+        await settle(t);
+        expect(tile(t, 'everyone').enabled, isTrue);
+        expect(tick(t, 'everyone'), 1);
+      });
     });
 
     testWidgets('messages from people you follow only: saved, other settings '

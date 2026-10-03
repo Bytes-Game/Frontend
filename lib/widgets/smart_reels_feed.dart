@@ -30,6 +30,7 @@ import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/widgets/report_video.dart';
+import 'package:myapp/widgets/follow_flow.dart';
 import 'package:myapp/widgets/feed_action_bar.dart'
     show
         ChallengeCommentSheet,
@@ -172,6 +173,10 @@ class SmartReelsFeed extends StatefulWidget {
   /// screen opened on top of another page rather than shown as a tab.
   final bool showBack;
 
+  /// Fires when this feed should refresh: Home's tab tapped while Home is
+  /// already showing, the way TikTok and Instagram do it.
+  final Listenable? refreshRequests;
+
   /// Feeds that have had their fresh first page since the app opened.
   ///
   /// ════════════════════════════════════════════════════════════════════════
@@ -278,6 +283,7 @@ class SmartReelsFeed extends StatefulWidget {
     this.playlist,
     this.startIndex = 0,
     this.showBack = false,
+    this.refreshRequests,
   });
 
   @override
@@ -353,12 +359,28 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   // overscroll, so dragging down on the first page generates no scroll
   // notification past the edge and the indicator's gesture-arena threshold
   // is never crossed. We do it by hand: a Listener at the top of the
-  // Stack watches raw pointer events; if a downward drag starts in the
-  // top ~120px of the screen WHILE we're on page 0, accumulate the delta
-  // and trigger a refresh once it crosses _refreshTriggerPx.
-  static const double _topPullZoneHeight = 120;
+  // Stack watches raw pointer events; a downward drag ANYWHERE on the
+  // screen while we're on the first video is a pull, and it refreshes once
+  // it crosses _refreshTriggerPx — the way TikTok does it.
+  //
+  // It used to have to start in the top 120 pixels, which is under the
+  // feed's own tab strip: a pull had to begin on a thin band most people
+  // never aim for.
   static const double _refreshTriggerPx = 80;
+
+  /// How far a finger moves before it counts as going one way or another.
+  /// Below this it could still be a tap.
+  static const double _pullDecidePx = 10;
+
+  /// How much more down than sideways a drag has to be to be a pull. A
+  /// battle turns to its other side with a sideways drag, and a slightly
+  /// downhill sideways drag must still do that, not refresh.
+  static const double _pullSteepness = 1.2;
+
   double? _pullStartY; // Y of the pointer-down event that armed a pull.
+  double? _pullStartX;
+  int? _pullPointer; // the finger being watched; a second one is ignored.
+  bool _pullDecided = false; // the drag has been judged to be a pull.
   double _pullDistance = 0; // accumulated downward distance, reset on lift.
   bool _isRefreshing = false;
 
@@ -451,6 +473,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    widget.refreshRequests?.addListener(_onRefreshRequested);
     // Seed the tick at the current value so we don't trigger an immediate
     // refresh on the very first build (the initial _loadInitialPage call
     // below is already pulling page 1).
@@ -524,8 +547,24 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   bool _leaving = false;
 
   @override
+  void didUpdateWidget(covariant SmartReelsFeed old) {
+    super.didUpdateWidget(old);
+    if (old.refreshRequests != widget.refreshRequests) {
+      old.refreshRequests?.removeListener(_onRefreshRequested);
+      widget.refreshRequests?.addListener(_onRefreshRequested);
+    }
+  }
+
+  /// Home tapped again: back to the top with a fresh page.
+  void _onRefreshRequested() {
+    if (!mounted || _isRefreshing) return;
+    _doManualRefresh(why: 'home_tab_tap');
+  }
+
+  @override
   void dispose() {
     _leaving = true;
+    widget.refreshRequests?.removeListener(_onRefreshRequested);
     // Keep this feed's place for when Home comes back, and its next videos
     // for when the app next opens.
     if (_keepable && _items.isNotEmpty) {
@@ -2283,7 +2322,10 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => ChallengeShareSheet(challenge: synthetic),
+      builder: (_) => ChallengeShareSheet(
+        challenge: synthetic,
+        responseId: onAnswer ? item.opponentResponseId : '',
+      ),
     );
   }
 
@@ -2704,17 +2746,24 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   void _handlePointerDown(PointerDownEvent e) {
     if (_isRefreshing) return;
     if (_currentIndex != 0) return;
-    if (e.localPosition.dy > _topPullZoneHeight) return;
+    // One finger. A second one landing (a pinch, a palm) is not a pull.
+    if (_pullPointer != null) {
+      _resetPull();
+      return;
+    }
     // Only arm if the PageView itself is at the very top — otherwise a
     // user who has scrolled mid-feed and dragged briefly to land back at
     // page 0 would falsely trigger a refresh.
     if (_pageController.hasClients && _pageController.offset > 1) return;
+    _pullPointer = e.pointer;
     _pullStartY = e.localPosition.dy;
+    _pullStartX = e.localPosition.dx;
+    _pullDecided = false;
     _pullDistance = 0;
   }
 
   void _handlePointerMove(PointerMoveEvent e) {
-    if (_pullStartY == null) return;
+    if (_pullStartY == null || e.pointer != _pullPointer) return;
     if (_currentIndex != 0) {
       _resetPull();
       return;
@@ -2726,6 +2775,16 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       return;
     }
     final dy = e.localPosition.dy - _pullStartY!;
+    if (!_pullDecided) {
+      final dx = e.localPosition.dx - _pullStartX!;
+      if (dy.abs() < _pullDecidePx && dx.abs() < _pullDecidePx) return;
+      // Sideways (turning a battle) or upwards (the next video): not ours.
+      if (dy <= 0 || dy < dx.abs() * _pullSteepness) {
+        _resetPull();
+        return;
+      }
+      _pullDecided = true;
+    }
     // Ignore upward drags — those should pass through to PageView so the
     // user can swipe up to the next reel without first satisfying our
     // gesture state machine.
@@ -2742,34 +2801,41 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   }
 
   void _handlePointerUp(PointerUpEvent e) {
-    _resolvePull();
+    if (e.pointer == _pullPointer) _resolvePull();
   }
 
   void _handlePointerCancel(PointerCancelEvent e) {
-    _resolvePull();
+    if (e.pointer == _pullPointer) _resolvePull();
   }
 
   void _resolvePull() {
-    if (_pullStartY == null) return;
-    final fired = _pullDistance >= _refreshTriggerPx;
+    if (_pullStartY == null) {
+      _pullPointer = null;
+      return;
+    }
+    final fired = _pullDecided && _pullDistance >= _refreshTriggerPx;
     _pullStartY = null;
+    _pullPointer = null;
+    _pullDecided = false;
     if (fired && !_isRefreshing) {
       _doManualRefresh();
-    } else {
+    } else if (_pullDistance != 0) {
       setState(() => _pullDistance = 0);
     }
   }
 
   void _resetPull() {
-    if (_pullStartY == null && _pullDistance == 0) return;
+    // Forget the finger too: it is not a pull, whatever it does next.
     _pullStartY = null;
+    _pullDecided = false;
+    if (_pullDistance == 0) return;
     setState(() => _pullDistance = 0);
   }
 
-  Future<void> _doManualRefresh() async {
+  Future<void> _doManualRefresh({String why = 'pull'}) async {
     if (_isRefreshing) return;
     EventTracker.instance.trackTap(
-      target: 'home_reels_pull_refresh',
+      target: why == 'pull' ? 'home_reels_pull_refresh' : 'home_reels_$why',
       pageName: 'home_page',
       params: {'feedKind': widget.kind.name},
     );
@@ -2807,13 +2873,34 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
         if (mounted && !_isRefreshing) _doManualRefresh();
       });
     }
+    final topInset = MediaQuery.of(context).padding.top;
+    // Below Home's tab strip, which sits over the top of the video.
+    final badgeTop = topInset + 44;
     if (_loadingFirstPage) {
-      return const _FullScreenLoader();
+      // A refresh keeps saying so while the new videos come.
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          const _FullScreenLoader(),
+          if (_isRefreshing)
+            Positioned(
+              top: badgeTop,
+              left: 0,
+              right: 0,
+              child: const IgnorePointer(
+                child: _PullRefreshBadge(
+                  distance: _refreshTriggerPx,
+                  triggerPx: _refreshTriggerPx,
+                  isRefreshing: true,
+                ),
+              ),
+            ),
+        ],
+      );
     }
     if (_items.isEmpty) {
       return _EmptyState(onRetry: _loadInitialPage, errorMessage: _lastError);
     }
-    final topInset = MediaQuery.of(context).padding.top;
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -2826,80 +2913,93 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
           onPointerMove: _handlePointerMove,
           onPointerUp: _handlePointerUp,
           onPointerCancel: _handlePointerCancel,
-          child: ScrollConfiguration(
-            behavior: ScrollConfiguration.of(context).copyWith(
-              dragDevices: {
-                PointerDeviceKind.touch,
-                PointerDeviceKind.mouse,
-                PointerDeviceKind.stylus,
-                PointerDeviceKind.trackpad,
+          // The video follows the finger down a little, TikTok style, so a
+          // pull feels like it is moving something.
+          child: Transform.translate(
+            offset: Offset(0, _pullDistance * 0.5),
+            // The page's own stretch at the top would fight that: the pull
+            // is the feedback there. The bottom edge keeps it.
+            child: NotificationListener<OverscrollIndicatorNotification>(
+              onNotification: (n) {
+                if (n.leading && _currentIndex == 0) n.disallowIndicator();
+                return false;
               },
-            ),
-            child: PageView.builder(
-              controller: _pageController,
-              scrollDirection: Axis.vertical,
-              // PageScrollPhysics is the right choice for snap-feel even
-              // though it doesn't power refresh — refresh is handled by
-              // the Listener above this widget.
-              physics: const PageScrollPhysics(),
-              onPageChanged: _onPageChanged,
-              itemCount: _items.length + (_hasMore ? 1 : 0),
-              itemBuilder: (context, index) {
-                // Tail spinner slot while the next page loads.
-                if (index >= _items.length) return const _FullScreenLoader();
-                final entry = _items[index];
-                // Polymorphic dispatch: video tiles for reels, a static card
-                // tile for the suggested-accounts entries the backend
-                // interleaves into the feed.
-                if (entry is _AccountsCard) {
-                  return _AccountsCardTile(card: entry);
-                }
-                final reel = entry as _ReelItem;
-                // A reel with no video at all is not a tile — there is
-                // nothing to play and no controls worth showing.
-                if (reel.videoUrl.isEmpty) {
-                  return _Placeholder(item: reel);
-                }
-                // Null here means "no player yet", not "no video": this
-                // reel is off screen and read-ahead has not opened it.
-                // _ReelTile renders its poster and the rest of the reel
-                // furniture, and picks up the video on the rebuild that
-                // follows this reel becoming current. See the note on
-                // _getPlayerState.
-                final state = _getPlayerState(index);
-                final me = context.read<DataProvider>().user;
-                final currentUserId = me?.id ?? '';
-                final isOwner =
-                    reel.type == 'challenge' &&
-                    reel.creatorId.isNotEmpty &&
-                    currentUserId.isNotEmpty &&
-                    reel.creatorId == currentUserId;
-                final canReport =
-                    reel.type == 'challenge' &&
-                    reel.id.isNotEmpty &&
-                    currentUserId.isNotEmpty;
-                return _ReelTile(
-                  item: reel,
-                  state: state,
-                  isActive: index == _currentIndex,
-                  isOwner: isOwner,
-                  showBack: widget.showBack,
-                  onLike: () => _onLike(index),
-                  onComment: () => _onComment(index),
-                  onShare: () => _onShare(index),
-                  onSave: () => _onSave(index),
-                  onVote: () => _onVote(index),
-                  onOpenDetail: () => _onOpenDetail(index),
-                  onAccept: (anchor) => _onAccept(index, anchor),
-                  onDelete: () => _onDelete(index),
-                  onReport: canReport ? () => _onReport(index) : null,
-                  answerIsMine:
-                      reel.opponentUsername.isNotEmpty &&
-                      reel.opponentUsername == me?.username,
-                  onNeedPlayer: () => _reopenPlayer(index),
-                  playbackOwner: this,
-                );
-              },
+              child: ScrollConfiguration(
+                behavior: ScrollConfiguration.of(context).copyWith(
+                  dragDevices: {
+                    PointerDeviceKind.touch,
+                    PointerDeviceKind.mouse,
+                    PointerDeviceKind.stylus,
+                    PointerDeviceKind.trackpad,
+                  },
+                ),
+                child: PageView.builder(
+                  controller: _pageController,
+                  scrollDirection: Axis.vertical,
+                  // PageScrollPhysics is the right choice for snap-feel even
+                  // though it doesn't power refresh — refresh is handled by
+                  // the Listener above this widget.
+                  physics: const PageScrollPhysics(),
+                  onPageChanged: _onPageChanged,
+                  itemCount: _items.length + (_hasMore ? 1 : 0),
+                  itemBuilder: (context, index) {
+                    // Tail spinner slot while the next page loads.
+                    if (index >= _items.length) return const _FullScreenLoader();
+                    final entry = _items[index];
+                    // Polymorphic dispatch: video tiles for reels, a static card
+                    // tile for the suggested-accounts entries the backend
+                    // interleaves into the feed.
+                    if (entry is _AccountsCard) {
+                      return _AccountsCardTile(card: entry);
+                    }
+                    final reel = entry as _ReelItem;
+                    // A reel with no video at all is not a tile — there is
+                    // nothing to play and no controls worth showing.
+                    if (reel.videoUrl.isEmpty) {
+                      return _Placeholder(item: reel);
+                    }
+                    // Null here means "no player yet", not "no video": this
+                    // reel is off screen and read-ahead has not opened it.
+                    // _ReelTile renders its poster and the rest of the reel
+                    // furniture, and picks up the video on the rebuild that
+                    // follows this reel becoming current. See the note on
+                    // _getPlayerState.
+                    final state = _getPlayerState(index);
+                    final me = context.read<DataProvider>().user;
+                    final currentUserId = me?.id ?? '';
+                    final isOwner =
+                        reel.type == 'challenge' &&
+                        reel.creatorId.isNotEmpty &&
+                        currentUserId.isNotEmpty &&
+                        reel.creatorId == currentUserId;
+                    final canReport =
+                        reel.type == 'challenge' &&
+                        reel.id.isNotEmpty &&
+                        currentUserId.isNotEmpty;
+                    return _ReelTile(
+                      item: reel,
+                      state: state,
+                      isActive: index == _currentIndex,
+                      isOwner: isOwner,
+                      showBack: widget.showBack,
+                      onLike: () => _onLike(index),
+                      onComment: () => _onComment(index),
+                      onShare: () => _onShare(index),
+                      onSave: () => _onSave(index),
+                      onVote: () => _onVote(index),
+                      onOpenDetail: () => _onOpenDetail(index),
+                      onAccept: (anchor) => _onAccept(index, anchor),
+                      onDelete: () => _onDelete(index),
+                      onReport: canReport ? () => _onReport(index) : null,
+                      answerIsMine:
+                          reel.opponentUsername.isNotEmpty &&
+                          reel.opponentUsername == me?.username,
+                      onNeedPlayer: () => _reopenPlayer(index),
+                      playbackOwner: this,
+                    );
+                  },
+                ),
+              ),
             ),
           ),
         ),
@@ -2909,7 +3009,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
         // the PageView underneath.
         if (_pullDistance > 0 || _isRefreshing)
           Positioned(
-            top: topInset,
+            top: badgeTop,
             left: 0,
             right: 0,
             child: IgnorePointer(
@@ -6366,21 +6466,17 @@ class _FullScreenLoaderState extends State<_FullScreenLoader>
   }
 }
 
-/// Visual feedback for the manual pull-to-refresh in SmartReelsFeed.
+/// What a pull on the first video looks like, TikTok style: a ring that
+/// fills as the finger comes down, and a word saying what letting go will
+/// do. Then the ring spins while the new videos come.
 ///
-/// Two states:
-///   * **dragging** — `isRefreshing == false`: a chevron rotates from 0° to
-///     180° as `distance / triggerPx` climbs from 0 → 1, communicating "pull
-///     a bit further to release".
-///   * **refreshing** — `isRefreshing == true`: chevron is replaced by a
-///     spinner; the chip stays pinned at the trigger row until the parent
-///     clears `_isRefreshing`.
+///   * pulling, not far enough — "Pull to refresh", the ring part filled
+///   * far enough — "Release to refresh", the ring full
+///   * refreshing — "Refreshing", the ring spinning
 ///
-/// Why a custom widget vs. recycling `RefreshProgressIndicator`: that widget
-/// is wired into `RefreshIndicator`'s state machine and expects a parent
-/// scrollable to drive its `value`. We're driving it from raw pointer
-/// state, so a hand-rolled chip is simpler and avoids fighting Flutter's
-/// material refresh internals.
+/// Hand-rolled rather than Material's RefreshProgressIndicator: that one is
+/// driven by a RefreshIndicator and a scrollable, and this pull is read from
+/// the raw finger, see _handlePointerMove.
 class _PullRefreshBadge extends StatelessWidget {
   final double distance;
   final double triggerPx;
@@ -6396,52 +6492,44 @@ class _PullRefreshBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final progress = (distance / triggerPx).clamp(0.0, 1.0);
     final ready = progress >= 1.0;
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Center(
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.55),
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: Colors.white.withValues(
-                alpha: ready || isRefreshing ? 0.9 : 0.35,
-              ),
-              width: 1.5,
+    final label = isRefreshing
+        ? 'Refreshing'
+        : ready
+        ? 'Release to refresh'
+        : 'Pull to refresh';
+    const shadow = [Shadow(color: Color(0x99000000), blurRadius: 8)];
+    return Opacity(
+      // Fades in with the pull rather than popping up at the first pixel.
+      opacity: isRefreshing ? 1 : (0.25 + 0.75 * progress).clamp(0.0, 1.0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 26,
+            height: 26,
+            child: CircularProgressIndicator(
+              key: const ValueKey('pull_refresh_ring'),
+              // Filling with the pull; spinning once it is refreshing.
+              value: isRefreshing ? null : progress,
+              strokeWidth: 2.6,
+              strokeCap: StrokeCap.round,
+              color: Colors.white,
+              backgroundColor: Colors.white.withValues(alpha: 0.22),
             ),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x66000000),
-                blurRadius: 12,
-                offset: Offset(0, 4),
-              ),
-            ],
           ),
-          child: Center(
-            child: isRefreshing
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.2,
-                      color: Colors.white,
-                    ),
-                  )
-                : Transform.rotate(
-                    angle: progress * 3.14159, // 0 → π (chevron flips)
-                    child: Icon(
-                      Icons.keyboard_arrow_down,
-                      size: 22,
-                      color: Colors.white.withValues(
-                        alpha: 0.4 + 0.6 * progress,
-                      ),
-                    ),
-                  ),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            key: const ValueKey('pull_refresh_label'),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.2,
+              shadows: shadow,
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -6773,7 +6861,7 @@ class _AccountSuggestionRow extends StatelessWidget {
                     becameFollowing: true,
                     fromPage: 'home_page',
                   );
-                  dp.followUser(target);
+                  followFromScreen(context, target);
                   // Feed the acceptance signal back to the ranker so future
                   // cards bias toward whichever lane (fof / category /
                   // popular / league) this user keeps engaging with. Fire-

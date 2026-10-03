@@ -108,10 +108,22 @@ class _PrivacyPageState extends State<PrivacyPage>
                 value: _private,
                 onChanged: (v) {
                   final was = _private;
+                  final wasMessages = _messages;
                   _save(
-                    apply: () => _private = v,
-                    undo: () => _private = was,
+                    // Going private turns "Everyone" off, on screen and in
+                    // what is saved, so the two never disagree. Going public
+                    // leaves "Only people you follow" chosen; "Everyone" can
+                    // be picked again.
+                    apply: () {
+                      _private = v;
+                      if (v) _messages = 'following';
+                    },
+                    undo: () {
+                      _private = was;
+                      _messages = wasMessages;
+                    },
                     visibility: v ? 'friends' : 'public',
+                    settings: v ? {'messages': 'following'} : null,
                   );
                 },
               ),
@@ -119,8 +131,11 @@ class _PrivacyPageState extends State<PrivacyPage>
           ),
           SettingsGroup(
             title: 'Messages and calls',
-            footer: 'Who can send you messages and call you. People you '
-                'follow can always reach you.',
+            footer: _private
+                ? 'Your account is private, so only people you follow can '
+                    'message and call you.'
+                : 'Who can send you messages and call you. People you '
+                    'follow can always reach you.',
             children: [
               for (final (value, label) in const [
                 ('everyone', 'Everyone'),
@@ -129,7 +144,18 @@ class _PrivacyPageState extends State<PrivacyPage>
                 SettingsChoiceTile(
                   key: ValueKey('privacy_messages_$value'),
                   title: label,
-                  selected: _messages == value,
+                  // A private account takes messages only from people it
+                  // follows (the server holds it to that too), so
+                  // "Everyone" does not apply.
+                  enabled: !(_private && value == 'everyone'),
+                  subtitle: _private && value == 'everyone'
+                      ? 'Off while your account is private'
+                      : null,
+                  // Private: "Only people you follow", even for an account
+                  // that picked "Everyone" before going private.
+                  selected: _private
+                      ? value == 'following'
+                      : _messages == value,
                   onTap: _messages == value
                       ? null
                       : () {

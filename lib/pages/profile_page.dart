@@ -31,6 +31,7 @@ import 'package:myapp/widgets/create_burst.dart';
 import 'package:myapp/widgets/profile_arena_header.dart';
 import 'package:myapp/widgets/scroll_reveal.dart';
 import 'package:myapp/widgets/video_grid_tile.dart';
+import 'package:myapp/widgets/follow_flow.dart';
 
 /// A profile built around the person's battles.
 ///
@@ -539,7 +540,7 @@ class _ProfilePageState extends State<ProfilePage>
                       becameFollowing: true,
                       fromPage: pageName,
                     );
-                    dp.followUser(widget.user);
+                    followFromScreen(context, widget.user);
                   }
                 },
                 onMessage: () {

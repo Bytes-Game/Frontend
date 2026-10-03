@@ -234,12 +234,17 @@ class SettingsChoiceTile extends StatelessWidget {
   final bool selected;
   final VoidCallback? onTap;
 
+  /// Greyed out and not tappable: a choice that does not apply right now
+  /// (say why in [subtitle]).
+  final bool enabled;
+
   const SettingsChoiceTile({
     super.key,
     required this.title,
     this.subtitle,
     required this.selected,
     this.onTap,
+    this.enabled = true,
   });
 
   @override
@@ -248,7 +253,7 @@ class SettingsChoiceTile extends StatelessWidget {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final muted = dark ? AppTheme.textMutedDark : AppTheme.textMutedLight;
     return InkWell(
-      onTap: onTap,
+      onTap: enabled ? onTap : null,
       child: Padding(
         padding: const EdgeInsets.symmetric(
             horizontal: AppTheme.space16, vertical: 13),
@@ -259,7 +264,9 @@ class SettingsChoiceTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(title,
-                      style: TextStyle(fontSize: 16, color: cs.onSurface)),
+                      style: TextStyle(
+                          fontSize: 16,
+                          color: enabled ? cs.onSurface : muted)),
                   if (subtitle != null) ...[
                     const SizedBox(height: 2),
                     Text(subtitle!,

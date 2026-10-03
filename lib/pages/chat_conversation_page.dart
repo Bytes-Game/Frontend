@@ -17,6 +17,7 @@ import 'package:myapp/services/websocket_service.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/chat_media_widgets.dart';
+import 'package:myapp/widgets/chat_share_widgets.dart';
 
 /// One conversation.
 ///
@@ -211,6 +212,9 @@ class _ChatConversationPageState extends State<ChatConversationPage>
         'mediaHeight': ev['mediaHeight'],
         'mediaDurationMs': ev['mediaDurationMs'],
         'waveform': ev['waveform'],
+        // A shared battle or short: the video itself, as the server sent
+        // it for this person.
+        'shared': ev['shared'],
       });
       _fresh.add(id);
       _otherOnline = true;
@@ -1938,7 +1942,13 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final incoming = dark ? const Color(0xFF26252A) : const Color(0xFFE9E9EB);
 
     final kind = isDeleted ? 'text' : '${message['kind'] ?? 'text'}';
-    final bubble = kind == 'photo'
+    final bubble = kind == 'share'
+        ? SharedVideoCard(
+            message: message,
+            isMe: isMe,
+            bubbleColor: isMe ? kAccent : incoming,
+          )
+        : kind == 'photo'
         ? ChatPhoto(
             message: message,
             isMe: isMe,

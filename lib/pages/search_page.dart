@@ -19,6 +19,7 @@ import 'package:myapp/pages/profile_page.dart';
 import 'package:myapp/widgets/shimmer_loading.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/widgets/arena_ui.dart';
+import 'package:myapp/widgets/follow_flow.dart';
 
 /// Search page — TikTok / Instagram style with four tabs:
 ///   * Top      — interleaved best of accounts + battles + shorts
@@ -1157,7 +1158,7 @@ class _SearchPageState extends State<SearchPage>
       fromPage: pageName,
     );
     if (becameFollowing) {
-      await dp.followUser(user);
+      await followFromScreen(context, user);
     } else {
       await dp.unfollowUser(user);
     }

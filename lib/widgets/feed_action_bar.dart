@@ -1,12 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/models/challenge_model.dart';
-import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/widgets/chat_share_widgets.dart';
 
 /// TikTok-style vertical action bar for the right side of the feed.
 /// Shows like, dislike, comment, share for shorts.
@@ -1129,187 +1128,25 @@ class CommentSheetCaption extends StatelessWidget {
   }
 }
 
-/// Share bottom sheet — in-app chat sharing + copy link.
+/// The share sheet: who to send the video to, as a card in your chat with
+/// them, plus Copy link. See ShareSheet (chat_share_widgets.dart).
 ///
-/// Public (non-underscore) so the SmartReelsFeed share button can present
-/// the same sheet without copy-pasting 100 lines of UI. Same rationale as
-/// [ChallengeCommentSheet] above.
+/// Public (non-underscore) so every share button — the reel, the action
+/// bar, the battle page — opens the same sheet.
 class ChallengeShareSheet extends StatelessWidget {
   final ChallengeModel challenge;
-  const ChallengeShareSheet({super.key, required this.challenge});
 
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final dp = Provider.of<DataProvider>(context, listen: false);
-    final users = dp.allUsers
-        .where((u) => u.id != (dp.user?.id ?? ''))
-        .toList();
+  /// For a battle: the side on screen when Share was tapped — empty for the
+  /// challenger's video.
+  final String responseId;
 
-    // A Material, not a coloured box: the rows below paint their tap ink on
-    // the nearest Material, and a coloured box between them hid it (debug
-    // builds stop on it).
-    return Material(
-      color: Theme.of(context).scaffoldBackgroundColor,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      child: SizedBox(
-      height: MediaQuery.of(context).size.height * 0.55,
-      child: Column(
-        children: [
-          // Handle
-          const SizedBox(height: 8),
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: cs.outline,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text('Share',
-              style: Theme.of(context)
-                  .textTheme
-                  .titleMedium
-                  ?.copyWith(fontWeight: FontWeight.bold)),
-          const Divider(),
-
-          // Copy link
-          ListTile(
-            leading: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: cs.surfaceContainerHighest,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.link, size: 22),
-            ),
-            title: const Text('Copy Link'),
-            subtitle: const Text('Share on any platform',
-                style: TextStyle(fontSize: 12)),
-            onTap: () {
-              final shareText =
-                  '${challenge.title} by ${challenge.creatorUsername}\n${challenge.videoUrl}';
-              Clipboard.setData(ClipboardData(text: shareText));
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                    content: Text('Link copied to clipboard!'),
-                    duration: Duration(seconds: 2)),
-              );
-            },
-          ),
-          const Divider(),
-
-          // Send to users
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text('Send to',
-                  style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13,
-                      color: cs.onSurface.withValues(alpha: 0.6))),
-            ),
-          ),
-          Expanded(
-            child: users.isEmpty
-                ? Center(
-                    child: Text('No users to share with',
-                        style: TextStyle(
-                            color: cs.onSurface.withValues(alpha: 0.5))),
-                  )
-                : ListView.builder(
-                    itemCount: users.length,
-                    itemBuilder: (_, i) {
-                      return _ShareUserTile(
-                        user: users[i],
-                        challenge: challenge,
-                        senderId: dp.user!.id,
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
-      ),
-    );
-  }
-}
-
-/// Individual user tile in the share sheet with send button.
-class _ShareUserTile extends StatefulWidget {
-  final UserModel user;
-  final ChallengeModel challenge;
-  final String senderId;
-
-  const _ShareUserTile({
-    required this.user,
+  const ChallengeShareSheet({
+    super.key,
     required this.challenge,
-    required this.senderId,
+    this.responseId = '',
   });
 
   @override
-  State<_ShareUserTile> createState() => _ShareUserTileState();
-}
-
-class _ShareUserTileState extends State<_ShareUserTile> {
-  bool _sent = false;
-  bool _sending = false;
-
-  void _send() async {
-    if (_sent || _sending) return;
-    setState(() => _sending = true);
-
-    final msg =
-        '🔥 ${widget.challenge.title} by ${widget.challenge.creatorUsername}\n${widget.challenge.videoUrl}';
-    await ApiService.sendChatMessage(
-      senderId: widget.senderId,
-      receiverId: widget.user.id,
-      message: msg,
-    );
-
-    if (mounted) {
-      setState(() {
-        _sent = true;
-        _sending = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return ListTile(
-      leading: CircleAvatar(
-        child: Text(widget.user.username[0].toUpperCase()),
-      ),
-      title: Text(widget.user.username),
-      subtitle: Text(widget.user.league,
-          style: TextStyle(
-              fontSize: 12, color: cs.onSurface.withValues(alpha: 0.5))),
-      trailing: SizedBox(
-        width: 70,
-        child: _sent
-            ? const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.check_circle, color: Colors.green, size: 20),
-                  SizedBox(width: 4),
-                  Text('Sent', style: TextStyle(color: Colors.green, fontSize: 13)),
-                ],
-              )
-            : TextButton(
-                onPressed: _sending ? null : _send,
-                child: _sending
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Text('Send'),
-              ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      ShareSheet(challenge: challenge, responseId: responseId);
 }

@@ -12,6 +12,7 @@ import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/widgets/arena_ui.dart';
+import 'package:myapp/widgets/follow_flow.dart';
 
 /// Your notifications: who followed you, who challenged you, who accepted.
 ///
@@ -449,7 +450,7 @@ class _FollowBack extends StatelessWidget {
             )
           : FilledButton(
               key: const ValueKey('note_follow_back'),
-              onPressed: () => dp.followUser(target),
+              onPressed: () => followFromScreen(context, target),
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 shape: RoundedRectangleBorder(

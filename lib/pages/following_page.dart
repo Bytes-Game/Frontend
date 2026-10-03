@@ -8,6 +8,7 @@ import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/widgets/user_tile.dart';
 import 'package:myapp/pages/profile_page.dart';
 import 'package:myapp/widgets/arena_ui.dart';
+import 'package:myapp/widgets/follow_flow.dart';
 
 /// Shows who a given user is following
 ///
@@ -83,7 +84,7 @@ class _FollowingPageState extends State<FollowingPage>
                           fromPage: 'following_page',
                         );
                         if (becameFollowing) {
-                          dp.followUser(u);
+                          followFromScreen(context, u);
                         } else {
                           dp.unfollowUser(u);
                         }

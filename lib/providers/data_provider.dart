@@ -92,26 +92,34 @@ class DataProvider with ChangeNotifier {
 
   // —— Follow / Unfollow ——————————————————————————————————————————————
 
-  Future<bool> followUser(UserModel target) async {
-    if (_user == null || _following.contains(target.id)) return false;
+  Future<bool> followUser(UserModel target) async =>
+      await follow(target) == FollowOutcome.followed;
+
+  /// [followUser], saying why when it did not happen. A screen with a
+  /// Follow button goes through followFromScreen (follow_flow.dart), which
+  /// turns "you blocked them" into an offer to unblock.
+  Future<FollowOutcome> follow(UserModel target) async {
+    if (_user == null || _following.contains(target.id)) {
+      return FollowOutcome.failed;
+    }
 
     // Optimistic: update UI immediately
     _following.add(target.id);
     notifyListeners();
 
-    final ok = await ApiService.followUser(
+    final outcome = await ApiService.followUserOutcome(
       followerId: _user!.id,
       followerUsername: _user!.username,
       followingId: target.id,
       followingUsername: target.username,
     );
 
-    if (!ok) {
+    if (outcome != FollowOutcome.followed) {
       // Revert on failure
       _following.remove(target.id);
       notifyListeners();
     }
-      return ok;
+    return outcome;
   }
 
   Future<bool> unfollowUser(UserModel target) async {
