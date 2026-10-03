@@ -21,6 +21,7 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/screens/main_shell.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/explore_grid_cache.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/video_player_service.dart';
@@ -111,6 +112,15 @@ Map<String, dynamic> _challenge(String id, {bool battle = false}) => {
 /// Every For You page asked for, in order.
 late List<Uri> forYouAsks;
 
+/// Every Search grid asked for, in order.
+late List<Uri> exploreAsks;
+
+/// Whether the server's Search grid comes back empty.
+bool exploreEmpty = false;
+
+/// Whether it comes back long enough to scroll.
+bool exploreLong = false;
+
 /// When set, the server holds the next For You page until this completes.
 Completer<void>? holdFeed;
 
@@ -133,7 +143,12 @@ void main() {
     cacheDir = Directory.systemTemp.createTempSync('home_refresh');
     VideoCacheService.instance.debugSetDirectory(cacheDir);
     forYouAsks = [];
+    exploreAsks = [];
+    exploreEmpty = false;
+    exploreLong = false;
     holdFeed = null;
+    ExploreGridCache.directory = () async => cacheDir;
+    ExploreGridCache.instance.debugReset();
     firstIsBattle = false;
     ApiService.useClient(
       MockClient((req) async {
@@ -141,6 +156,23 @@ void main() {
           forYouAsks.add(req.url);
           final hold = holdFeed;
           if (hold != null) await hold.future;
+        }
+        if (req.url.path.endsWith('/feed/explore')) {
+          exploreAsks.add(req.url);
+          if (exploreEmpty) {
+            return http.Response(json.encode({'items': []}), 200);
+          }
+          if (exploreLong) {
+            return http.Response(
+              json.encode({
+                'items': [
+                  for (var i = 1; i <= 30; i++)
+                    {'type': 'challenge', 'challenge': _challenge('$i')},
+                ],
+              }),
+              200,
+            );
+          }
         }
         if (req.url.path.contains('/feed')) {
           return http.Response(
@@ -164,6 +196,7 @@ void main() {
 
   tearDown(() {
     ApiService.useClient(http.Client());
+    ExploreGridCache.instance.debugReset();
     VideoCacheService.instance.warm(const []);
     ReelDiagnostics.instance.debugReset();
     try {
@@ -231,6 +264,84 @@ void main() {
   final videos = find.byWidgetPredicate(
     (w) => w is PageView && w.scrollDirection == Axis.vertical,
   );
+
+  group('tapping Search while on Search', () {
+    final searchTab = find.descendant(
+      of: find.byType(NavigationBar),
+      matching: find.text('Search'),
+    );
+    int gridRefreshes() => exploreAsks.where(isRefresh).length;
+
+    testWidgets('going to Search does not count as a refresh', (t) async {
+      await openHome(t);
+      await t.tap(searchTab);
+      await frames(t, 10);
+      expect(exploreAsks, isNotEmpty, reason: 'Search asked for its grid');
+      expect(gridRefreshes(), 0);
+      await close(t);
+    });
+
+    testWidgets('a second tap refreshes the grid', (t) async {
+      await openHome(t);
+      await t.tap(searchTab);
+      await frames(t, 10);
+      await t.tap(searchTab);
+      await frames(t, 12);
+      expect(gridRefreshes(), 1);
+      await close(t);
+    });
+
+    testWidgets('with nothing in the grid, it asks again', (t) async {
+      exploreEmpty = true;
+      await openHome(t);
+      await t.tap(searchTab);
+      await frames(t, 10);
+      expect(find.text('Find people and battles'), findsOneWidget,
+          reason: 'the empty grid, or this proves nothing');
+      await t.tap(searchTab);
+      await frames(t, 12);
+      expect(gridRefreshes(), 1);
+      await close(t);
+    });
+
+    testWidgets('from further down the grid, it goes back to the top', (
+      t,
+    ) async {
+      exploreLong = true;
+      await openHome(t);
+      await t.tap(searchTab);
+      await frames(t, 10);
+      final grid = find.byType(CustomScrollView);
+      await t.drag(grid, const Offset(0, -600));
+      await frames(t, 6);
+      ScrollPosition position() =>
+          t.state<ScrollableState>(
+            find.descendant(of: grid, matching: find.byType(Scrollable)),
+          ).position;
+      expect(position().pixels, greaterThan(100),
+          reason: 'scrolled down, or this proves nothing');
+      await t.tap(searchTab);
+      await frames(t, 12);
+      expect(position().pixels, 0);
+      expect(gridRefreshes(), 1);
+      await close(t);
+    });
+
+    testWidgets('from a search, it goes back to the videos, fresh', (t) async {
+      await openHome(t);
+      await t.tap(searchTab);
+      await frames(t, 10);
+      final field = find.byType(TextField);
+      await t.enterText(field, 'dance');
+      await frames(t, 4);
+      await t.tap(searchTab);
+      await frames(t, 12);
+      expect(t.widget<TextField>(field).controller!.text, isEmpty,
+          reason: 'the search is left');
+      expect(gridRefreshes(), 1);
+      await close(t);
+    });
+  });
 
   group('tapping Home while on Home', () {
     testWidgets('refreshes the feed on screen', (t) async {

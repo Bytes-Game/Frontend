@@ -354,10 +354,52 @@ class ReelDiagnostics {
     if (_previewLive > 0) _previewLive--;
   }
 
+  /// A preview the app has let go of, and the phone has not finished
+  /// closing yet.
+  ///
+  /// ══════════════════════════════════════════════════════════════════════
+  /// "LIVE" SAID ONE WHILE THE PHONE WAS HOLDING TEN
+  /// ══════════════════════════════════════════════════════════════════════
+  ///
+  /// [recordPreviewReleased] is counted when the app ASKS for a preview to
+  /// close. The phone cannot close one until it has finished opening, and
+  /// opening means downloading the start of the video. So a preview opened
+  /// and dropped at once goes on pulling video off the internet for
+  /// seconds.
+  ///
+  /// A device log had ten opened in one burst. The grid's "live" count
+  /// said one, because each was let go before the next opened; the phone's
+  /// own lines show all ten alive, decoding, and closing one by one over
+  /// several seconds. An earlier log was read the same way and the grid was
+  /// ruled out as the reason decoders piled up.
+  ///
+  /// This counts the other end: let go, and not yet closed. Its peak is the
+  /// honest number for how much the grid was holding at once.
+  void recordPreviewClosing() {
+    if (!_visible) return;
+    _previewClosing++;
+    if (_previewClosing > _previewClosingPeak) {
+      _previewClosingPeak = _previewClosing;
+    }
+  }
+
+  void recordPreviewClosed() {
+    if (!_visible) return;
+    if (_previewClosing > 0) _previewClosing--;
+  }
+
   int _previewOpened = 0;
   int _previewReleased = 0;
   int _previewLive = 0;
   int _previewPeak = 0;
+  int _previewClosing = 0;
+  int _previewClosingPeak = 0;
+
+  @visibleForTesting
+  int get debugPreviewClosingPeak => _previewClosingPeak;
+
+  @visibleForTesting
+  int get debugPreviewClosing => _previewClosing;
 
   @visibleForTesting
   int get debugPreviewLive => _previewLive;
@@ -494,7 +536,8 @@ class ReelDiagnostics {
   String _previews() => _previewOpened == 0
       ? ''
       : '  | previews live=$_previewLive peak=$_previewPeak '
-          'opened=$_previewOpened released=$_previewReleased';
+          'opened=$_previewOpened released=$_previewReleased '
+          'closing now=$_previewClosing peak=$_previewClosingPeak';
 
   String summary() {
     final starts = _proxied + _wholeFile + _origin;
@@ -587,6 +630,7 @@ class ReelDiagnostics {
     // worse than no reset: every test after the first reads numbers it did
     // not produce, and the failures point at the wrong code.
     _previewOpened = _previewReleased = _previewLive = _previewPeak = 0;
+    _previewClosing = _previewClosingPeak = 0;
     _releasing = _releasingPeak = 0;
     _firstFrameWaits.clear();
   }

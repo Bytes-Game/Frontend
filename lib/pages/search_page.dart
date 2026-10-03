@@ -31,7 +31,11 @@ import 'package:myapp/widgets/follow_flow.dart';
 /// applies multi-signal re-ranking (engagement, recency, personalization)
 /// on top of the Meilisearch lexical score.
 class SearchPage extends StatefulWidget {
-  const SearchPage({super.key});
+  /// Fires when Search is tapped in the bottom bar while Search is already
+  /// showing: the page refreshes, as Home does.
+  final Listenable? tappedAgain;
+
+  const SearchPage({super.key, this.tappedAgain});
 
   @override
   State<SearchPage> createState() => _SearchPageState();
@@ -129,6 +133,7 @@ class _SearchPageState extends State<SearchPage>
   void initState() {
     super.initState();
     _previewCoord = _PreviewCoordinator();
+    widget.tappedAgain?.addListener(_onTappedAgain);
     _tabCtrl = TabController(length: _tabLabels.length, vsync: this);
     _tabCtrl.addListener(() {
       if (!_tabCtrl.indexIsChanging) return;
@@ -272,6 +277,84 @@ class _SearchPageState extends State<SearchPage>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _checkCovered();
+  }
+
+  @override
+  void didUpdateWidget(covariant SearchPage old) {
+    super.didUpdateWidget(old);
+    if (old.tappedAgain != widget.tappedAgain) {
+      old.tappedAgain?.removeListener(_onTappedAgain);
+      widget.tappedAgain?.addListener(_onTappedAgain);
+    }
+  }
+
+  /// The page on top of Search, while it is going away.
+  Animation<double>? _uncovering;
+
+  /// Stop the grid's previews the moment another page opens over Search,
+  /// and start them again once it has gone. See
+  /// [_PreviewCoordinator.setCovered].
+  void _checkCovered() {
+    final onTop = ModalRoute.isCurrentOf(context) ?? true;
+    _stopWaitingToUncover();
+    if (!onTop) {
+      _previewCoord.setCovered(true);
+      return;
+    }
+    // Back on top — but wait for the page that was over Search to finish
+    // sliding away. While it moves, the tiles report half-seen, changing
+    // numbers, and acting on each one is what opens players for nothing.
+    final leaving = ModalRoute.of(context)?.secondaryAnimation;
+    if (leaving == null || leaving.isDismissed) {
+      _previewCoord.setCovered(false);
+      return;
+    }
+    _uncovering = leaving..addStatusListener(_onUncovering);
+  }
+
+  void _onUncovering(AnimationStatus status) {
+    if (status != AnimationStatus.dismissed) return;
+    _stopWaitingToUncover();
+    if (mounted) _previewCoord.setCovered(false);
+  }
+
+  void _stopWaitingToUncover() {
+    _uncovering?.removeStatusListener(_onUncovering);
+    _uncovering = null;
+  }
+
+  final _refresher = GlobalKey<RefreshIndicatorState>();
+
+  /// Search tapped again in the bottom bar while Search is showing: back to
+  /// the videos, at the top, with a fresh set — the same as pulling down.
+  void _onTappedAgain() {
+    if (!mounted) return;
+    EventTracker.instance.trackTap(
+      target: 'search_tab_tap_again',
+      pageName: pageName,
+    );
+    // Typing, or looking at results: leave that first. The grid is what
+    // Search opens on, so it is what a refresh shows.
+    if (_hasSearched || _searchFocused || _searchCtrl.text.isNotEmpty) {
+      _cancelSearch();
+    }
+    if (_gridScroll.hasClients && _gridScroll.offset > 0) {
+      _gridScroll.jumpTo(0);
+    }
+    // The spinner at the top of the grid, exactly as a pull shows it. Only
+    // missing while the first list is still on its way, and then there is
+    // nothing to refresh yet.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final indicator = _refresher.currentState;
+      if (indicator != null) unawaited(indicator.show());
+    });
+  }
+
+  @override
   void dispose() {
     // If user typed a query and never tapped a result, count it as abandoned.
     if (_lastQuery.isNotEmpty && !_lastQueryHadResultTap) {
@@ -280,6 +363,8 @@ class _SearchPageState extends State<SearchPage>
         reason: 'no_result_tap',
       );
     }
+    widget.tappedAgain?.removeListener(_onTappedAgain);
+    _stopWaitingToUncover();
     _previewCoord.dispose();
     _gridScroll.dispose();
     _tabCtrl.dispose();
@@ -621,6 +706,7 @@ class _SearchPageState extends State<SearchPage>
       // retry. Wrap the empty-state in a ListView with always-scrollable
       // physics so RefreshIndicator gets the pull gesture.
       return RefreshIndicator(
+        key: _refresher,
         onRefresh: () => _loadExploreChallenges(refresh: true),
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -639,6 +725,7 @@ class _SearchPageState extends State<SearchPage>
       );
     }
     return RefreshIndicator(
+      key: _refresher,
       onRefresh: () => _loadExploreChallenges(refresh: true),
       child: CustomScrollView(
         controller: _gridScroll,
@@ -1506,6 +1593,9 @@ class _PreviewCoordinator extends ChangeNotifier {
 
   /// Tile reports its visibility. The coordinator picks/repicks the active
   /// tile and notifies listeners only when the active id changes.
+  ///
+  /// The picking waits until every tile in the same batch has reported.
+  /// See [_settleSoon].
   void report(String tileId, double fraction, {String url = ''}) {
     if (fraction <= 0.01) {
       _fractions.remove(tileId);
@@ -1514,6 +1604,70 @@ class _PreviewCoordinator extends ChangeNotifier {
       _fractions[tileId] = fraction;
       if (url.isNotEmpty) _urls[tileId] = url;
     }
+    _settleSoon();
+  }
+
+  bool _settleQueued = false;
+  bool _disposed = false;
+
+  /// Pick once the tiles have all had their say, not after each one.
+  ///
+  /// ════════════════════════════════════════════════════════════════════════
+  /// ONE PICK PER TILE OPENED TEN PLAYERS AT ONCE
+  /// ════════════════════════════════════════════════════════════════════════
+  ///
+  /// The tiles report in a batch, one after another. Picking after each one
+  /// meant that when the whole grid went out of sight together, the first
+  /// tile said "hidden", the pick moved to the next tile — which had not
+  /// reported yet and still looked visible — and that one opened a player.
+  /// Then it said "hidden" too, and the pick moved on again.
+  ///
+  /// A device log shows it: ten players opened in one burst, the moment a
+  /// video was tapped. Closing a player cannot finish until it has started
+  /// downloading, so all ten pulled video off the internet for several
+  /// seconds, while the video that had been tapped — and the ones after it
+  /// — waited for the same connection. Every swipe after the tap went to
+  /// the network cold.
+  ///
+  /// So the reports in one batch only write down what each tile said, and
+  /// the choice is made once, from all of them, straight after.
+  void _settleSoon() {
+    if (_settleQueued) return;
+    _settleQueued = true;
+    scheduleMicrotask(() {
+      _settleQueued = false;
+      if (_disposed || _covered) return;
+      _maybePick();
+      _warmVisible();
+    });
+  }
+
+  /// Another page is on top of Search: a video opened from the grid, a
+  /// profile, anything.
+  ///
+  /// Nothing plays and nothing is fetched while it is. The grid cannot be
+  /// seen, and every preview it opened there took decoders and the
+  /// connection from the page that CAN be seen. The grid used to carry on
+  /// regardless — a device log shows two more previews opening while a video
+  /// opened from Search was playing on top of them.
+  bool _covered = false;
+
+  void setCovered(bool covered) {
+    if (covered == _covered) return;
+    _covered = covered;
+    debugPrint(covered
+        ? '[search_page] previews paused: another page is on top of Search'
+        : '[search_page] previews back on: Search is showing again');
+    if (covered) {
+      _cancelSettle();
+      // Stops the one playing, and the timer that would hand its turn on.
+      _setActive(null);
+      return;
+    }
+    // The page that was on top has been using the cache for its own videos,
+    // so the grid's list is handed over again rather than assumed.
+    _lastWarmed = const [];
+    _consumedThisCycle.clear();
     _maybePick();
     _warmVisible();
   }
@@ -1790,6 +1944,7 @@ class _PreviewCoordinator extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _cancelSettle();
     _advanceTimer?.cancel();
     super.dispose();
@@ -2012,9 +2167,20 @@ class _PreviewableTileState extends State<_PreviewableTile> {
     _listenerRef = null;
     _completionReported = false;
     if (ref != null) c.removeListener(ref);
-    ReelDiagnostics.instance.recordPreviewReleased();
-    // ignore: discarded_futures
-    c.dispose();
+    final diagnostics = ReelDiagnostics.instance;
+    diagnostics.recordPreviewReleased();
+    // Counted again when the phone has really closed it, which can be
+    // seconds later. See ReelDiagnostics.recordPreviewClosing.
+    diagnostics.recordPreviewClosing();
+    unawaited(
+      c.dispose().then(
+        (_) => diagnostics.recordPreviewClosed(),
+        onError: (Object e) {
+          diagnostics.recordPreviewClosed();
+          debugPrint('[search_page] a preview did not close cleanly: $e');
+        },
+      ),
+    );
   }
 
   Future<void> _ensurePlayerAndPlay() async {

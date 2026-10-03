@@ -19,7 +19,7 @@ import 'package:myapp/widgets/arena_ui.dart';
 ///
 /// The server tells whoever a COMMENT mentions (mentions.go). A message in
 /// chat sends nothing extra: the one other person in it already hears
-/// about every message.
+/// about every message — and they are the only one a chat suggests.
 
 /// The same letters a username is made of (signup.go on the server): an @
 /// after the start of the text or something that cannot be part of a name.
@@ -60,10 +60,14 @@ void insertMention(TextEditingController controller, String username) {
 
 /// The people [query] could mean: whose name starts with it, then whose
 /// name contains it — the people you follow first. Never yourself.
+///
+/// From [among] when given — in a chat, the people in it — and otherwise
+/// from everyone the app knows.
 List<UserModel> mentionCandidates(
   DataProvider dp,
   String query, {
   int max = 5,
+  List<UserModel>? among,
 }) {
   final me = dp.user?.id ?? '';
   final q = query.toLowerCase();
@@ -76,7 +80,7 @@ List<UserModel> mentionCandidates(
   }
 
   final list =
-      dp.allUsers.where((u) {
+      (among ?? dp.allUsers).where((u) {
         if (u.id.isEmpty || u.id == me || u.username.isEmpty) return false;
         if (q.isEmpty) return true;
         return u.username.toLowerCase().contains(q) ||
@@ -96,10 +100,16 @@ class MentionSuggestions extends StatefulWidget {
   /// For the comments sheet, which is dark whatever the phone's theme.
   final bool dark;
 
+  /// Only these people, when given. A chat offers the person you are
+  /// talking to, not everyone on the app: they are the only one who will
+  /// read it.
+  final List<UserModel>? people;
+
   const MentionSuggestions({
     super.key,
     required this.controller,
     this.dark = false,
+    this.people,
   });
 
   @override
@@ -137,7 +147,7 @@ class _MentionSuggestionsState extends State<MentionSuggestions> {
     final active = activeMention(widget.controller.value);
     if (active == null) return const SizedBox.shrink();
     final dp = Provider.of<DataProvider>(context, listen: false);
-    final people = mentionCandidates(dp, active.query);
+    final people = mentionCandidates(dp, active.query, among: widget.people);
     if (people.isEmpty) return const SizedBox.shrink();
     final dark = widget.dark || Theme.of(context).brightness == Brightness.dark;
     final bg = widget.dark
