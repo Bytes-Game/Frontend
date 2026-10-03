@@ -24,20 +24,32 @@ import 'support/dart_source.dart';
 void main() {
   final src = File('lib/pages/search_page.dart').readAsStringSync();
 
+  // Code only: a check that matched the words in a comment would pass with
+  // the code it describes gone.
+  String codeOf(String signature) => bodyOf(src, signature)
+      .split('\n')
+      .where((l) => !l.trimLeft().startsWith('//'))
+      .join('\n');
+
   group('a preview plays what the feed would play', () {
     test('the rendition is picked for the connection', () {
-      final body = bodyOf(src, 'String _originUrl()');
-      expect(body, contains('pickVariantUrl(c.videoVariants)'),
+      // The same pick, under the same name, as the full-screen player, so
+      // the file the grid warms is the file a tap opens. See
+      // search_speed_test.dart for that checked through the real page.
+      final body = codeOf('String _originUrl()');
+      expect(body, contains('stickyVariantUrl('),
           reason: 'without this the grid streams the raw upload — up to '
               'thirteen times the bytes, on the slowest thing in the app');
+      expect(body, contains('c.videoVariants'));
     });
 
     test('the raw upload is only the fallback', () {
-      final body = bodyOf(src, 'String _originUrl()');
+      final body = codeOf('String _originUrl()');
       expect(body, contains(': c.videoUrl'),
           reason: 'a video with no renditions yet still has to play');
-      final pickAt = body.indexOf('pickVariantUrl');
+      final pickAt = body.indexOf('VariantUrl(');
       final rawAt = body.indexOf('c.videoUrl');
+      expect(pickAt, greaterThan(-1), reason: 'no rendition is picked at all');
       expect(pickAt, lessThan(rawAt),
           reason: 'the raw file must be the fallback, not the first choice');
     });

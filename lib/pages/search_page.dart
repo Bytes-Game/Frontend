@@ -85,6 +85,18 @@ class _SearchPageState extends State<SearchPage>
   // which used to let an older query's results overwrite a newer one's.
   int _searchSeq = 0;
 
+  /// Answers already fetched on this visit, by what was typed. Typing back
+  /// over a search ("danc", then back to "dan") or pressing search after the
+  /// results came in as you typed shows them at once instead of asking the
+  /// server the same question again.
+  final Map<String, ({DateTime at, Map<String, dynamic> result})> _answers =
+      {};
+
+  /// How long a remembered answer is shown without asking again. Long enough
+  /// for typing back and forth; short enough that a video posted a minute
+  /// ago is not missing from a search.
+  static const _answerMaxAge = Duration(minutes: 2);
+
   // Server hints from the last search response (search_ctr.go):
   // _related = the results are a trending fallback for a zero-hit query;
   // _intent = "user" | "category:<x>" | "general" for section ordering.
@@ -134,7 +146,9 @@ class _SearchPageState extends State<SearchPage>
     // app opened, go up at once. Only a missing or old list is asked for
     // again, and an old one stays on screen while it is.
     final cache = ExploreGridCache.instance;
-    _exploreChallenges = cache.items;
+    _exploreChallenges = cache.itemsFor(
+      Provider.of<DataProvider>(context, listen: false).user?.id ?? '',
+    );
     debugPrint(
       '[search_page] opened with ${_exploreChallenges.length} videos '
       'already in hand${cache.isStale ? '; fetching a fresh list' : ''}',
@@ -336,7 +350,16 @@ class _SearchPageState extends State<SearchPage>
   /// to "dance".
   Future<void> _search(String query, {bool submitted = false}) async {
     if (query.trim().isEmpty) return;
-    setState(() => _loading = true);
+    final q = query.trim();
+    final remembered = _answers[q];
+    final fresh = remembered != null &&
+        DateTime.now().difference(remembered.at) < _answerMaxAge;
+    // While the answer is on its way, the results already on screen STAY on
+    // screen (with a thin bar to say they are updating). Every letter typed
+    // used to wipe them and show grey placeholders until the server answered,
+    // so a search felt slow even when the answer took a third of a second.
+    // Placeholders now only show when there is nothing to show yet.
+    if (!fresh) setState(() => _loading = true);
     final start = DateTime.now();
     final seq = ++_searchSeq;
 
@@ -345,15 +368,35 @@ class _SearchPageState extends State<SearchPage>
     final dp = Provider.of<DataProvider>(context, listen: false);
     final userId = dp.user?.id ?? '';
 
-    final result = await ApiService.searchAll(
-      query.trim(),
-      userId: userId,
-      record: submitted,
-    );
+    final Map<String, dynamic> result;
+    if (fresh) {
+      result = remembered.result;
+      // Pressing search still goes into the history, which only the server
+      // keeps. The results are already here, so nothing waits for it.
+      if (submitted) {
+        unawaited(ApiService.searchAll(q, userId: userId, record: true));
+      }
+    } else {
+      result = await ApiService.searchAll(
+        q,
+        userId: userId,
+        record: submitted,
+      );
+      if (result['_failed'] != true) {
+        _answers[q] = (at: DateTime.now(), result: result);
+      }
+    }
+    final ms = DateTime.now().difference(start).inMilliseconds;
+    debugPrint('[search] "$q": '
+        '${(result['accounts'] as List?)?.length ?? 0} people, '
+        '${(result['battles'] as List?)?.length ?? 0} battles, '
+        '${(result['shorts'] as List?)?.length ?? 0} shorts '
+        '${fresh ? '(remembered, no wait)' : 'in ${ms}ms'}'
+        '${seq != _searchSeq ? ' (already replaced by a newer search)' : ''}');
     if (submitted && mounted) {
-      final q = query.trim().toLowerCase();
+      final lower = q.toLowerCase();
       setState(() {
-        _recentSearches = [q, ..._recentSearches.where((x) => x != q)];
+        _recentSearches = [lower, ..._recentSearches.where((x) => x != lower)];
       });
     }
     // A newer search superseded this one while it was in flight — drop
@@ -447,18 +490,9 @@ class _SearchPageState extends State<SearchPage>
 
   Widget _buildScaffold(ColorScheme cs, bool showTabs) {
     final Widget body;
-    if (_loading) {
-      body = showTabs
-          ? TabBarView(
-              controller: _tabCtrl,
-              children: const [
-                ChatListSkeleton(count: 5),
-                ChatListSkeleton(count: 5),
-                SearchGridSkeleton(),
-                SearchGridSkeleton(),
-              ],
-            )
-          : const SearchGridSkeleton();
+    if (_loading && !showTabs) {
+      // The first search: nothing to keep on screen yet.
+      body = const SearchGridSkeleton();
     } else if (showTabs) {
       body = TabBarView(
         controller: _tabCtrl,
@@ -548,7 +582,27 @@ class _SearchPageState extends State<SearchPage>
                     )
                   : const SizedBox(width: double.infinity),
             ),
-            Expanded(child: body),
+            Expanded(
+              child: Stack(
+                children: [
+                  Positioned.fill(child: body),
+                  // A new search on its way, with the last results still up:
+                  // a thin bar along the top says they are being updated.
+                  if (_loading && showTabs)
+                    const Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: LinearProgressIndicator(
+                        key: ValueKey('search_updating'),
+                        minHeight: 2,
+                        color: kAccent,
+                        backgroundColor: Colors.transparent,
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -1932,7 +1986,17 @@ class _PreviewableTileState extends State<_PreviewableTile> {
     final cached = _origin;
     if (cached != null) return cached;
     final c = widget.challenge;
-    final picked = NetworkQualityService.instance.pickVariantUrl(c.videoVariants);
+    // The same choice, under the same name, as the full-screen player that
+    // opens when this tile is tapped. This used to ask afresh, so when the
+    // connection had moved since the video was last seen — 3 Mbps when the
+    // app opened, 9.5 by the time Search was, in one device log — the grid
+    // fetched the start of one quality and the tap opened another, with
+    // none of it on the phone. That log has taps from Search going straight
+    // to the internet while the grid had been fetching all along.
+    final picked = NetworkQualityService.instance.stickyVariantUrl(
+      'challenge:${c.id}',
+      c.videoVariants,
+    );
     final chosen = (picked != null && picked.isNotEmpty) ? picked : c.videoUrl;
     _origin = chosen;
     return chosen;

@@ -581,6 +581,19 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       if (state == AppLifecycleState.paused) _saveNextUp();
     } else if (state == AppLifecycleState.resumed) {
       _currentItemStart = DateTime.now();
+      // A battle turned to the answer comes back on the answer. Starting
+      // the reel here would start the challenger — its sound playing behind
+      // the answer's still picture, which is what pulling down the
+      // notifications on a battle's other side used to leave.
+      final current = _currentIndex >= 0 && _currentIndex < _items.length
+          ? _items[_currentIndex]
+          : null;
+      if (current is _ReelItem &&
+          current.isBattle &&
+          current.faces.showingOpponent) {
+        current.resumeAnswer.value++;
+        return;
+      }
       // Not from the start. The viewer never left this reel — the app was
       // backgrounded and came back — so picking it up where it was is
       // exactly right, and rewinding would lose their place.
@@ -699,6 +712,21 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
         if (seed != null) _items.add(seed);
       }
     });
+    // The video tapped in Search starts NOW, not after the rest of the list.
+    //
+    // It used to wait for the server to send the videos that come after it
+    // before it played at all. The picture was on screen, so it looked like
+    // the video itself was slow to load — and the first time it really was:
+    // a device log shows the tap and that list arriving up to two seconds
+    // apart. Nothing about playing the video you tapped needs that list.
+    final startedEarly = hasSeed && !refresh && _items.isNotEmpty;
+    if (startedEarly) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _prefetchUpcomingVideos();
+        _playCurrent(waitForWarm: true, arriving: true);
+      });
+    }
     await _loadNextPage(refresh: refresh || freshOnOpen);
     if (!mounted) return;
     // Only once it worked: a first load that failed is retried, and the
@@ -736,7 +764,10 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       // hands the feed one reel and shows it immediately, so there is no
       // earlier moment at which anything could have warmed it.
       _prefetchUpcomingVideos();
-      _playCurrent(waitForWarm: true, arriving: true);
+      // A video already started above is only given the ones after it to
+      // fetch. Starting it a second time would jump it back to the start,
+      // or turn a battle back to the side it opened on.
+      if (!startedEarly) _playCurrent(waitForWarm: true, arriving: true);
     });
     // Cut the cold-connection tax for the media origin: the app can't
     // know the R2/CDN hostname until real video URLs arrive, so the
@@ -3009,6 +3040,11 @@ class _ReelItem implements _FeedEntry {
   /// [_SmartReelsFeedState._playCurrent].
   final ValueNotifier<int> openOnAnswer = ValueNotifier(0);
 
+  /// Bumped when the app comes back to the front on this battle while the
+  /// answer is the side showing: the card starts the answer again, where it
+  /// was. See [_SmartReelsFeedState.didChangeAppLifecycleState].
+  final ValueNotifier<int> resumeAnswer = ValueNotifier(0);
+
   /// Whether this visit opened on the answer. Decided by the feed as the
   /// battle arrives.
   bool opensOnAnswer = false;
@@ -3661,6 +3697,25 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   bool _showingOpponent = false;
   _ReelPlayerState? _opponentState;
 
+  // ── Which side comes first ──────────────────────────────────────────────
+  // Whoever is ahead is the FIRST side of a battle: the one it opens on,
+  // with the other a swipe LEFT away. It used to open on the leader but keep
+  // the challenger first, so when the answer was ahead the viewer landed on
+  // the second side and had to swipe right — backwards — to see the other.
+  //
+  // _cubeCtl's value is the POSITION: 0.0 = first face, 1.0 = second face.
+  // [_answerFirst] says which side the first face is. It is decided as the
+  // battle comes on screen (and while it rests off screen) and then held
+  // still for the visit, so a vote landing mid-view never swaps the faces
+  // under the viewer's finger.
+  bool _answerFirst = false;
+
+  /// Where [opponent]'s side sits: 0.0 first, 1.0 second.
+  double _posOf(bool opponent) => opponent != _answerFirst ? 1.0 : 0.0;
+
+  /// Whether the answer is the side at [position] (rounded to a face).
+  bool _opponentAt(double position) => (position >= 0.5) != _answerFirst;
+
   /// Whether the video on screen can be reported: somebody is signed in
   /// and it is not their own. On a battle that follows the side showing.
   bool get _canReport {
@@ -3734,6 +3789,15 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     if (!widget.isActive) _rest();
     widget.item.showAnswer.addListener(_turnToAnswer);
     widget.item.openOnAnswer.addListener(_openOnAnswer);
+    widget.item.resumeAnswer.addListener(_resumeAnswer);
+  }
+
+  /// Back from the notifications (or anything else that paused the app) on
+  /// the answer's side: start the answer again, where it was.
+  void _resumeAnswer() {
+    if (!mounted || !widget.isActive || !_showingOpponent) return;
+    // ignore: discarded_futures
+    _startSide(true, fromStart: false);
   }
 
   void _turnToAnswer() {
@@ -3802,6 +3866,9 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   void _openOnAnswer() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !widget.isActive || !widget.item.isBattle) return;
+      // The answer is ahead, so it is the first side: the challenger is a
+      // swipe left away.
+      setState(() => _answerFirst = true);
       _setShowOpponent(true, track: false, animate: false);
     });
     // And ask for that frame. Nothing is playing yet — the challenger was
@@ -3818,6 +3885,8 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
       widget.item.showAnswer.addListener(_turnToAnswer);
       old.item.openOnAnswer.removeListener(_openOnAnswer);
       widget.item.openOnAnswer.addListener(_openOnAnswer);
+      old.item.resumeAnswer.removeListener(_resumeAnswer);
+      widget.item.resumeAnswer.addListener(_resumeAnswer);
     }
     if (widget.isActive && !old.isActive) _loadScore();
     // A vote just landed: the score it changed is worth asking for again.
@@ -3841,11 +3910,11 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
       _resumeAfterScrub = false;
       if (_showingOpponent) {
         _setShowOpponent(false, track: false, animate: false);
-      } else if (_cubeCtl.value != 0) {
+      } else if (_cubeCtl.value != _posOf(false)) {
         // Mid-drag or mid-settle when the tile scrolled away: snap the
         // cube back to the challenger face instantly.
         _cubeCtl.stop();
-        _cubeCtl.value = 0;
+        _cubeCtl.value = _posOf(false);
       }
     }
     if (!widget.isActive) _rest();
@@ -3855,29 +3924,36 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || !widget.isActive || _showingOpponent) return;
         if (widget.item.opensOnAnswer || _cubeDragging) return;
-        if (_cubeCtl.value != 0) {
-          _cubeCtl.stop();
-          _cubeCtl.value = 0;
+        // Opening on the challenger: the challenger is the first side.
+        if (_answerFirst || _cubeCtl.value != 0) {
+          setState(() {
+            _answerFirst = false;
+            _cubeCtl.stop();
+            _cubeCtl.value = 0;
+          });
         }
       });
     }
   }
 
   /// Off screen, a battle rests on the side it will open on — whoever is
-  /// ahead — so it slides in showing that side rather than jumping to it
-  /// on arrival. Only the picture: nothing plays off screen.
+  /// ahead, as its first side — so it slides in showing that side rather
+  /// than jumping to it on arrival. Only the picture: nothing plays off
+  /// screen.
   void _rest() {
     if (_showingOpponent || _cubeDragging || !widget.item.isBattle) return;
-    final target = _leader == 'answer' ? 1.0 : 0.0;
-    if (_cubeCtl.value == target) return;
+    final answerFirst = _leader == 'answer';
+    if (_answerFirst == answerFirst && _cubeCtl.value == 0) return;
+    _answerFirst = answerFirst;
     _cubeCtl.stop();
-    _cubeCtl.value = target;
+    _cubeCtl.value = 0;
   }
 
   @override
   void dispose() {
     widget.item.showAnswer.removeListener(_turnToAnswer);
     widget.item.openOnAnswer.removeListener(_openOnAnswer);
+    widget.item.resumeAnswer.removeListener(_resumeAnswer);
     _opponentState?.dispose();
     _heartCtl.dispose();
     _cubeCtl.dispose();
@@ -4210,7 +4286,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
 
     if (!animate) {
       _cubeCtl.stop();
-      _cubeCtl.value = show ? 1.0 : 0.0;
+      _cubeCtl.value = _posOf(show);
       if (show != _showingOpponent) _commitSide(show, track: track);
       return;
     }
@@ -4241,7 +4317,8 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     if (track) {
       EventTracker.instance.trackSwipe(
         target: show ? 'reel_swipe_to_opponent' : 'reel_swipe_to_challenger',
-        direction: show ? 'left' : 'right',
+        // Left goes to the second side, whichever person that is.
+        direction: _posOf(show) == 1.0 ? 'left' : 'right',
         pageName: 'home_page',
         params: {'contentId': widget.item.id, 'contentType': widget.item.type},
       );
@@ -4277,7 +4354,10 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   ///
   /// Going through pauseAllExcept fixes both, because it sets the active
   /// URL synchronously before it awaits anything.
-  Future<void> _startSide(bool show) async {
+  ///
+  /// [fromStart] false picks the side up where it was: coming back to the
+  /// app on it, rather than turning to it.
+  Future<void> _startSide(bool show, {bool fromStart = true}) async {
     // A tile that has scrolled away runs this too: didUpdateWidget resets
     // a battle to its challenger face on the way out, and that reset lands
     // here with `show` false. It must not start the video — it is off
@@ -4338,6 +4418,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     // from eviction and muted by its own initialisation callback.
     await VideoPlayerService.instance.showAndPlay(
       incoming.url,
+      fromStart: fromStart,
       owner: widget.playbackOwner,
     );
   }
@@ -4348,7 +4429,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   /// "commit at release" behaviour IG stories has.
   void _settleTo(bool opponent, {bool track = true}) {
     if (opponent != _showingOpponent) _commitSide(opponent, track: track);
-    final target = opponent ? 1.0 : 0.0;
+    final target = _posOf(opponent);
     final distance = (target - _cubeCtl.value).abs();
     if (distance == 0) return;
     // Duration scales with the remaining arc so a nearly-finished drag
@@ -4363,8 +4444,9 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
 
   // ── Finger-driven cube gestures ────────────────────────────────────────
   // The cube position tracks the finger 1:1 (one full screen-width of drag
-  // = one quarter-turn). Dragging left turns toward the opponent, dragging
-  // right turns back; the user can reverse mid-gesture and the cube follows.
+  // = one quarter-turn). Dragging left turns toward the second side —
+  // whoever is behind — and dragging right turns back to the first; the
+  // user can reverse mid-gesture and the cube follows.
 
   void _onHorizontalDragStart(DragStartDetails d) {
     if (!widget.item.isBattle) return;
@@ -4382,7 +4464,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     if (!widget.item.isBattle || !_cubeDragging) return;
     final w = context.size?.width ?? MediaQuery.of(context).size.width;
     if (w <= 0) return;
-    // Finger left (negative dx) → progress toward the opponent face.
+    // Finger left (negative dx) → progress toward the second face.
     // Clamped hard at the ends: a two-face cube has nowhere further to
     // turn, and the clamp is what keeps the geometry inside the tile.
     _cubeCtl.value = (_cubeCtl.value - d.delta.dx / w).clamp(0.0, 1.0);
@@ -4395,13 +4477,14 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     if (!widget.item.isBattle || !_cubeDragging) return;
     _cubeDragging = false;
     final vx = d.primaryVelocity ?? 0;
-    final bool toOpponent;
+    // A fling left goes to the second side, right to the first.
+    final double towards;
     if (vx.abs() >= _cubeFlingVelocity) {
-      toOpponent = vx < 0;
+      towards = vx < 0 ? 1.0 : 0.0;
     } else {
-      toOpponent = _cubeCtl.value >= 0.5;
+      towards = _cubeCtl.value;
     }
-    _settleTo(toOpponent);
+    _settleTo(_opponentAt(towards));
   }
 
   void _onHorizontalDragCancel() {
@@ -4409,7 +4492,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     _cubeDragging = false;
     // Gesture arena took the pointer away (e.g. the vertical pager won a
     // diagonal drag) — settle to whichever side is closest, no events.
-    _settleTo(_cubeCtl.value >= 0.5, track: false);
+    _settleTo(_opponentAt(_cubeCtl.value), track: false);
   }
 
   /// One side of the reel — poster behind, live video on top once its
@@ -4568,8 +4651,9 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
             builder: (context, _) {
               final p = _cubeCtl.value;
               // Fully settled on either face → plain single-face layout.
-              if (p <= 0.001) return _videoFace(opponent: false);
-              if (p >= 0.999) return _videoFace(opponent: true);
+              // The first face is whoever is ahead ([_answerFirst]).
+              if (p <= 0.001) return _videoFace(opponent: _answerFirst);
+              if (p >= 0.999) return _videoFace(opponent: !_answerFirst);
               return LayoutBuilder(
                 builder: (context, constraints) {
                   final w = constraints.maxWidth;
@@ -4588,8 +4672,16 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          _cubeFace(-p, w, _videoFace(opponent: false)),
-                          _cubeFace(1 - p, w, _videoFace(opponent: true)),
+                          _cubeFace(
+                            -p,
+                            w,
+                            _videoFace(opponent: _answerFirst),
+                          ),
+                          _cubeFace(
+                            1 - p,
+                            w,
+                            _videoFace(opponent: !_answerFirst),
+                          ),
                         ],
                       ),
                     ),
@@ -4746,6 +4838,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                 opponent: item.opponentUsername,
                 opponentLeague: item.opponentLeague,
                 showingOpponent: _showingOpponent,
+                answerFirst: _answerFirst,
                 winner: _BattleScores.winnerOf(item.id),
                 onTapChallenger: () => _setShowOpponent(false),
                 onTapOpponent: () => _setShowOpponent(true),
@@ -5694,6 +5787,10 @@ class _Matchup extends StatelessWidget {
   final VoidCallback onTapChallenger;
   final VoidCallback onTapOpponent;
 
+  /// The answer is the battle's first side (it is ahead), so it is named
+  /// first: the names read in the order a swipe left goes.
+  final bool answerFirst;
+
   const _Matchup({
     required this.challenger,
     required this.challengerLeague,
@@ -5702,8 +5799,27 @@ class _Matchup extends StatelessWidget {
     required this.showingOpponent,
     required this.onTapChallenger,
     required this.onTapOpponent,
+    this.answerFirst = false,
     this.winner = '',
   });
+
+  Widget _challenger() => _MatchupSide(
+        key: const ValueKey('matchup_challenger'),
+        username: challenger,
+        league: challengerLeague,
+        active: !showingOpponent,
+        won: winner == 'creator',
+        onTap: onTapChallenger,
+      );
+
+  Widget _answer() => _MatchupSide(
+        key: const ValueKey('matchup_opponent'),
+        username: opponent.isEmpty ? 'opponent' : opponent,
+        league: opponentLeague,
+        active: showingOpponent,
+        won: winner == 'answer',
+        onTap: onTapOpponent,
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -5723,30 +5839,12 @@ class _Matchup extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Flexible(
-                child: _MatchupSide(
-                  key: const ValueKey('matchup_challenger'),
-                  username: challenger,
-                  league: challengerLeague,
-                  active: !showingOpponent,
-                  won: winner == 'creator',
-                  onTap: onTapChallenger,
-                ),
-              ),
+              Flexible(child: answerFirst ? _answer() : _challenger()),
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 6),
                 child: _VsMedal(),
               ),
-              Flexible(
-                child: _MatchupSide(
-                  key: const ValueKey('matchup_opponent'),
-                  username: opponent.isEmpty ? 'opponent' : opponent,
-                  league: opponentLeague,
-                  active: showingOpponent,
-                  won: winner == 'answer',
-                  onTap: onTapOpponent,
-                ),
-              ),
+              Flexible(child: answerFirst ? _challenger() : _answer()),
             ],
           ),
         ),

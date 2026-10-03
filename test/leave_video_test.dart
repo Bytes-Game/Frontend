@@ -22,6 +22,7 @@ import 'package:video_player_platform_interface/video_player_platform_interface.
 
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
+import 'package:myapp/pages/search_reels_viewer_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
@@ -83,11 +84,21 @@ class _Platform extends VideoPlayerPlatform {
   @override
   Future<void> setPlaybackSpeed(int playerId, double speed) async {}
 
-  @override
-  Future<void> seekTo(int playerId, Duration position) async {}
+  /// Every video sent back to its start, by address.
+  final List<String> rewound = [];
 
   @override
-  Future<Duration> getPosition(int playerId) async => Duration.zero;
+  Future<void> seekTo(int playerId, Duration position) async {
+    if (position == Duration.zero) rewound.add(uriOf[playerId] ?? '');
+  }
+
+  /// How far a playing video says it has got. Zero unless a test moves it:
+  /// a video that never moves cannot show being sent back to its start.
+  Duration playedFor = Duration.zero;
+
+  @override
+  Future<Duration> getPosition(int playerId) async =>
+      playing.contains(playerId) ? playedFor : Duration.zero;
 
   @override
   Widget buildViewWithOptions(VideoViewOptions options) =>
@@ -344,5 +355,278 @@ void main() {
 
     testWidgets('the challenger ahead: the challenger plays', (t) =>
         check(t, '2', 'maya', 'https://x/2.mp4'));
+  });
+
+  // Whoever is ahead is the FIRST side: named first at the top, and the
+  // other is a swipe LEFT away. It used to open on the leader but keep the
+  // challenger first, so with the answer ahead the other side was a swipe
+  // right — backwards.
+  group('the side ahead comes first', () {
+    Future<void> swipe(WidgetTester t, double dx) async {
+      await t.dragFrom(Offset(dx < 0 ? 320 : 80, 430), Offset(dx, 0));
+      await settle(t);
+    }
+
+    double leftOf(WidgetTester t, String key) =>
+        t.getTopLeft(find.byKey(ValueKey(key))).dx;
+
+    Future<void> run(
+      WidgetTester t, {
+      required String id,
+      required String ahead,
+      required String first,
+      required String second,
+      required String firstKey,
+      required String secondKey,
+    }) async {
+      final queued = <VoidCallback>[];
+      final before = VideoPlayerService.deferRelease;
+      VideoPlayerService.deferRelease = queued.add;
+      addTearDown(() => VideoPlayerService.deferRelease = before);
+      leader = ahead;
+      await openFromPage(t, videos: [battle(id)]);
+      await settle(t);
+      expect(platform.sounding, {first}, reason: 'opens on the side ahead');
+      expect(leftOf(t, firstKey), lessThan(leftOf(t, secondKey)),
+          reason: 'the side ahead is named first');
+
+      // Right from the first side: there is nothing before it.
+      await swipe(t, 280);
+      expect(platform.sounding, {first});
+
+      // Left: the other side.
+      await swipe(t, -280);
+      expect(platform.sounding, {second});
+      expect(VideoPlayerService.instance.debugActiveUrl, second);
+
+      // And right again: back to the first.
+      await swipe(t, 280);
+      expect(platform.sounding, {first});
+
+      await t.pumpWidget(const SizedBox());
+      await t.pump(const Duration(seconds: 5));
+      ReelDiagnostics.instance.debugReset();
+      EventTracker.instance.dispose();
+    }
+
+    testWidgets('the answer ahead: the answer first, the challenger a swipe '
+        'left away', (t) => run(
+          t,
+          id: '6',
+          ahead: 'leo',
+          first: 'https://x/r6.mp4',
+          second: 'https://x/6.mp4',
+          firstKey: 'matchup_opponent',
+          secondKey: 'matchup_challenger',
+        ));
+
+    testWidgets('the challenger ahead: the challenger first, the answer a '
+        'swipe left away', (t) => run(
+          t,
+          id: '7',
+          ahead: 'maya',
+          first: 'https://x/7.mp4',
+          second: 'https://x/r7.mp4',
+          firstKey: 'matchup_challenger',
+          secondKey: 'matchup_opponent',
+        ));
+  });
+
+  // Pulling down the notifications pauses the app; letting them go resumes
+  // it. On a battle's other side that used to start the challenger — its
+  // sound behind the answer's still picture.
+  group('back from the notifications on a battle', () {
+    Future<void> shade(WidgetTester t) async {
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await settle(t);
+      expect(platform.sounding, isEmpty, reason: 'the shade pauses it');
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await settle(t);
+    }
+
+    Future<void> done(WidgetTester t) async {
+      await t.pumpWidget(const SizedBox());
+      await t.pump(const Duration(seconds: 5));
+      ReelDiagnostics.instance.debugReset();
+      EventTracker.instance.dispose();
+    }
+
+    testWidgets('turned to the answer: the answer plays again, not the '
+        'challenger', (t) async {
+      final queued = <VoidCallback>[];
+      final before = VideoPlayerService.deferRelease;
+      VideoPlayerService.deferRelease = queued.add;
+      addTearDown(() => VideoPlayerService.deferRelease = before);
+      leader = 'maya';
+      await openFromPage(t, videos: [battle('3')]);
+      await settle(t);
+      expect(platform.sounding, {'https://x/3.mp4'});
+      // Swipe left to the answer.
+      await t.dragFrom(const Offset(320, 430), const Offset(-280, 0));
+      await settle(t);
+      expect(platform.sounding, {'https://x/r3.mp4'},
+          reason: 'on the answer before the shade');
+
+      await shade(t);
+      expect(platform.sounding, {'https://x/r3.mp4'},
+          reason: 'the side on screen plays again');
+      expect(VideoPlayerService.instance.debugActiveUrl, 'https://x/r3.mp4');
+      await done(t);
+    });
+
+    testWidgets('opened on the answer because it is ahead: the answer plays '
+        'again', (t) async {
+      final queued = <VoidCallback>[];
+      final before = VideoPlayerService.deferRelease;
+      VideoPlayerService.deferRelease = queued.add;
+      addTearDown(() => VideoPlayerService.deferRelease = before);
+      leader = 'leo';
+      await openFromPage(t, videos: [battle('4')]);
+      await settle(t);
+      expect(platform.sounding, {'https://x/r4.mp4'});
+      await shade(t);
+      expect(platform.sounding, {'https://x/r4.mp4'});
+      await done(t);
+    });
+
+    testWidgets('on the challenger: the challenger plays again', (t) async {
+      final queued = <VoidCallback>[];
+      final before = VideoPlayerService.deferRelease;
+      VideoPlayerService.deferRelease = queued.add;
+      addTearDown(() => VideoPlayerService.deferRelease = before);
+      leader = 'maya';
+      await openFromPage(t, videos: [battle('5')]);
+      await settle(t);
+      expect(platform.sounding, {'https://x/5.mp4'});
+      await shade(t);
+      expect(platform.sounding, {'https://x/5.mp4'});
+      await done(t);
+    });
+  });
+
+  // A video tapped in Search starts at once. It used to wait for the server
+  // to send the videos that come after it, so the picture sat there while
+  // the video looked slow to load.
+  group('a video opened from Search', () {
+    /// Opens [seed] the way Search does, with the server holding back the
+    /// rest of the list until [rest] completes.
+    Future<void> open(
+      WidgetTester t,
+      ChallengeModel seed,
+      Completer<void> rest,
+    ) async {
+      final queued = <VoidCallback>[];
+      final before = VideoPlayerService.deferRelease;
+      VideoPlayerService.deferRelease = queued.add;
+      addTearDown(() => VideoPlayerService.deferRelease = before);
+      t.view.physicalSize = const Size(400, 860);
+      t.view.devicePixelRatio = 1;
+      addTearDown(t.view.resetPhysicalSize);
+      addTearDown(t.view.resetDevicePixelRatio);
+      ApiService.useClient(
+        MockClient((req) async {
+          if (req.url.path.endsWith('/standings')) {
+            return http.Response(score(leader), 200);
+          }
+          if (req.url.path.contains('/feed/explore')) {
+            await rest.future;
+            return http.Response(
+              json.encode({
+                'items': [
+                  {
+                    'type': 'challenge',
+                    'challenge': {
+                      'id': '59',
+                      'creatorId': '5',
+                      'creatorUsername': 'maya',
+                      'videoUrl': 'https://x/59.mp4',
+                      'status': 'open',
+                    },
+                  },
+                ],
+                'hasMore': false,
+              }),
+              200,
+            );
+          }
+          return http.Response('{}', 200);
+        }),
+      );
+      final dp = DataProvider()
+        ..setUser(
+          UserModel(
+            id: '1',
+            username: 'me',
+            wins: 0,
+            losses: 0,
+            followersCount: 0,
+            followingCount: 0,
+          ),
+        );
+      EventTracker.instance.dispose();
+      await t.pumpWidget(
+        ChangeNotifierProvider<DataProvider>.value(
+          value: dp,
+          child: MaterialApp(home: SearchReelsViewerPage(seedChallenge: seed)),
+        ),
+      );
+      await settle(t);
+    }
+
+    Future<void> done(WidgetTester t) async {
+      await t.pumpWidget(const SizedBox());
+      await t.pump(const Duration(seconds: 5));
+      ReelDiagnostics.instance.debugReset();
+      EventTracker.instance.dispose();
+    }
+
+    testWidgets('plays before the rest of the list has come, and is not '
+        'started over when it does', (t) async {
+      final rest = Completer<void>();
+      platform.playedFor = const Duration(seconds: 2);
+      addTearDown(() => platform.playedFor = Duration.zero);
+      await open(t, short('51'), rest);
+      expect(platform.sounding, {'https://x/51.mp4'},
+          reason: 'playing while the server is still sending the rest');
+
+      platform.rewound.clear();
+      rest.complete();
+      await settle(t);
+      expect(platform.sounding, {'https://x/51.mp4'});
+      expect(platform.rewound, isEmpty,
+          reason: 'the list arriving does not send it back to the start');
+      expect(platform.uriOf.values.where((u) => u == 'https://x/51.mp4'),
+          hasLength(1),
+          reason: 'one player for it, not a second one');
+      await done(t);
+    });
+
+    testWidgets('a battle opened on the answer stays on the answer when the '
+        'rest of the list comes', (t) async {
+      leader = 'leo';
+      platform.playedFor = const Duration(seconds: 2);
+      addTearDown(() => platform.playedFor = Duration.zero);
+      final rest = Completer<void>();
+      await open(t, battle('52'), rest);
+      expect(platform.sounding, {'https://x/r52.mp4'});
+
+      platform.rewound.clear();
+      rest.complete();
+      await settle(t);
+      expect(platform.sounding, {'https://x/r52.mp4'});
+      expect(platform.rewound, isEmpty);
+      await done(t);
+    });
+
+    testWidgets('the rest of the list does come, behind it', (t) async {
+      final rest = Completer<void>();
+      await open(t, short('53'), rest);
+      rest.complete();
+      await settle(t);
+      await t.drag(find.byType(PageView), const Offset(0, -700));
+      await settle(t);
+      expect(platform.sounding, {'https://x/59.mp4'});
+      await done(t);
+    });
   });
 }
