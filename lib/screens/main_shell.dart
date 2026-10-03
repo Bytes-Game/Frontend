@@ -47,6 +47,10 @@ class _MainShellState extends State<MainShell> {
 
   /// The + button, so the pop-out can open exactly where it is.
   final _plusKey = GlobalKey();
+
+  /// Bumped when Home is tapped while Home is already showing: the feed on
+  /// screen goes back to the top with fresh videos.
+  final _homeTappedAgain = ValueNotifier<int>(0);
   CreateBurstHandle? _burst;
 
   /// Fetches Search's videos in the background, once Home has had its
@@ -83,6 +87,7 @@ class _MainShellState extends State<MainShell> {
   @override
   void dispose() {
     _searchPrefetch?.cancel();
+    _homeTappedAgain.dispose();
     super.dispose();
   }
 
@@ -95,7 +100,11 @@ class _MainShellState extends State<MainShell> {
       return;
     }
 
-    if (index == _currentIndex) return;
+    if (index == _currentIndex) {
+      // Home again, on Home: refresh it, as TikTok and Instagram do.
+      if (index == 0) _homeTappedAgain.value++;
+      return;
+    }
     final from = _currentIndex;
     // Kill the reels feed audio BEFORE we rebuild — the dispose chain
     // on SmartReelsFeed pauses players via release(url) but that
@@ -188,7 +197,7 @@ class _MainShellState extends State<MainShell> {
     // the four real tabs do.
     switch (_currentIndex) {
       case 0:
-        return const HomePage();
+        return HomePage(tappedAgain: _homeTappedAgain);
       case 1:
         return const ChatListPage();
       case 3:
@@ -196,7 +205,7 @@ class _MainShellState extends State<MainShell> {
       case 4:
         return ProfilePage(user: dp.user!);
       default:
-        return const HomePage();
+        return HomePage(tappedAgain: _homeTappedAgain);
     }
   }
 

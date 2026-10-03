@@ -495,6 +495,22 @@ class ApiService {
     required String followerUsername,
     required String followingId,
     required String followingUsername,
+  }) async =>
+      await followUserOutcome(
+        followerId: followerId,
+        followerUsername: followerUsername,
+        followingId: followingId,
+        followingUsername: followingUsername,
+      ) ==
+      FollowOutcome.followed;
+
+  /// [followUser], saying why when it did not happen: the server refuses a
+  /// follow across a block, and the app answers each case differently.
+  static Future<FollowOutcome> followUserOutcome({
+    required String followerId,
+    required String followerUsername,
+    required String followingId,
+    required String followingUsername,
   }) async {
     try {
       final res = await _authHttp.post(
@@ -508,9 +524,21 @@ class ApiService {
           'clientTimestamp': DateTime.now().toUtc().toIso8601String(),
         }),
       );
-      return res.statusCode == 200;
-    } catch (_) {
-      return false;
+      if (res.statusCode == 200) return FollowOutcome.followed;
+      var reason = '';
+      try {
+        final body = json.decode(res.body);
+        if (body is Map) reason = '${body['reason'] ?? ''}';
+      } catch (_) {
+        // Not JSON: an older server. Treated as any other failure below.
+      }
+      if (reason == 'you_blocked') return FollowOutcome.youBlocked;
+      if (reason == 'unavailable') return FollowOutcome.unavailable;
+      debugPrint('[follow] the server answered ${res.statusCode}');
+      return FollowOutcome.failed;
+    } catch (e) {
+      debugPrint('[follow] did not reach the server: $e');
+      return FollowOutcome.failed;
     }
   }
 
@@ -1610,6 +1638,10 @@ class ApiService {
     int? mediaHeight,
     int? mediaDurationMs,
     List<int>? waveform,
+    // A shared battle or short (kind "share"): which one, and for a battle
+    // which side — empty for the challenger's video.
+    String? challengeId,
+    String? responseId,
   }) async {
     try {
       final body = <String, dynamic>{
@@ -1620,7 +1652,13 @@ class ApiService {
       if (replyToId != null && replyToId.isNotEmpty) {
         body['replyToId'] = replyToId;
       }
-      if (kind != null && kind != 'text') {
+      if (kind == 'share') {
+        body['kind'] = kind;
+        body['challengeId'] = challengeId ?? '';
+        if (responseId != null && responseId.isNotEmpty) {
+          body['responseId'] = responseId;
+        }
+      } else if (kind != null && kind != 'text') {
         body['kind'] = kind;
         body['mediaUrl'] = mediaUrl;
         if (mediaWidth != null) body['mediaWidth'] = mediaWidth;
@@ -1634,8 +1672,14 @@ class ApiService {
         body: json.encode(body),
       );
       if (res.statusCode == 200) return json.decode(res.body);
+      // Said, not hidden: a message that did not go looks the same as one
+      // that did until somebody wonders why there was no answer.
+      debugPrint('[chat] the server refused a ${kind ?? 'text'} message: '
+          '${res.statusCode}');
       return null;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[chat] a ${kind ?? 'text'} message did not reach the '
+          'server: $e');
       return null;
     }
   }
@@ -2504,4 +2548,18 @@ class ApiService {
       return false;
     }
   }
+}
+
+/// How a tap on Follow went.
+enum FollowOutcome {
+  followed,
+
+  /// You blocked them. Unblock first; the app offers to.
+  youBlocked,
+
+  /// They can't be followed by you — never said why.
+  unavailable,
+
+  /// It did not get through.
+  failed,
 }

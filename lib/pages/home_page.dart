@@ -25,7 +25,11 @@ import 'package:myapp/widgets/smart_reels_feed.dart';
 ///                always-on wildcard injection. Designed for breadth, not
 ///                engagement maximization.
 class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+  /// Fires when Home's tab is tapped while Home is already showing. The
+  /// feed on screen refreshes; the others are left as they are.
+  final Listenable? tappedAgain;
+
+  const HomePage({super.key, this.tappedAgain});
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -48,12 +52,29 @@ class _HomePageState extends State<HomePage>
   @override
   String get pageName => 'home_page';
 
+  /// One per tab, so only the feed on screen is told to refresh.
+  late final List<ValueNotifier<int>> _refreshTab = [
+    for (var i = 0; i < _tabLabels.length; i++) ValueNotifier<int>(0),
+  ];
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: _tabLabels.length, vsync: this);
     _tabController.addListener(_onHomeTabChanged);
+    widget.tappedAgain?.addListener(_refreshShownTab);
   }
+
+  @override
+  void didUpdateWidget(covariant HomePage old) {
+    super.didUpdateWidget(old);
+    if (old.tappedAgain != widget.tappedAgain) {
+      old.tappedAgain?.removeListener(_refreshShownTab);
+      widget.tappedAgain?.addListener(_refreshShownTab);
+    }
+  }
+
+  void _refreshShownTab() => _refreshTab[_tabController.index].value++;
 
   void _onHomeTabChanged() {
     if (_tabController.indexIsChanging) return;
@@ -70,6 +91,10 @@ class _HomePageState extends State<HomePage>
 
   @override
   void dispose() {
+    widget.tappedAgain?.removeListener(_refreshShownTab);
+    for (final n in _refreshTab) {
+      n.dispose();
+    }
     _tabController.removeListener(_onHomeTabChanged);
     _tabController.dispose();
     super.dispose();
@@ -93,11 +118,18 @@ class _HomePageState extends State<HomePage>
           TabBarView(
             controller: _tabController,
             children: [
-              SmartReelsFeed(userId: userId, kind: FeedKind.forYou),
-              SmartReelsFeed(userId: userId, kind: FeedKind.following),
-              SmartReelsFeed(userId: userId, kind: FeedKind.explore),
-              SmartReelsFeed(userId: userId, kind: FeedKind.battles),
-              SmartReelsFeed(userId: userId, kind: FeedKind.shorts),
+              for (final (i, kind) in const [
+                FeedKind.forYou,
+                FeedKind.following,
+                FeedKind.explore,
+                FeedKind.battles,
+                FeedKind.shorts,
+              ].indexed)
+                SmartReelsFeed(
+                  userId: userId,
+                  kind: kind,
+                  refreshRequests: _refreshTab[i],
+                ),
             ],
           ),
 

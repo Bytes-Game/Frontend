@@ -102,6 +102,9 @@ Duration feedDelay = Duration.zero;
 List<String> peopleAsked = [];
 List<Map<String, dynamic>> sharesSent = [];
 
+/// Messages sent from the share sheet.
+List<Map<String, dynamic>> chatSends = [];
+
 /// Views the app reported.
 List<Map<String, dynamic>> watchesSent = [];
 
@@ -114,6 +117,7 @@ void fakeServer(Map<String, dynamic> first) {
   lastVote = null;
   peopleAsked = [];
   sharesSent = [];
+  chatSends = [];
   watchesSent = [];
   reportsSent = [];
   standingsAsked = 0;
@@ -186,6 +190,10 @@ void fakeServer(Map<String, dynamic> first) {
           json.encode({'message': 'ok', 'views': ?watchViews}),
           201,
         );
+      }
+      if (req.url.path.endsWith('/chat/send')) {
+        chatSends.add(json.decode(req.body) as Map<String, dynamic>);
+        return http.Response('{"id": "1"}', 200);
       }
       if (req.url.path.endsWith('/challenges/share')) {
         sharesSent.add(json.decode(req.body) as Map<String, dynamic>);
@@ -309,7 +317,18 @@ Future<void> openReel(
         followersCount: 0,
         followingCount: 0,
       ),
-    );
+    )
+    // Somebody to share with.
+    ..setAllUsers([
+      UserModel(
+        id: '3',
+        username: 'nina',
+        wins: 0,
+        losses: 0,
+        followersCount: 0,
+        followingCount: 0,
+      ),
+    ]);
   EventTracker.instance.dispose();
   await t.pumpWidget(
     ChangeNotifierProvider<DataProvider>.value(
@@ -494,6 +513,31 @@ void main() {
       await t.pump(const Duration(milliseconds: 300));
       expect(sharesSent.single, {'challengeId': '1'}, reason: "maya's video");
       expect(count(t, 'shares'), '43', reason: "the server's total");
+      await t.pump(const Duration(seconds: 3));
+      await closeReel(t);
+    });
+
+    testWidgets('sharing the answer sends the video and that side, never a '
+        'link', (t) async {
+      await openReel(t, battle());
+      await t.tap(find.byKey(const ValueKey('matchup_opponent')));
+      await t.pump(const Duration(milliseconds: 600));
+      await t.tap(find.byTooltip('Share'));
+      // Several frames: the sheet slides up over a few of them.
+      for (var i = 0; i < 8; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+      await t.tap(find.byKey(const ValueKey('share_person_3')));
+      await t.pump();
+      await t.tap(find.byKey(const ValueKey('share_send')));
+      for (var i = 0; i < 6; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+      expect(chatSends, hasLength(1));
+      expect(chatSends.single['kind'], 'share');
+      expect(chatSends.single['challengeId'], '1');
+      expect(chatSends.single['responseId'], '77', reason: "leo's side");
+      expect('${chatSends.single}', isNot(contains('https://')));
       await t.pump(const Duration(seconds: 3));
       await closeReel(t);
     });
