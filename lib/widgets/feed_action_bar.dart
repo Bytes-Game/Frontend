@@ -6,6 +6,7 @@ import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/widgets/chat_share_widgets.dart';
+import 'package:myapp/widgets/mentions.dart';
 
 /// TikTok-style vertical action bar for the right side of the feed.
 /// Shows like, dislike, comment, share for shorts.
@@ -899,6 +900,8 @@ class _ChallengeCommentSheetState extends State<ChallengeCommentSheet> {
               ],
             ),
           ),
+          // People to mention, while an @name is being typed.
+          MentionSuggestions(controller: _ctrl, dark: true),
           // Write one: your initial, a rounded dark field, and a send
           // button that only lights up when there is something to send.
           Container(
@@ -929,7 +932,7 @@ class _ChallengeCommentSheetState extends State<ChallengeCommentSheet> {
                       style: const TextStyle(color: Colors.white, fontSize: 15),
                       cursorColor: _Sheet.accent,
                       decoration: const InputDecoration(
-                        hintText: 'Add a comment…',
+                        hintText: 'Add a comment… @ to mention',
                         hintStyle: TextStyle(color: _Sheet.muted),
                         border: InputBorder.none,
                         enabledBorder: InputBorder.none,
@@ -1050,8 +1053,11 @@ class _CommentRow extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 3),
-                Text(
+                // @names in colour, and a tap opens their profile.
+                MentionText(
                   text,
+                  key: const ValueKey('comment_text'),
+                  mentionColor: _Sheet.accent,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 14.5,
