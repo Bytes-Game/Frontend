@@ -18,6 +18,7 @@ import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/chat_media_widgets.dart';
 import 'package:myapp/widgets/chat_share_widgets.dart';
+import 'package:myapp/widgets/mentions.dart';
 
 /// One conversation.
 ///
@@ -1143,7 +1144,15 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                     onSend: _sendVoice,
                     onCancel: () => setState(() => _recording = false),
                   )
-                : _typingRow(cs),
+                : Column(
+                    key: const ValueKey('typing'),
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // People to mention, while an @name is being typed.
+                      MentionSuggestions(controller: _msgCtrl),
+                      _typingRow(cs),
+                    ],
+                  ),
           ),
         ),
       ),
@@ -1974,17 +1983,25 @@ class _MessageBubbleState extends State<_MessageBubble> {
             ),
       child: kind == 'voice'
           ? ChatVoice(message: message, isMe: isMe)
-          : Text(
+          : isDeleted
+          ? Text(
         message['message'] ?? '',
         style: TextStyle(
-          color: isDeleted
-              ? cs.onSurface.withValues(alpha: 0.5)
-              : isMe
-                  ? Colors.white
-                  : cs.onSurface,
+          color: cs.onSurface.withValues(alpha: 0.5),
           fontSize: 15,
           height: 1.3,
-          fontStyle: isDeleted ? FontStyle.italic : FontStyle.normal,
+          fontStyle: FontStyle.italic,
+        ),
+      )
+          // @names stand out, and a tap opens their profile.
+          : MentionText(
+        '${message['message'] ?? ''}',
+        mentionColor: isMe ? Colors.white : AppTheme.primary,
+        underline: isMe,
+        style: TextStyle(
+          color: isMe ? Colors.white : cs.onSurface,
+          fontSize: 15,
+          height: 1.3,
         ),
       ),
     );

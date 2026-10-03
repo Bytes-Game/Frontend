@@ -139,8 +139,9 @@ class _NotificationsPageState extends State<NotificationsPage>
             icon: Icons.notifications_none_rounded,
             title: 'Nothing yet',
             subtitle:
-                'When someone follows you, challenges you or accepts '
-                'your challenge, or you win a battle, you will see it here.',
+                'When someone follows you, challenges you, mentions you '
+                'or accepts your challenge, or you win a battle, you will '
+                'see it here.',
           ),
         ],
       );
@@ -233,6 +234,9 @@ class _Heading extends StatelessWidget {
       return (icon: Icons.favorite_rounded, color: const Color(0xFFFF375F));
     case 'comment':
       return (icon: Icons.chat_bubble_rounded, color: const Color(0xFF30D158));
+    // Somebody named you with an @ in a comment.
+    case 'mention':
+      return (icon: Icons.alternate_email_rounded, color: const Color(0xFF0A84FF));
     default:
       return (
         icon: Icons.notifications_rounded,

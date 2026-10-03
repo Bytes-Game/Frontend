@@ -78,6 +78,17 @@ void fakeServer() {
               'challengeId': '40',
             },
             {
+              'id': '7',
+              'type': 'mention',
+              'text': 'mentioned you in a comment: “@me look at this”',
+              'message': 'nina mentioned you in a comment: “@me look at this”',
+              'timestamp': ago(const Duration(days: 1)),
+              'read': true,
+              'actorId': '8',
+              'actorUsername': 'nina',
+              'challengeId': '40',
+            },
+            {
               'id': '2',
               'type': 'follow',
               'text': 'started following you.',
@@ -278,6 +289,43 @@ void main() {
     expect(find.byKey(const ValueKey('note_following')), findsOneWidget);
   });
 
+  testWidgets('a mention: who, what they said, a blue @, and a tap opens '
+      'the video', (t) async {
+    await openPage(t);
+    final row = find.byKey(const ValueKey('note_7'));
+    expect(row, findsOneWidget);
+    expect(
+      find.descendant(
+        of: row,
+        matching: find.textContaining(
+          'mentioned you in a comment: “@me look at this”',
+          findRichText: true,
+        ),
+      ),
+      findsOneWidget,
+    );
+    // A white @ on a blue badge, on nina's picture.
+    expect(
+      find.descendant(
+        of: row,
+        matching: find.byIcon(Icons.alternate_email_rounded),
+      ),
+      findsOneWidget,
+    );
+    final badge = t.widget<Container>(
+      find.descendant(of: row, matching: find.byKey(const ValueKey('note_badge'))),
+    );
+    expect(
+      (badge.decoration! as BoxDecoration).color,
+      const Color(0xFF0A84FF),
+    );
+    await t.tap(row);
+    for (var i = 0; i < 8; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byType(ChallengeDetailPage), findsOneWidget);
+  });
+
   testWidgets('tapping a challenge opens it', (t) async {
     await openPage(t);
     await t.tap(find.textContaining('challenged you', findRichText: true));
@@ -292,7 +340,7 @@ void main() {
       final dp = signedIn();
       await dp.loadNotifications();
       expect(dp.unreadNotifications, 1);
-      expect(dp.notifications, hasLength(5));
+      expect(dp.notifications, hasLength(6));
     });
 
     test('a live one already in the list is not added twice; chat is not a '
@@ -309,7 +357,7 @@ void main() {
       dp.addNotification(
         NotificationModel.fromJson({'type': 'chat', 'message': 'hi'}),
       );
-      expect(dp.notifications, hasLength(5));
+      expect(dp.notifications, hasLength(6));
       expect(dp.unreadNotifications, 1);
       dp.addNotification(
         NotificationModel.fromJson({
@@ -318,7 +366,7 @@ void main() {
           'message': 'new',
         }),
       );
-      expect(dp.notifications, hasLength(6));
+      expect(dp.notifications, hasLength(7));
       expect(dp.unreadNotifications, 2);
     });
   });
