@@ -1582,11 +1582,20 @@ class ApiService {
   }
 
   /// POST /api/v1/chat/send
+  ///
+  /// A photo or voice message also gives [kind] ("photo" or "voice") and
+  /// the uploaded file's address in [mediaUrl] (see ChatMedia.upload).
   static Future<Map<String, dynamic>?> sendChatMessage({
     required String senderId,
     required String receiverId,
     required String message,
     String? replyToId,
+    String? kind,
+    String? mediaUrl,
+    int? mediaWidth,
+    int? mediaHeight,
+    int? mediaDurationMs,
+    List<int>? waveform,
   }) async {
     try {
       final body = <String, dynamic>{
@@ -1597,6 +1606,14 @@ class ApiService {
       if (replyToId != null && replyToId.isNotEmpty) {
         body['replyToId'] = replyToId;
       }
+      if (kind != null && kind != 'text') {
+        body['kind'] = kind;
+        body['mediaUrl'] = mediaUrl;
+        if (mediaWidth != null) body['mediaWidth'] = mediaWidth;
+        if (mediaHeight != null) body['mediaHeight'] = mediaHeight;
+        if (mediaDurationMs != null) body['mediaDurationMs'] = mediaDurationMs;
+        if (waveform != null) body['waveform'] = waveform;
+      }
       final res = await _authHttp.post(
         Uri.parse('$_base/api/v1/chat/send'),
         headers: {'Content-Type': 'application/json'},
@@ -1605,6 +1622,29 @@ class ApiService {
       if (res.statusCode == 200) return json.decode(res.body);
       return null;
     } catch (_) {
+      return null;
+    }
+  }
+
+  /// POST /api/v1/chat/media — somewhere to upload a photo or voice
+  /// message: { uploadUrl, publicUrl, contentType }. Null when the server
+  /// would not give one.
+  static Future<Map<String, dynamic>?> chatMediaSlot(String kind) async {
+    try {
+      final res = await _authHttp.post(
+        Uri.parse('$_base/api/v1/chat/media'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'kind': kind}),
+      );
+      if (res.statusCode != 200) {
+        debugPrint('[chat] no place to upload a $kind: '
+            '${res.statusCode} ${res.body}');
+        return null;
+      }
+      final d = json.decode(res.body);
+      return d is Map<String, dynamic> ? d : null;
+    } catch (e) {
+      debugPrint('[chat] no place to upload a $kind: $e');
       return null;
     }
   }

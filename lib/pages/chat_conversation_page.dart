@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
@@ -8,12 +9,14 @@ import 'package:provider/provider.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/call_service.dart';
+import 'package:myapp/services/chat_media.dart';
 import 'package:myapp/services/chat_notifications.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/widgets/arena_ui.dart';
+import 'package:myapp/widgets/chat_media_widgets.dart';
 
 /// One conversation.
 ///
@@ -55,7 +58,6 @@ class _ChatConversationPageState extends State<ChatConversationPage>
   final _scrollCtrl = ScrollController();
   List<Map<String, dynamic>> _messages = [];
   bool _loading = true;
-  StreamSubscription? _wsSub;
   StreamSubscription? _liveSub;
   WebSocketService? _ws;
   bool _otherOnline = false;
@@ -65,6 +67,9 @@ class _ChatConversationPageState extends State<ChatConversationPage>
   String? _editingMsgId;
   // Reply mode
   Map<String, dynamic>? _replyingTo;
+
+  /// Recording a voice message: the message box is the recording bar.
+  bool _recording = false;
 
   /// They are typing right now. Cleared by their "stopped", by a message
   /// from them, or after a few seconds of nothing in case "stopped" is lost.
@@ -125,8 +130,12 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     if (_saidTypingAt != null) _sayTyping(false);
     _msgCtrl.dispose();
     _scrollCtrl.dispose();
-    _wsSub?.cancel();
     _liveSub?.cancel();
+    // Leaving the chat stops a voice message playing in it.
+    if (VoicePlayback.instance.current != null) {
+      // ignore: discarded_futures
+      VoicePlayback.instance.stop();
+    }
     _theyTypeTimer?.cancel();
     _stoppedTypingTimer?.cancel();
     super.dispose();
@@ -172,48 +181,65 @@ class _ChatConversationPageState extends State<ChatConversationPage>
   void _listenForRealTime() {
     final ws = Provider.of<WebSocketService>(context, listen: false);
     _ws = ws;
-    _wsSub = ws.notificationStream.listen((notif) {
-      if (notif.type == 'chat' && notif.senderId == widget.otherUserId) {
-        final id = notif.messageId ?? '';
-        setState(() {
-          _messages.add({
-            'id': id,
-            'senderId': notif.senderId ?? '',
-            'senderUsername': notif.senderUsername ?? '',
-            'receiverId': notif.receiverId ?? '',
-            'receiverUsername': notif.receiverUsername ?? '',
-            'message': notif.message,
-            'isRead': true,
-            'status': 'read',
-            'isEdited': false,
-            'isDeleted': false,
-            'createdAt': notif.timestamp.toIso8601String(),
-          });
-          _fresh.add(id);
-          _otherOnline = true;
-          _theyType = false;
-          if (_awayFromBottom) _missed++;
-        });
-        if (!_awayFromBottom) _scrollToBottom();
-        EventTracker.instance.trackMessagesRead(
-          conversationId: _convId,
-          messageCount: 1,
-        );
-        ApiService.markChatRead(widget.otherUserId, _myId);
-      }
-    });
-    // "Seen", "Delivered" and "typing…", as they happen on their phone.
+    // Their messages, "Seen", "Delivered" and "typing…", as they happen on
+    // their phone. Messages come as the server sent them, so a photo or
+    // voice note keeps its file, size and length.
     _liveSub = ws.events.listen(_onLive);
+  }
+
+  /// A message from them, live.
+  void _onIncoming(Map<String, dynamic> ev) {
+    final id = '${ev['messageId'] ?? ''}';
+    setState(() {
+      _messages.add({
+        'id': id,
+        'senderId': '${ev['senderId'] ?? ''}',
+        'senderUsername': '${ev['senderUsername'] ?? ''}',
+        'receiverId': '${ev['receiverId'] ?? ''}',
+        'receiverUsername': '${ev['receiverUsername'] ?? ''}',
+        'message': '${ev['message'] ?? ''}',
+        'isRead': true,
+        'status': 'read',
+        'isEdited': false,
+        'isDeleted': false,
+        'createdAt': (DateTime.tryParse('${ev['timestamp'] ?? ''}') ??
+                DateTime.now())
+            .toIso8601String(),
+        'kind': ev['kind'] ?? 'text',
+        'mediaUrl': ev['mediaUrl'],
+        'mediaWidth': ev['mediaWidth'],
+        'mediaHeight': ev['mediaHeight'],
+        'mediaDurationMs': ev['mediaDurationMs'],
+        'waveform': ev['waveform'],
+      });
+      _fresh.add(id);
+      _otherOnline = true;
+      _theyType = false;
+      if (_awayFromBottom) _missed++;
+    });
+    if (!_awayFromBottom) _scrollToBottom();
+    EventTracker.instance.trackMessagesRead(
+      conversationId: _convId,
+      messageCount: 1,
+    );
+    ApiService.markChatRead(widget.otherUserId, _myId);
   }
 
   void _onLive(Map<String, dynamic> ev) {
     if (!mounted) return;
     switch (ev['type']) {
+      case 'chat':
+        if ('${ev['senderId']}' != widget.otherUserId) return;
+        _onIncoming(ev);
       case 'chat_read':
         if (ev['readerId'] != widget.otherUserId) return;
         setState(() {
           for (final m in _messages) {
-            if (m['senderId'] == _myId && m['status'] != 'failed') {
+            // Not one that never got there, nor one still uploading: they
+            // cannot have seen what has not arrived.
+            if (m['senderId'] == _myId &&
+                m['status'] != 'failed' &&
+                m['status'] != 'uploading') {
               m['isRead'] = true;
               m['status'] = 'read';
             }
@@ -327,7 +353,8 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     final dp = Provider.of<DataProvider>(context, listen: false);
     final now = DateTime.now().toUtc().toIso8601String();
     final replyId = _replyingTo?['id'] as String? ?? '';
-    final replyText = _replyingTo?['message'] as String? ?? '';
+    final replyText =
+        _replyingTo == null ? '' : chatPreviewText(_replyingTo!);
     final tempId = 'temp_${DateTime.now().microsecondsSinceEpoch}';
     final msg = <String, dynamic>{
       'id': tempId,
@@ -359,16 +386,195 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     await _deliver(msg);
   }
 
+  /// A photo or voice note going out: on screen at once, from the file on
+  /// this phone, with a ring filling as it uploads.
+  Future<void> _sendMedia({
+    required String kind,
+    required File file,
+    String caption = '',
+    int? width,
+    int? height,
+    int? durationMs,
+    List<int>? waveform,
+  }) async {
+    final dp = Provider.of<DataProvider>(context, listen: false);
+    final replyId = _replyingTo?['id'] as String? ?? '';
+    final replyText =
+        _replyingTo == null ? '' : chatPreviewText(_replyingTo!);
+    final tempId = 'temp_${DateTime.now().microsecondsSinceEpoch}';
+    final msg = <String, dynamic>{
+      'id': tempId,
+      'senderId': _myId,
+      'senderUsername': dp.user!.username,
+      'receiverId': widget.otherUserId,
+      'receiverUsername': widget.otherUsername,
+      'message': caption,
+      'isRead': false,
+      'status': 'uploading',
+      'progress': 0.0,
+      'isEdited': false,
+      'isDeleted': false,
+      'replyToId': replyId,
+      'replyToText': replyText,
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'kind': kind,
+      'localPath': file.path,
+      'mediaWidth': width,
+      'mediaHeight': height,
+      'mediaDurationMs': durationMs,
+      'waveform': waveform,
+    };
+    setState(() {
+      _messages.add(msg);
+      _fresh.add(tempId);
+      _replyingTo = null;
+    });
+    _scrollToBottom();
+    EventTracker.instance.trackMessageSent(
+      conversationId: _convId,
+      messageLength: caption.length,
+      hasMedia: true,
+    );
+    await _deliver(msg);
+  }
+
+  /// Photo: take one or choose one, look at it (and add a caption), send.
+  Future<void> _pickPhoto() async {
+    final camera = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                key: const ValueKey('photo_from_camera'),
+                leading: const Icon(Icons.photo_camera_rounded, color: kAccent),
+                title: const Text('Take a photo'),
+                onTap: () => Navigator.pop(ctx, true),
+              ),
+              ListTile(
+                key: const ValueKey('photo_from_gallery'),
+                leading:
+                    const Icon(Icons.photo_library_rounded, color: kAccent),
+                title: const Text('Choose from your photos'),
+                onTap: () => Navigator.pop(ctx, false),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (camera == null || !mounted) return;
+    final file = await ChatMedia.instance.photos.pick(camera: camera);
+    if (file == null || !mounted) return;
+    final caption = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => PhotoPreviewPage(file: file, to: widget.otherUsername),
+      ),
+    );
+    if (caption == null || !mounted) return;
+    final size = await ChatMedia.instance.measure(file);
+    if (!mounted) return;
+    if (size == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("That photo couldn't be opened. Try another one."),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    await _sendMedia(
+      kind: 'photo',
+      file: file,
+      caption: caption,
+      width: size.width.round(),
+      height: size.height.round(),
+    );
+  }
+
+  /// Voice: the microphone must be allowed, then the box becomes the
+  /// recording bar.
+  Future<void> _startRecording() async {
+    if (_saidTypingAt != null) _sayTyping(false);
+    final probe = ChatMedia.instance.recorder();
+    final ok = await probe.allowed();
+    // ignore: discarded_futures
+    probe.dispose();
+    if (!mounted) return;
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'Allow the microphone in your phone\'s settings to send voice messages.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    // A voice note playing would be recorded too.
+    // ignore: discarded_futures
+    VoicePlayback.instance.stop();
+    setState(() => _recording = true);
+  }
+
+  Future<void> _sendVoice(VoiceNote note) async {
+    setState(() => _recording = false);
+    await _sendMedia(
+      kind: 'voice',
+      file: note.file,
+      durationMs: note.length.inMilliseconds,
+      waveform: note.waveform,
+    );
+  }
+
   /// Sends [msg] to the server and puts the server's id on it, which is
   /// what "Delivered" and "Seen" are matched against. Marks it failed when
   /// the server could not be reached.
+  ///
+  /// A photo or voice note is uploaded first (again, on a retry, if it never
+  /// got there).
   Future<void> _deliver(Map<String, dynamic> msg) async {
     final replyId = msg['replyToId'] as String? ?? '';
+    final kind = '${msg['kind'] ?? 'text'}';
+    if (kind != 'text' && '${msg['mediaUrl'] ?? ''}'.isEmpty) {
+      setState(() {
+        msg['status'] = 'uploading';
+        msg['progress'] = 0.0;
+      });
+      var shown = 0.0;
+      final url = await ChatMedia.instance.upload(
+        File('${msg['localPath']}'),
+        kind,
+        onProgress: (p) {
+          // A redraw every few percent is plenty.
+          if (!mounted || p - shown < 0.04 && p < 1) return;
+          shown = p;
+          setState(() => msg['progress'] = p);
+        },
+      );
+      if (!mounted) return;
+      if (url == null) {
+        setState(() => msg['status'] = 'failed');
+        return;
+      }
+      msg['mediaUrl'] = url;
+    }
     final res = await ApiService.sendChatMessage(
       senderId: _myId,
       receiverId: widget.otherUserId,
       message: msg['message'] as String? ?? '',
       replyToId: replyId.isNotEmpty ? replyId : null,
+      kind: kind,
+      mediaUrl: msg['mediaUrl'] as String?,
+      mediaWidth: (msg['mediaWidth'] as num?)?.toInt(),
+      mediaHeight: (msg['mediaHeight'] as num?)?.toInt(),
+      mediaDurationMs: (msg['mediaDurationMs'] as num?)?.toInt(),
+      waveform: (msg['waveform'] as List?)?.cast<int>(),
     );
     if (!mounted) return;
     setState(() {
@@ -445,7 +651,11 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     final isDeleted = msg['isDeleted'] == true;
     if (isDeleted) return;
 
-    final canEdit = isMe && _canEdit(msg);
+    // Only words can be edited or copied: a photo's caption can be copied,
+    // a voice note has nothing to copy.
+    final isText = (msg['kind'] ?? 'text') == 'text';
+    final hasWords = '${msg['message'] ?? ''}'.trim().isNotEmpty;
+    final canEdit = isMe && isText && _canEdit(msg);
 
     showModalBottomSheet(
       context: context,
@@ -496,7 +706,7 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                     borderRadius: BorderRadius.circular(AppTheme.radiusMd),
                   ),
                   child: Text(
-                    msg['message'] ?? '',
+                    chatPreviewText(msg),
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -510,16 +720,17 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                       Navigator.pop(ctx);
                       setState(() => _replyingTo = msg);
                     }),
-                    action(Icons.copy_rounded, 'Copy', () {
-                      Clipboard.setData(
-                          ClipboardData(text: msg['message'] ?? ''));
-                      Navigator.pop(ctx);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                            content: Text('Copied'),
-                            duration: Duration(seconds: 1)),
-                      );
-                    }),
+                    if (hasWords)
+                      action(Icons.copy_rounded, 'Copy', () {
+                        Clipboard.setData(
+                            ClipboardData(text: msg['message'] ?? ''));
+                        Navigator.pop(ctx);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                              content: Text('Copied'),
+                              duration: Duration(seconds: 1)),
+                        );
+                      }),
                     action(Icons.forward_rounded, 'Forward', () {
                       Navigator.pop(ctx);
                       _showForwardPicker(msg);
@@ -580,7 +791,15 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     setState(() {
       msg['isDeleted'] = true;
       msg['message'] = 'Message unsent';
+      // Its photo or voice note goes with it.
+      msg['kind'] = 'text';
+      msg.remove('mediaUrl');
+      msg.remove('localPath');
     });
+    if (VoicePlayback.instance.current != null) {
+      // ignore: discarded_futures
+      VoicePlayback.instance.stop();
+    }
     await ApiService.deleteChatMessage(
       messageId: msg['id'] ?? '',
       senderId: _myId,
@@ -837,7 +1056,7 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                 title: _replyingTo!['senderId'] == _myId
                     ? 'Replying to yourself'
                     : 'Replying to ${widget.otherUsername}',
-                body: _replyingTo!['message'] ?? '',
+                body: chatPreviewText(_replyingTo!),
                 onClose: () => setState(() => _replyingTo = null),
               ),
 
@@ -884,6 +1103,11 @@ class _ChatConversationPageState extends State<ChatConversationPage>
       onLongPress: () => _showMessageActions(msg),
       onReply: () => setState(() => _replyingTo = msg),
       onRetry: failed ? () => _retry(msg) : null,
+      onOpenPhoto: () => ChatPhotoViewer.open(
+        context,
+        msg,
+        isMe ? 'You' : widget.otherUsername,
+      ),
     );
     return Column(
       key: ValueKey('msg_${identityHashCode(msg)}'),
@@ -896,12 +1120,10 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     );
   }
 
-  /// The composer, on frosted glass: the text box, and a send button that
-  /// lights up the moment there is something to send.
-  ///
-  /// There used to be a photo button and a microphone here that only said
-  /// "coming soon". Photo and voice messages are not built, so nothing on
-  /// screen offers them.
+  /// The composer, on frosted glass: a photo button, the text box, and on
+  /// the right the microphone — which becomes a send button the moment
+  /// there is something to send. While a voice message is being recorded
+  /// the whole row is the recording bar.
   Widget _composer(ColorScheme cs) {
     return _Frost(
       border: const Border(top: BorderSide(width: 0.5)),
@@ -909,79 +1131,107 @@ class _ChatConversationPageState extends State<ChatConversationPage>
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              const SizedBox(width: 4),
-              Expanded(
-                child: Container(
-                  constraints: const BoxConstraints(minHeight: 44),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
-                  decoration: BoxDecoration(
-                    color: cs.onSurface.withValues(alpha: 0.06),
-                    borderRadius: BorderRadius.circular(AppTheme.radiusXxl),
-                    border:
-                        Border.all(color: cs.onSurface.withValues(alpha: 0.08)),
-                  ),
-                  child: TextField(
-                    controller: _msgCtrl,
-                    minLines: 1,
-                    maxLines: 5,
-                    cursorColor: AppTheme.primary,
-                    textCapitalization: TextCapitalization.sentences,
-                    decoration: const InputDecoration(
-                      hintText: 'Message…',
-                      filled: false,
-                      border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
-                      focusedBorder: InputBorder.none,
-                      isCollapsed: true,
-                      // Zero, explicitly. The app's theme gives every text box 20
-                      // pixels of padding at the side and 16 above and below, and a
-                      // collapsed field still takes it — which pushed the words
-                      // right and off-centre inside this slim bar.
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                    style: const TextStyle(fontSize: 15),
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _sendMessage(),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              // Send lights up the moment there is something to send (it is
-              // Save while editing); until then it is dimmed and does
-              // nothing.
-              ValueListenableBuilder<TextEditingValue>(
-                valueListenable: _msgCtrl,
-                builder: (_, value, _) {
-                  final ready =
-                      value.text.trim().isNotEmpty || _editingMsgId != null;
-                  return AnimatedOpacity(
-                    duration: const Duration(milliseconds: 160),
-                    opacity: ready ? 1 : 0.35,
-                    child: AnimatedScale(
-                      duration: const Duration(milliseconds: 160),
-                      scale: ready ? 1 : 0.9,
-                      child: IconBubble(
-                        key: const ValueKey('send'),
-                        icon: _editingMsgId != null
-                            ? Icons.check_rounded
-                            : Icons.arrow_upward_rounded,
-                        tooltip: _editingMsgId != null ? 'Save' : 'Send',
-                        filled: true,
-                        size: 44,
-                        onTap: ready ? _sendMessage : null,
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ],
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 180),
+            child: _recording
+                ? VoiceRecordingBar(
+                    key: const ValueKey('recording'),
+                    onSend: _sendVoice,
+                    onCancel: () => setState(() => _recording = false),
+                  )
+                : _typingRow(cs),
           ),
         ),
       ),
+    );
+  }
+
+  Widget _typingRow(ColorScheme cs) {
+    return Row(
+      key: const ValueKey('typing_row'),
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        if (_editingMsgId == null) ...[
+          IconBubble(
+            key: const ValueKey('composer_photo'),
+            icon: Icons.photo_camera_rounded,
+            tooltip: 'Photo',
+            size: 44,
+            onTap: _pickPhoto,
+          ),
+          const SizedBox(width: 8),
+        ] else
+          const SizedBox(width: 4),
+        Expanded(
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 44),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+            decoration: BoxDecoration(
+              color: cs.onSurface.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(AppTheme.radiusXxl),
+              border: Border.all(color: cs.onSurface.withValues(alpha: 0.08)),
+            ),
+            child: TextField(
+              controller: _msgCtrl,
+              minLines: 1,
+              maxLines: 5,
+              cursorColor: AppTheme.primary,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                hintText: 'Message…',
+                filled: false,
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                isCollapsed: true,
+                // Zero, explicitly. The app's theme gives every text box 20
+                // pixels of padding at the side and 16 above and below, and a
+                // collapsed field still takes it — which pushed the words
+                // right and off-centre inside this slim bar.
+                contentPadding: EdgeInsets.zero,
+              ),
+              style: const TextStyle(fontSize: 15),
+              textInputAction: TextInputAction.send,
+              onSubmitted: (_) => _sendMessage(),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        // Send appears the moment there is something to send (Save while
+        // editing); until then, the microphone. It turns in as it swaps.
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _msgCtrl,
+          builder: (_, value, _) {
+            final ready =
+                value.text.trim().isNotEmpty || _editingMsgId != null;
+            return AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              transitionBuilder: (c, a) => RotationTransition(
+                turns: Tween(begin: 0.75, end: 1.0).animate(a),
+                child: ScaleTransition(scale: a, child: c),
+              ),
+              child: ready
+                  ? IconBubble(
+                      key: const ValueKey('send'),
+                      icon: _editingMsgId != null
+                          ? Icons.check_rounded
+                          : Icons.arrow_upward_rounded,
+                      tooltip: _editingMsgId != null ? 'Save' : 'Send',
+                      filled: true,
+                      size: 44,
+                      onTap: _sendMessage,
+                    )
+                  : IconBubble(
+                      key: const ValueKey('mic'),
+                      icon: Icons.mic_rounded,
+                      tooltip: 'Voice message',
+                      size: 44,
+                      onTap: _startRecording,
+                    ),
+            );
+          },
+        ),
+      ],
     );
   }
 }
@@ -1618,6 +1868,7 @@ class _MessageBubble extends StatefulWidget {
   final VoidCallback onLongPress;
   final VoidCallback onReply;
   final VoidCallback? onRetry;
+  final VoidCallback onOpenPhoto;
 
   const _MessageBubble({
     required this.message,
@@ -1629,6 +1880,7 @@ class _MessageBubble extends StatefulWidget {
     required this.onLongPress,
     required this.onReply,
     this.onRetry,
+    required this.onOpenPhoto,
   });
 
   @override
@@ -1685,11 +1937,22 @@ class _MessageBubbleState extends State<_MessageBubble> {
     // Apple's Messages greys for the other person's bubbles.
     final incoming = dark ? const Color(0xFF26252A) : const Color(0xFFE9E9EB);
 
-    final bubble = Container(
+    final kind = isDeleted ? 'text' : '${message['kind'] ?? 'text'}';
+    final bubble = kind == 'photo'
+        ? ChatPhoto(
+            message: message,
+            isMe: isMe,
+            radius: radius,
+            bubbleColor: isMe ? kAccent : incoming,
+            onOpen: widget.onOpenPhoto,
+          )
+        : Container(
       constraints: BoxConstraints(
         maxWidth: MediaQuery.of(context).size.width * 0.72,
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+      padding: kind == 'voice'
+          ? const EdgeInsets.fromLTRB(8, 8, 12, 8)
+          : const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
       decoration: isDeleted
           ? BoxDecoration(
               borderRadius: radius,
@@ -1699,7 +1962,9 @@ class _MessageBubbleState extends State<_MessageBubble> {
               color: isMe ? kAccent : incoming,
               borderRadius: radius,
             ),
-      child: Text(
+      child: kind == 'voice'
+          ? ChatVoice(message: message, isMe: isMe)
+          : Text(
         message['message'] ?? '',
         style: TextStyle(
           color: isDeleted
@@ -1921,6 +2186,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
 
   String _statusLabel() {
     final m = widget.message;
+    if (m['status'] == 'uploading') return 'Sending…';
     if (m['isRead'] == true) return 'Seen';
     if ((m['status'] ?? '') == 'delivered') return 'Delivered';
     return 'Sent';
@@ -1928,6 +2194,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
 
   IconData _statusIcon() {
     final m = widget.message;
+    if (m['status'] == 'uploading') return Icons.schedule_rounded;
     if (m['isRead'] == true) return Icons.done_all_rounded;
     if ((m['status'] ?? '') == 'delivered') return Icons.done_all_rounded;
     return Icons.check_rounded;

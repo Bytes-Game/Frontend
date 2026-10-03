@@ -1,3 +1,5 @@
+import 'package:myapp/models/chat_preview.dart';
+
 /// Represents a notification received via WebSocket or fetched from storage.
 /// Also used for real-time chat messages (type == 'chat') and for
 /// invisible prefetch hints (type == 'next_reel_hint').
@@ -84,7 +86,13 @@ class NotificationModel {
   factory NotificationModel.fromJson(Map<String, dynamic> json) {
     return NotificationModel(
       type: json['type'] ?? 'unknown',
-      message: json['message'] ?? 'No message content',
+      // A photo or voice message reads as one line ("📷 Photo", "🎤 Voice
+      // message") wherever a notification's text is shown; a voice note
+      // has no text of its own.
+      message: json['type'] == 'chat' &&
+              (json['kind'] == 'photo' || json['kind'] == 'voice')
+          ? chatPreviewText(json)
+          : json['message'] ?? 'No message content',
       timestamp: json['timestamp'] != null
           ? DateTime.tryParse(json['timestamp']) ?? DateTime.now()
           : DateTime.now(),
