@@ -174,8 +174,11 @@ void main() {
     });
 
     test('warming runs when visibility changes, not only on activation', () {
-      final body = bodyOf(src, 'void report(String tileId, double fraction');
-      expect(body, contains('_warmVisible()'),
+      // A report hands over to _settleSoon, which warms once the whole batch
+      // of reports is in. Both steps have to be there.
+      expect(codeOf('void report(String tileId, double fraction'),
+          contains('_settleSoon()'));
+      expect(codeOf('void _settleSoon()'), contains('_warmVisible()'),
           reason: 'warming only when a tile activates is warming a video at '
               'the moment it needs to play, which is too late');
     });
