@@ -6,6 +6,7 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/call_service.dart';
@@ -892,6 +893,23 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     return b.difference(a).inMinutes >= 30;
   }
 
+  /// The person this chat is with, as the @ list shows them: the copy the
+  /// app already has, with their full name, or else their name alone.
+  UserModel _otherPerson() {
+    final dp = Provider.of<DataProvider>(context, listen: false);
+    for (final u in dp.allUsers) {
+      if (u.id == widget.otherUserId) return u;
+    }
+    return UserModel(
+      id: widget.otherUserId,
+      username: widget.otherUsername,
+      wins: 0,
+      losses: 0,
+      followersCount: 0,
+      followingCount: 0,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -1148,8 +1166,12 @@ class _ChatConversationPageState extends State<ChatConversationPage>
                     key: const ValueKey('typing'),
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // People to mention, while an @name is being typed.
-                      MentionSuggestions(controller: _msgCtrl),
+                      // The person to mention, while an @name is being
+                      // typed: only the one you are talking to.
+                      MentionSuggestions(
+                        controller: _msgCtrl,
+                        people: [_otherPerson()],
+                      ),
                       _typingRow(cs),
                     ],
                   ),

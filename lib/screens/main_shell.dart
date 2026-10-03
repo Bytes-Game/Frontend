@@ -51,6 +51,7 @@ class _MainShellState extends State<MainShell> {
   /// Bumped when Home is tapped while Home is already showing: the feed on
   /// screen goes back to the top with fresh videos.
   final _homeTappedAgain = ValueNotifier<int>(0);
+  final _searchTappedAgain = ValueNotifier<int>(0);
   CreateBurstHandle? _burst;
 
   /// Fetches Search's videos in the background, once Home has had its
@@ -88,6 +89,7 @@ class _MainShellState extends State<MainShell> {
   void dispose() {
     _searchPrefetch?.cancel();
     _homeTappedAgain.dispose();
+    _searchTappedAgain.dispose();
     super.dispose();
   }
 
@@ -101,8 +103,10 @@ class _MainShellState extends State<MainShell> {
     }
 
     if (index == _currentIndex) {
-      // Home again, on Home: refresh it, as TikTok and Instagram do.
+      // Home again, on Home: refresh it, as TikTok and Instagram do. The
+      // same for Search.
       if (index == 0) _homeTappedAgain.value++;
+      if (index == 3) _searchTappedAgain.value++;
       return;
     }
     final from = _currentIndex;
@@ -201,7 +205,7 @@ class _MainShellState extends State<MainShell> {
       case 1:
         return const ChatListPage();
       case 3:
-        return const SearchPage();
+        return SearchPage(tappedAgain: _searchTappedAgain);
       case 4:
         return ProfilePage(user: dp.user!);
       default:

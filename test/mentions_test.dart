@@ -1,7 +1,8 @@
 // Mentioning people with an @, in comments and in chat.
 //
 // Type @ and a few letters: the people who match show above the text box,
-// the ones you follow first; tap one and their name goes in. An @name in a
+// the ones you follow first — in a chat, only the person you are talking
+// to. Tap one and their name goes in. An @name in a
 // comment or a message is drawn in colour, and tapping it opens their
 // profile. (The server tells whoever a comment mentions — mentions.go.)
 //
@@ -121,7 +122,11 @@ Future<void> openComments(
 
 late WebSocketService ws;
 
-Future<void> openChat(WidgetTester t) async {
+Future<void> openChat(
+  WidgetTester t, {
+  String otherId = 'u2',
+  String otherName = 'maya',
+}) async {
   final dp = signedIn();
   EventTracker.instance.dispose();
   ws = WebSocketService('', '');
@@ -133,8 +138,11 @@ Future<void> openChat(WidgetTester t) async {
         ChangeNotifierProvider<DataProvider>.value(value: dp),
         Provider<WebSocketService>.value(value: ws),
       ],
-      child: const MaterialApp(
-        home: ChatConversationPage(otherUserId: 'u2', otherUsername: 'maya'),
+      child: MaterialApp(
+        home: ChatConversationPage(
+          otherUserId: otherId,
+          otherUsername: otherName,
+        ),
       ),
     ),
   );
@@ -260,19 +268,53 @@ void main() {
   });
 
   group('in chat', () {
-    testWidgets('typing @ suggests people, and the name goes into the '
-        'message', (t) async {
+    testWidgets('typing @ suggests the person you are talking to, and the '
+        'name goes into the message', (t) async {
       await openChat(t);
       expect(suggestions, findsNothing);
-      await t.enterText(find.byType(TextField), 'ask @le');
+      await t.enterText(find.byType(TextField), 'hey @');
       await t.pump();
       expect(suggestions, findsOneWidget);
-      await t.tap(pick('leo'));
+      expect(pick('maya'), findsOneWidget);
+      await t.tap(pick('maya'));
       // The send button turns in over a few frames.
       await settle(t);
       await t.tap(find.byTooltip('Send'));
       await settle(t);
-      expect(messagesSent.single['message'], 'ask @leo');
+      expect(messagesSent.single['message'], 'hey @maya');
+      await close(t);
+    });
+
+    testWidgets('and nobody else: not everyone on the app', (t) async {
+      await openChat(t);
+      await t.enterText(find.byType(TextField), 'ask @');
+      await t.pump();
+      expect(pick('maya'), findsOneWidget,
+          reason: 'the one person in this chat');
+      for (final other in ['mark', 'nina', 'leo']) {
+        expect(pick(other), findsNothing, reason: '$other is not in it');
+      }
+      // Letters that only match somebody else show nothing at all.
+      await t.enterText(find.byType(TextField), 'ask @le');
+      await t.pump();
+      expect(suggestions, findsNothing);
+      await close(t);
+    });
+
+    testWidgets('even one the app has not loaded yet', (t) async {
+      await openChat(t, otherId: 'u9', otherName: 'zed');
+      await t.enterText(find.byType(TextField), 'hi @');
+      await t.pump();
+      expect(pick('zed'), findsOneWidget);
+      expect(pick('maya'), findsNothing);
+      await close(t);
+    });
+
+    testWidgets('found by their full name too', (t) async {
+      await openChat(t);
+      await t.enterText(find.byType(TextField), 'ask @sin');
+      await t.pump();
+      expect(pick('maya'), findsOneWidget);
       await close(t);
     });
 
