@@ -287,6 +287,24 @@ void main() {
       release.complete();
     });
 
+    test('the summary says how long the oldest download has been going, '
+        'and how much of it has arrived', () async {
+      expect(VideoCacheService.instance.debugPipeline, isNot(contains('oldest=')),
+          reason: 'nothing running, nothing to say');
+      final release = Completer<void>();
+      serveThenHold(40 * 1024, release.future);
+      const url = 'https://cdn/slow/480p.mp4';
+      VideoCacheService.instance.warm([url]);
+      expect(
+        await eventually(() => RegExp(r'oldest=\d+\.\ds/[1-9]\d*KB')
+            .hasMatch(VideoCacheService.instance.debugPipeline)),
+        isTrue,
+        reason: 'a stuck download and a slow one look the same without it: '
+            '${VideoCacheService.instance.debugPipeline}',
+      );
+      release.complete();
+    });
+
     test('a reel waiting for a slot is spoken for', () async {
       // More urls than lanes, so at least one has to queue.
       final release = Completer<void>();

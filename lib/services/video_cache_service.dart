@@ -445,7 +445,26 @@ class VideoCacheService {
   /// pressure is holding warming down — see [_downloadSlots].
   String _pipelineSnapshot() =>
       'queue=${_queue.length} active=${_active.length}/$_downloadSlots '
-      'urls=${_seen.length} cancelled=$_cancelled spared=$_spared';
+      'urls=${_seen.length} cancelled=$_cancelled spared=$_spared'
+      '${_oldestActive()}';
+
+  /// How long the longest-running download has been going, and how much of
+  /// it has arrived.
+  ///
+  /// A device log had twelve videos start loading ahead after a tap from
+  /// Search and not one finish, with `active=5/5` and a queue behind them at
+  /// the end. "Slow" and "stuck" look the same in the counts; this tells
+  /// them apart. A few seconds and growing is a slow link. Tens of seconds
+  /// with the bytes not moving is a download that has stopped.
+  String _oldestActive() {
+    if (_active.isEmpty) return '';
+    final oldest = _active.values.reduce(
+      (a, b) => a.startedAt.isBefore(b.startedAt) ? a : b,
+    );
+    final secs = DateTime.now().difference(oldest.startedAt).inMilliseconds;
+    return ' oldest=${(secs / 1000).toStringAsFixed(1)}s/'
+        '${(oldest.written / 1024).round()}KB';
+  }
 
   /// Callers parked in [awaitReady], one completer per URL. Signalled by
   /// [_signalWarm] on every path a URL can leave the warming pipeline —
@@ -1784,6 +1803,9 @@ class _Evictable {
 class _Download {
   _Download(this.url);
   final String url;
+
+  /// When it started. See [VideoCacheService._oldestActive].
+  final DateTime startedAt = DateTime.now();
   bool cancelled = false;
 
   /// True while this download is fetching an opening slice rather than a

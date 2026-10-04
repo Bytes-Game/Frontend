@@ -147,7 +147,6 @@ void main() {
     exploreEmpty = false;
     exploreLong = false;
     holdFeed = null;
-    ExploreGridCache.directory = () async => cacheDir;
     ExploreGridCache.instance.debugReset();
     firstIsBattle = false;
     ApiService.useClient(

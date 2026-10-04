@@ -504,9 +504,10 @@ void main() {
     });
   });
 
-  // A video tapped in Search starts at once. It used to wait for the server
-  // to send the videos that come after it, so the picture sat there while
-  // the video looked slow to load.
+  // A video tapped in Search starts once the videos that come after it have
+  // arrived, the way it always did. For a while it started before them;
+  // two device logs after that show every video after the tap starving, and
+  // the owner asked for it back as it was.
   group('a video opened from Search', () {
     /// Opens [seed] the way Search does, with the server holding back the
     /// rest of the list until [rest] completes.
@@ -580,41 +581,29 @@ void main() {
       EventTracker.instance.dispose();
     }
 
-    testWidgets('plays before the rest of the list has come, and is not '
-        'started over when it does', (t) async {
+    testWidgets('plays once the rest of the list has come, with one player',
+        (t) async {
       final rest = Completer<void>();
-      platform.playedFor = const Duration(seconds: 2);
-      addTearDown(() => platform.playedFor = Duration.zero);
       await open(t, short('51'), rest);
-      expect(platform.sounding, {'https://x/51.mp4'},
-          reason: 'playing while the server is still sending the rest');
+      expect(platform.sounding, isEmpty,
+          reason: 'it waits for the list, as it did before');
 
-      platform.rewound.clear();
       rest.complete();
       await settle(t);
       expect(platform.sounding, {'https://x/51.mp4'});
-      expect(platform.rewound, isEmpty,
-          reason: 'the list arriving does not send it back to the start');
       expect(platform.uriOf.values.where((u) => u == 'https://x/51.mp4'),
           hasLength(1),
           reason: 'one player for it, not a second one');
       await done(t);
     });
 
-    testWidgets('a battle opened on the answer stays on the answer when the '
-        'rest of the list comes', (t) async {
+    testWidgets('a battle with the answer ahead plays the answer', (t) async {
       leader = 'leo';
-      platform.playedFor = const Duration(seconds: 2);
-      addTearDown(() => platform.playedFor = Duration.zero);
       final rest = Completer<void>();
       await open(t, battle('52'), rest);
-      expect(platform.sounding, {'https://x/r52.mp4'});
-
-      platform.rewound.clear();
       rest.complete();
       await settle(t);
       expect(platform.sounding, {'https://x/r52.mp4'});
-      expect(platform.rewound, isEmpty);
       await done(t);
     });
 
