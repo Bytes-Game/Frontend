@@ -25,7 +25,7 @@ import 'package:myapp/services/upload_job_manager.dart';
 /// fallback so a particularly slow first paint doesn't show a blank
 /// scaffold.
 class SubmitResponseUploadPage extends StatefulWidget {
-  /// Local path to the trimmed video produced by VideoTrimPage.
+  /// Local path to the answer, as its editor left it.
   final String processedSourcePath;
 
   /// Challenge being responded to.

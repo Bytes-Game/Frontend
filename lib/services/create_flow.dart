@@ -3,8 +3,9 @@ import 'package:permission_handler/permission_handler.dart';
 
 import 'package:myapp/pages/challenge_metadata_page.dart';
 import 'package:myapp/pages/create_page.dart';
+import 'package:myapp/pages/photo_editor_page.dart';
 import 'package:myapp/pages/record_video_page.dart';
-import 'package:myapp/pages/video_trim_page.dart';
+import 'package:myapp/pages/video_editor_page.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/video_processor_service.dart';
 
@@ -15,8 +16,8 @@ import 'package:myapp/services/video_processor_service.dart';
 /// Both open the create page: the phone's photos and videos in a grid,
 /// with the camera first — the way Instagram and TikTok do it. Nobody is
 /// asked "photo or video?": the thing picked already is one or the other.
-/// A video goes on to the trim screen and then the details; a photo has
-/// nothing to trim and goes straight to the details.
+/// Either goes on to its editor (a photo's, or a video's with the trim bar)
+/// and then the details.
 class CreateFlow {
   CreateFlow._();
 
@@ -61,9 +62,12 @@ class CreateFlow {
     );
   }
 
-  /// With a photo or a video in hand: a video to the trim screen and then
-  /// the details, a photo straight to the details. True when it was posted;
-  /// false when the person came back without posting.
+  /// With a photo or a video in hand: to its editor, and from there to the
+  /// details. True when it was posted; false when the person came back
+  /// without posting.
+  ///
+  /// The editor stays underneath the details page, so coming back from the
+  /// details lands on the editor with the edits still there.
   static Future<bool> continueWith(
     BuildContext context,
     String path, {
@@ -79,24 +83,21 @@ class CreateFlow {
       },
     );
     final nav = Navigator.of(context);
-    if (photo) {
-      final posted = await nav.push<bool>(
+    Future<bool> details(BuildContext from, String edited) async {
+      final posted = await Navigator.of(from).push<bool>(
         MaterialPageRoute(
           builder: (_) =>
-              ChallengeMetadataPage(processedSourcePath: path, photo: true),
+              ChallengeMetadataPage(processedSourcePath: edited, photo: photo),
         ),
       );
       return posted == true;
     }
-    final trimmed = await nav.push<String>(
-      MaterialPageRoute(
-        builder: (_) => VideoTrimPage(sourcePath: path, popOnComplete: true),
-      ),
-    );
-    if (!context.mounted || trimmed == null || trimmed.isEmpty) return false;
+
     final posted = await nav.push<bool>(
       MaterialPageRoute(
-        builder: (_) => ChallengeMetadataPage(processedSourcePath: trimmed),
+        builder: (_) => photo
+            ? PhotoEditorPage(sourcePath: path, onDone: details)
+            : VideoEditorPage(sourcePath: path, onDone: details),
       ),
     );
     return posted == true;

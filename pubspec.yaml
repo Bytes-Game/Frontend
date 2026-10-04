@@ -128,6 +128,17 @@ dependencies:
   # so the + button can open on a grid of them (lib/pages/create_page.dart)
   # the way Instagram and TikTok do.
   photo_manager: ^3.12.0
+  # The photo and video editors (lib/pages/photo_editor_page.dart and
+  # video_editor_page.dart): crop, filters, text, emoji, drawing, and for a
+  # video the trim bar. Free and open source (BSD-3). The video one does its
+  # work with the phone's own video tools (Media3 / AVFoundation), not FFmpeg.
+  pro_image_editor: ^14.6.2
+  pro_video_editor: ^2.23.0
+  # The editors are built on Flutter's design library in its new standalone
+  # form. The pages around them provide its language and theme (see
+  # lib/widgets/editor_shell.dart), so these are named here too.
+  material_ui: ^1.5.0
+  cupertino_ui: ^1.1.1
   record: ^7.1.1
   audioplayers: ^6.8.1
 
