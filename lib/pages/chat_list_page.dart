@@ -5,6 +5,7 @@ import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/models/notification_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
+import 'package:myapp/services/chat_cache.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
@@ -69,6 +70,18 @@ class _ChatListPageState extends State<ChatListPage>
       final v = _listScroll.offset.clamp(0.0, 60.0);
       if ((v - _scrolled).abs() > 0.5) setState(() => _scrolled = v);
     });
+    // The chats from last time, or from the fetch that ran after the app
+    // opened, go up at once; the fresh list replaces them when it comes.
+    // Placeholders only show when there has never been a list on this
+    // phone.
+    final kept = ChatCache.instance.chatsFor(_myId);
+    if (kept != null) {
+      _conversations = [for (final c in kept) Map<String, dynamic>.of(c)];
+      _onlineStatus.addAll(ChatCache.instance.online);
+      _loading = false;
+    }
+    debugPrint('[chats] opened with ${kept?.length ?? 0} chats already in '
+        'hand; fetching a fresh list');
     _load();
     _listenForNewMessages();
   }
@@ -89,14 +102,19 @@ class _ChatListPageState extends State<ChatListPage>
       Provider.of<DataProvider>(context, listen: false).user!.id;
 
   Future<void> _load() async {
-    final convos = await ApiService.getConversations(_myId);
-    if (mounted) {
-      setState(() {
-        _conversations = convos;
-        _loading = false;
-      });
-      _fetchOnlineStatuses(convos);
+    final convos = await ChatCache.instance.load(_myId);
+    if (!mounted) return;
+    // Failed: what is on screen stays (ApiService said why). Only the very
+    // first open, with nothing kept, stops showing placeholders.
+    if (convos == null) {
+      if (_loading) setState(() => _loading = false);
+      return;
     }
+    setState(() {
+      _conversations = [for (final c in convos) Map<String, dynamic>.of(c)];
+      _loading = false;
+    });
+    _fetchOnlineStatuses(convos);
   }
 
   Future<void> _fetchOnlineStatuses(List<Map<String, dynamic>> convos) async {
@@ -104,9 +122,11 @@ class _ChatListPageState extends State<ChatListPage>
       final username = c['username'] as String? ?? '';
       if (username.isEmpty) continue;
       final status = await ApiService.getUserOnlineStatus(username);
+      final online = status['online'] == true;
+      ChatCache.instance.online[username] = online;
       if (mounted) {
         setState(() {
-          _onlineStatus[username] = status['online'] == true;
+          _onlineStatus[username] = online;
         });
       }
     }
@@ -214,6 +234,7 @@ class _ChatListPageState extends State<ChatListPage>
   void _forget(Map<String, dynamic> c) {
     setState(() => _conversations
         .removeWhere((x) => '${x['userId']}' == '${c['userId']}'));
+    ChatCache.instance.forgetChat(_myId, '${c['userId']}');
   }
 
   /// Press and hold a chat: what can be done with it.

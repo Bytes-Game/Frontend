@@ -10,6 +10,7 @@ import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/call_service.dart';
+import 'package:myapp/services/chat_cache.dart';
 import 'package:myapp/services/chat_media.dart';
 import 'package:myapp/services/chat_notifications.dart';
 import 'package:myapp/services/event_tracker.dart';
@@ -120,6 +121,15 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     );
     _scrollCtrl.addListener(_onScroll);
     _msgCtrl.addListener(_onComposerChanged);
+    // A chat opened before goes up at once, as it was left; the fresh
+    // messages replace it when they come. Only a chat never opened in this
+    // run shows the spinner.
+    final kept = ChatCache.instance.messagesWith(widget.otherUserId);
+    if (kept != null) {
+      _messages = [for (final m in kept) Map<String, dynamic>.of(m)];
+      _loading = false;
+      _scrollToBottom(jump: true);
+    }
     _loadMessages();
     _listenForRealTime();
     _checkOnlineStatus();
@@ -130,6 +140,9 @@ class _ChatConversationPageState extends State<ChatConversationPage>
 
   @override
   void dispose() {
+    // Kept as it is now, with anything sent or received while it was open,
+    // for the next time it opens.
+    ChatCache.instance.keepMessages(widget.otherUserId, _messages);
     if (_saidTypingAt != null) _sayTyping(false);
     _msgCtrl.dispose();
     _scrollCtrl.dispose();
@@ -160,25 +173,29 @@ class _ChatConversationPageState extends State<ChatConversationPage>
 
   Future<void> _loadMessages() async {
     final msgs =
-        await ApiService.getChatMessages(_myId, widget.otherUserId);
-    if (mounted) {
-      setState(() {
-        _messages = msgs.reversed.toList();
-        _loading = false;
-      });
-      _scrollToBottom(jump: true);
-      final unreadInbound = _messages
-          .where((m) =>
-              m['senderId'] == widget.otherUserId && m['isRead'] != true)
-          .length;
-      if (unreadInbound > 0) {
-        EventTracker.instance.trackMessagesRead(
-          conversationId: _convId,
-          messageCount: unreadInbound,
-        );
-      }
-      ApiService.markChatRead(widget.otherUserId, _myId);
+        await ApiService.fetchChatMessages(_myId, widget.otherUserId);
+    if (!mounted) return;
+    // Failed: the messages already up stay (ApiService said why).
+    if (msgs == null) {
+      if (_loading) setState(() => _loading = false);
+      return;
     }
+    setState(() {
+      _messages = msgs.reversed.toList();
+      _loading = false;
+    });
+    _scrollToBottom(jump: true);
+    final unreadInbound = _messages
+        .where((m) =>
+            m['senderId'] == widget.otherUserId && m['isRead'] != true)
+        .length;
+    if (unreadInbound > 0) {
+      EventTracker.instance.trackMessagesRead(
+        conversationId: _convId,
+        messageCount: unreadInbound,
+      );
+    }
+    ApiService.markChatRead(widget.otherUserId, _myId);
   }
 
   void _listenForRealTime() {

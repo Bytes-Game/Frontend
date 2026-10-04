@@ -20,6 +20,7 @@ import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/screens/main_shell.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/chat_cache.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
@@ -118,6 +119,9 @@ late List<Uri> exploreAsks;
 /// Whether the server's Search grid comes back empty.
 bool exploreEmpty = false;
 
+/// How many times a chat's messages were asked for.
+int chatMessageAsks = 0;
+
 /// Whether it comes back long enough to scroll.
 bool exploreLong = false;
 
@@ -146,7 +150,9 @@ void main() {
     exploreAsks = [];
     exploreEmpty = false;
     exploreLong = false;
+    chatMessageAsks = 0;
     holdFeed = null;
+    ExploreGridCache.directory = () async => cacheDir;
     ExploreGridCache.instance.debugReset();
     firstIsBattle = false;
     ApiService.useClient(
@@ -156,6 +162,7 @@ void main() {
           final hold = holdFeed;
           if (hold != null) await hold.future;
         }
+        if (req.url.path.contains('/chat/messages/')) chatMessageAsks++;
         if (req.url.path.endsWith('/feed/explore')) {
           exploreAsks.add(req.url);
           if (exploreEmpty) {
@@ -263,6 +270,18 @@ void main() {
   final videos = find.byWidgetPredicate(
     (w) => w is PageView && w.scrollDirection == Axis.vertical,
   );
+
+  testWidgets('soon after the app opens, the chats are fetched for an '
+      'instant Messages tab — but no chat\'s messages', (t) async {
+    await openHome(t);
+    expect(ChatCache.instance.chatsFor('1'), isNull);
+    await frames(t, 20);
+    expect(ChatCache.instance.chatsFor('1'), isNotNull,
+        reason: 'the shell fetched the list in the background');
+    expect(chatMessageAsks, 0,
+        reason: 'fetching a chat\'s messages marks them read');
+    await close(t);
+  });
 
   group('tapping Search while on Search', () {
     final searchTab = find.descendant(

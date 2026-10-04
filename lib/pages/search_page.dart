@@ -152,7 +152,9 @@ class _SearchPageState extends State<SearchPage>
     // app opened, go up at once. Only a missing or old list is asked for
     // again, and an old one stays on screen while it is.
     final cache = ExploreGridCache.instance;
-    _exploreChallenges = cache.items;
+    _exploreChallenges = cache.itemsFor(
+      Provider.of<DataProvider>(context, listen: false).user?.id ?? '',
+    );
     debugPrint(
       '[search_page] opened with ${_exploreChallenges.length} videos '
       'already in hand${cache.isStale ? '; fetching a fresh list' : ''}',
