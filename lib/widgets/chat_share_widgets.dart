@@ -7,6 +7,7 @@ import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/chat_cache.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/video_grid_tile.dart';
 
@@ -398,34 +399,42 @@ class _ShareSheetState extends State<ShareSheet> {
     final dp = Provider.of<DataProvider>(context, listen: false);
     final me = dp.user?.id ?? '';
     _people = dp.allUsers.where((u) => u.id.isNotEmpty && u.id != me).toList();
-    if (me.isNotEmpty) _loadRecent(me);
+    if (me.isNotEmpty) {
+      // The chats the app already has put your people in order at once;
+      // the fresh list re-orders them if anything changed.
+      final kept = ChatCache.instance.chatsFor(me);
+      if (kept != null) _useRecent(me, kept);
+      _loadRecent(me);
+    }
   }
 
   /// The people you have chatted with, newest first, go to the front.
   Future<void> _loadRecent(String me) async {
-    final convs = await ApiService.getConversations(me);
-    if (!mounted) return;
-    setState(() {
-      _recent = [for (final c in convs) '${c['userId'] ?? ''}'];
-      // Someone you chat with who is not in the app's list yet.
-      final known = {for (final u in _people) u.id};
-      for (final c in convs) {
-        final id = '${c['userId'] ?? ''}';
-        if (id.isEmpty || id == me || known.contains(id)) continue;
-        _people = [
-          ..._people,
-          UserModel(
-            id: id,
-            username: '${c['username'] ?? ''}',
-            league: '${c['league'] ?? ''}',
-            wins: 0,
-            losses: 0,
-            followersCount: 0,
-            followingCount: 0,
-          ),
-        ];
-      }
-    });
+    final convs = await ChatCache.instance.load(me);
+    if (!mounted || convs == null) return;
+    setState(() => _useRecent(me, convs));
+  }
+
+  void _useRecent(String me, List<Map<String, dynamic>> convs) {
+    _recent = [for (final c in convs) '${c['userId'] ?? ''}'];
+    // Someone you chat with who is not in the app's list yet.
+    final known = {for (final u in _people) u.id};
+    for (final c in convs) {
+      final id = '${c['userId'] ?? ''}';
+      if (id.isEmpty || id == me || known.contains(id)) continue;
+      _people = [
+        ..._people,
+        UserModel(
+          id: id,
+          username: '${c['username'] ?? ''}',
+          league: '${c['league'] ?? ''}',
+          wins: 0,
+          losses: 0,
+          followersCount: 0,
+          followingCount: 0,
+        ),
+      ];
+    }
   }
 
   @override

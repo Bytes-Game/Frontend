@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/models/user_model.dart';
+import 'package:myapp/services/chat_cache.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/session_store.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
@@ -234,6 +235,8 @@ class AuthProvider with ChangeNotifier {
     unawaited(NextUpStore.instance.clear());
     // And the profiles kept for an instant open.
     ProfileCache.instance.clear();
+    // And their chats, on the phone too.
+    ChatCache.instance.clear();
     // And the copies of their own posts.
     unawaited(OwnUploads.instance.clear());
     _isAuthenticated = false;

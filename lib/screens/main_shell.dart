@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/providers/data_provider.dart';
+import 'package:myapp/services/chat_cache.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
 import 'package:myapp/services/profile_cache.dart';
@@ -82,6 +83,8 @@ class _MainShellState extends State<MainShell> {
       );
       // And your own profile, so opening it is instant too.
       unawaited(ProfileCache.instance.prefetch(context, dp.user?.id ?? ''));
+      // And your chats, so Messages is up to date when it opens.
+      unawaited(ChatCache.instance.prefetch(dp.user?.id ?? ''));
     });
   }
 

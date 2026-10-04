@@ -1591,6 +1591,13 @@ class ApiService {
 
   /// GET /api/v1/chat/conversations/{userId}
   static Future<List<Map<String, dynamic>>> getConversations(
+          String userId) async =>
+      await fetchConversations(userId) ?? [];
+
+  /// [getConversations], but null when the request failed — so a list kept
+  /// on the phone is not replaced by an empty one that only LOOKS like "no
+  /// chats". Says why in the log.
+  static Future<List<Map<String, dynamic>>?> fetchConversations(
       String userId) async {
     try {
       final res = await _authHttp.get(
@@ -1599,14 +1606,28 @@ class ApiService {
       if (res.statusCode == 200) {
         return (json.decode(res.body) as List).cast<Map<String, dynamic>>();
       }
-      return [];
-    } catch (_) {
-      return [];
+      debugPrint('[chats] the server answered ${res.statusCode} for the '
+          'list of chats; showing what the app already had');
+      return null;
+    } catch (e) {
+      debugPrint('[chats] the list of chats did not arrive ($e); showing '
+          'what the app already had');
+      return null;
     }
   }
 
   /// GET /api/v1/chat/messages/{userId}/{otherUserId}
   static Future<List<Map<String, dynamic>>> getChatMessages(
+          String userId, String otherUserId,
+          {int limit = 50, int offset = 0}) async =>
+      await fetchChatMessages(userId, otherUserId,
+          limit: limit, offset: offset) ??
+      [];
+
+  /// [getChatMessages], but null when the request failed — so messages
+  /// already on screen are not swapped for an empty chat that only LOOKS
+  /// like "no messages". Says why in the log.
+  static Future<List<Map<String, dynamic>>?> fetchChatMessages(
       String userId, String otherUserId,
       {int limit = 50, int offset = 0}) async {
     try {
@@ -1617,9 +1638,13 @@ class ApiService {
       if (res.statusCode == 200) {
         return (json.decode(res.body) as List).cast<Map<String, dynamic>>();
       }
-      return [];
-    } catch (_) {
-      return [];
+      debugPrint('[chats] the server answered ${res.statusCode} for the '
+          'messages with $otherUserId; showing what the app already had');
+      return null;
+    } catch (e) {
+      debugPrint('[chats] the messages with $otherUserId did not arrive '
+          '($e); showing what the app already had');
+      return null;
     }
   }
 

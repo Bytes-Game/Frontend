@@ -19,6 +19,7 @@ import 'package:myapp/pages/chat_conversation_page.dart';
 import 'package:myapp/pages/chat_list_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/chat_cache.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
 
@@ -135,6 +136,12 @@ void main() {
     expect(find.text('alice'), findsNothing);
     expect(find.text('see you there'), findsNothing);
     expect(find.text('bob'), findsOneWidget, reason: 'only that chat goes');
+    expect(
+      [for (final c in ChatCache.instance.chatsFor('u1')!) c['username']],
+      ['bob'],
+      reason: 'and it is gone from the chats kept for next time, or it '
+          'would come back the next time Messages opens',
+    );
   });
 
   testWidgets('changing your mind deletes nothing', (t) async {

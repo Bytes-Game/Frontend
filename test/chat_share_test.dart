@@ -8,6 +8,7 @@
 // reel's Share button, with only the server faked, and check what is ON
 // screen.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -21,6 +22,7 @@ import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/chat_conversation_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/chat_cache.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/websocket_service.dart';
@@ -84,11 +86,15 @@ Set<String> refuseTo = {};
 
 List<Map<String, dynamic>> conversations = [];
 
+/// When set, the server holds the list of chats until this completes.
+Completer<void>? holdChats;
+
 void fakeServer() {
   history = [];
   sends = [];
   refuseTo = {};
   conversations = [];
+  holdChats = null;
   ApiService.useClient(
     MockClient((req) async {
       final p = req.url.path;
@@ -104,6 +110,8 @@ void fakeServer() {
         return http.Response(json.encode(history), 200);
       }
       if (p.contains('/chat/conversations/')) {
+        final hold = holdChats;
+        if (hold != null) await hold.future;
         return http.Response(json.encode(conversations), 200);
       }
       if (p.contains('/feed')) {
@@ -350,6 +358,22 @@ void main() {
       expect(sheet, findsOneWidget, reason: 'not done: it stays open');
       expect(find.text("Couldn't send to @nina. Try again."), findsOneWidget);
       expect(find.text('Send'), findsOneWidget, reason: 'nina alone picked');
+      await close(t);
+    });
+
+    testWidgets('the people you chat with are in order at once, from the '
+        'chats the app already has', (t) async {
+      ChatCache.instance.keepChats('u1', [
+        {'userId': 'u4', 'username': 'nina'},
+      ]);
+      holdChats = Completer<void>();
+      await openSheet(t);
+      final ninaX = t.getTopLeft(person('u4')).dx;
+      final mayaX = t.getTopLeft(person('u2')).dx;
+      expect(ninaX, lessThan(mayaX),
+          reason: 'nina first before the server has answered');
+      holdChats!.complete();
+      await settle(t);
       await close(t);
     });
 
