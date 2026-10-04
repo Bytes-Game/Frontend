@@ -209,9 +209,16 @@ void main() {
       r"OwnUploads\.instance\s*\.keep\(\s*'(challenge|response):\$\{(challenge|response)\.id\}',\s*job\.sourcePath\)",
     ).allMatches(code).map((m) => m.group(1)).toList();
     expect(keeps, ['challenge', 'challenge', 'response']);
-    // And each sits where the post is marked as done.
+    // And each sits where the post is marked as done — every such place
+    // but the photo one. A photo is not played from the phone, so there is
+    // nothing of it to keep.
+    final photo = RegExp(
+      r'Future<void> _runPhoto\([\s\S]*?\n  }\n',
+    ).firstMatch(code)!.group(0)!;
+    expect(photo, contains("message: 'Posted'"));
+    expect(photo, isNot(contains('OwnUploads')));
     final posted = RegExp(r"message: 'Posted'").allMatches(code).length;
-    expect(posted, keeps.length);
+    expect(posted, keeps.length + 1);
   });
 
   test('the app reads what it kept when it starts, or a copy from before '

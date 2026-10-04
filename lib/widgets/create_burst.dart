@@ -7,9 +7,22 @@ import 'package:flutter/services.dart';
 import 'package:myapp/config/app_theme.dart';
 
 /// What the person picked from the burst.
-enum CreateChoice { record, upload }
+enum CreateChoice { record, upload, photo }
 
-/// The + button's pop-out: Record and Upload rise out of the button in 3D.
+/// Everything a new challenge can start from: a video recorded now, a video
+/// from the phone, or a photo.
+const allCreateChoices = [
+  CreateChoice.record,
+  CreateChoice.photo,
+  CreateChoice.upload,
+];
+
+/// What answers a video challenge: a video. A photo challenge is answered
+/// with a photo, which needs no menu (see [CreateChoice.photo]).
+const videoCreateChoices = [CreateChoice.record, CreateChoice.upload];
+
+/// The + button's pop-out: Record, Photo and Upload rise out of the button
+/// in 3D.
 ///
 /// They start lying flat and small at the button, then swing upright as
 /// they fly out along an arc, while the screen behind blurs and dims. It can
@@ -36,7 +49,8 @@ class CreateBurst {
   ///
   /// [title] is the line shown above the choices on a tap. [anchorSize] and
   /// [anchorRadius] are the shape of that button, so the × that closes the
-  /// burst sits exactly on top of it.
+  /// burst sits exactly on top of it. [choices] are what it offers, left to
+  /// right.
   static CreateBurstHandle show(
     BuildContext context, {
     required Offset anchor,
@@ -46,6 +60,7 @@ class CreateBurst {
     String title = 'Create a challenge',
     Size anchorSize = const Size(44, 30),
     double anchorRadius = 9,
+    List<CreateChoice> choices = allCreateChoices,
   }) {
     final handle = CreateBurstHandle._();
     late final OverlayEntry entry;
@@ -54,6 +69,14 @@ class CreateBurst {
         anchor: anchor,
         fromHold: fromHold,
         title: title,
+        choices: [
+          for (var i = 0; i < choices.length; i++)
+            _Choice.of(
+              choices[i],
+              // Spread evenly from -1 (left) to 1 (right).
+              choices.length == 1 ? 0 : -1 + 2 * i / (choices.length - 1),
+            ),
+        ],
         anchorSize: anchorSize,
         anchorRadius: anchorRadius,
         handle: handle,
@@ -115,29 +138,39 @@ class _Choice {
   final Color color;
 
   const _Choice(this.value, this.icon, this.label, this.side, this.color);
-}
 
-const _choices = [
-  _Choice(
-    CreateChoice.record,
-    Icons.videocam_rounded,
-    'Record',
-    -1,
-    Color(0xFFFF453A),
-  ),
-  _Choice(
-    CreateChoice.upload,
-    Icons.photo_library_rounded,
-    'Upload',
-    1,
-    AppTheme.primary,
-  ),
-];
+  factory _Choice.of(CreateChoice c, double side) => switch (c) {
+        CreateChoice.record => _Choice(
+            c,
+            Icons.videocam_rounded,
+            'Record',
+            side,
+            const Color(0xFFFF453A),
+          ),
+        // A video from the phone. Its icon is a film strip, so it is not
+        // mistaken for the photo next to it.
+        CreateChoice.upload => _Choice(
+            c,
+            Icons.video_library_rounded,
+            'Upload',
+            side,
+            AppTheme.primary,
+          ),
+        CreateChoice.photo => _Choice(
+            c,
+            Icons.image_rounded,
+            'Photo',
+            side,
+            const Color(0xFFFF9F0A),
+          ),
+      };
+}
 
 class _BurstOverlay extends StatefulWidget {
   final Offset anchor;
   final bool fromHold;
   final String title;
+  final List<_Choice> choices;
   final Size anchorSize;
   final double anchorRadius;
   final CreateBurstHandle handle;
@@ -147,6 +180,7 @@ class _BurstOverlay extends StatefulWidget {
     required this.anchor,
     required this.fromHold,
     required this.title,
+    required this.choices,
     required this.anchorSize,
     required this.anchorRadius,
     required this.handle,
@@ -171,9 +205,12 @@ class _BurstOverlayState extends State<_BurstOverlay>
   /// How close the finger must be to a choice to be "on" it.
   static const double _hitRadius = 50;
 
-  /// How far either side of the middle of the fan each choice sits, in
-  /// degrees.
-  static const double _spread = 38;
+  /// How far either side of the middle of the fan the outer choices sit,
+  /// in degrees. Wider with three, so they are as far apart as two were and
+  /// a finger on one is never also on its neighbour.
+  double get _spread => _choices.length > 2 ? 52 : 38;
+
+  List<_Choice> get _choices => widget.choices;
 
   /// Which way the fan opens, in degrees: -90 is straight up, 90 straight
   /// down. Worked out once the screen size is known.
@@ -350,7 +387,7 @@ class _BurstOverlayState extends State<_BurstOverlay>
   static const double _titleWidth = 220;
 
   double _titleLeft(double screenWidth) {
-    final mid = (_centreOf(0, 1).dx + _centreOf(1, 1).dx) / 2;
+    final mid = (_centreOf(0, 1).dx + _centreOf(_choices.length - 1, 1).dx) / 2;
     return (mid - _titleWidth / 2).clamp(
       8.0,
       math.max(8.0, screenWidth - _titleWidth - 8),
@@ -360,8 +397,8 @@ class _BurstOverlayState extends State<_BurstOverlay>
   /// Below the lower choice (circle and label) when the fan opens down;
   /// above the higher one when it opens up.
   double _titleTop() {
-    final a = _centreOf(0, 1).dy, b = _centreOf(1, 1).dy;
-    return _opensDown ? math.max(a, b) + 76 : math.min(a, b) - 96;
+    final ys = [for (var i = 0; i < _choices.length; i++) _centreOf(i, 1).dy];
+    return _opensDown ? ys.reduce(math.max) + 76 : ys.reduce(math.min) - 96;
   }
 
   Widget _buildChoice(int i, double fly) {

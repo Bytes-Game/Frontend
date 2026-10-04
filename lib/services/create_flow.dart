@@ -2,18 +2,21 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'package:myapp/pages/challenge_metadata_page.dart';
 import 'package:myapp/pages/record_video_page.dart';
 import 'package:myapp/pages/video_trim_page.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/video_processor_service.dart';
+import 'package:myapp/widgets/photo_choice.dart';
 
-/// The two ways a challenge starts — record now, or upload from the phone —
-/// in one place, so the pop-out on the + button and the one on a profile's
-/// Battle button run the same steps rather than two copies that drift
-/// apart.
+/// The ways a challenge starts — record now, upload a video from the phone,
+/// or post a photo — in one place, so the pop-out on the + button and the
+/// one on a profile's Battle button run the same steps rather than two
+/// copies that drift apart.
 ///
-/// Either way ends on the trim screen with the clip, which then carries on
-/// to the details screen and the upload.
+/// A video ends on the trim screen with the clip, which then carries on to
+/// the details screen and the upload. A photo has nothing to trim and goes
+/// straight to the details screen.
 class CreateFlow {
   CreateFlow._();
 
@@ -60,6 +63,24 @@ class CreateFlow {
       return;
     }
     await _continueWithSource(context, path);
+  }
+
+  /// Post a photo: "who looks better", "which is the better meme". Taken
+  /// now or chosen from the phone, then the same details screen a video
+  /// gets.
+  static Future<void> photo(BuildContext context, {String from = ''}) async {
+    EventTracker.instance.trackTap(
+      target: 'create_challenge_photo',
+      pageName: from.isEmpty ? 'create_challenge_page' : from,
+    );
+    final file = await choosePhoto(context, title: 'Photo challenge');
+    if (!context.mounted || file == null) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            ChallengeMetadataPage(processedSourcePath: file.path, photo: true),
+      ),
+    );
   }
 
   /// With a clip in hand, recorded or picked: on to the trim screen.

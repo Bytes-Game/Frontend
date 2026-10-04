@@ -5,7 +5,16 @@ class ChallengeModel {
   final String creatorId;
   final String creatorUsername;
   final String creatorLeague;
+  /// The post's media: the video, or for a photo challenge ([isPhoto]) the
+  /// photo. Its answers are always the same kind.
   final String videoUrl;
+
+  /// "photo" for a photo challenge ("who looks better", "which meme is
+  /// better"); "video" otherwise, which is also what an older server that
+  /// does not say means.
+  final String mediaType;
+
+  bool get isPhoto => mediaType == 'photo';
   /// Multi-bitrate variants keyed by quality label ("360p","480p","720p",
   /// "720p_hq","1080p").
   /// Empty map means "no variants encoded yet" — fall back to [videoUrl],
@@ -101,6 +110,7 @@ class ChallengeModel {
   required this.creatorUsername,
   required this.creatorLeague,
   required this.videoUrl,
+  this.mediaType = 'video',
   this.videoVariants = const {},
   this.hlsManifestUrl = '',
   this.thumbnailUrl,
@@ -152,6 +162,7 @@ class ChallengeModel {
       creatorUsername: json['creatorUsername'] ?? '',
       creatorLeague: json['creatorLeague'] ?? 'Unranked',
       videoUrl: json['videoUrl'] ?? '',
+      mediaType: json['mediaType'] == 'photo' ? 'photo' : 'video',
       videoVariants: (json['videoVariants'] as Map<String, dynamic>?)
               ?.map((k, v) => MapEntry(k, v?.toString() ?? '')) ??
           const {},

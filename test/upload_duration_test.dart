@@ -91,11 +91,13 @@ void main() {
     test('the pipeline shows it instead of "try again"', () {
       final mgr =
           File('lib/services/upload_job_manager.dart').readAsStringSync();
-      expect("on ApiRefused catch (e)".allMatches(mgr).length, 3,
+      // Four paths: a video challenge prepared while typing, one sent at
+      // Post, a video answer, and a photo (challenge or answer).
+      expect("on ApiRefused catch (e)".allMatches(mgr).length, 4,
           reason: 'a refusal caught on only some paths leaves the others '
               'telling people to retry something that can never work');
-      expect("_fail(job, 'refused', e.reason)".allMatches(mgr).length, 3,
-          reason: 'caught on all three paths but passed on from only some '
+      expect("_fail(job, 'refused', e.reason)".allMatches(mgr).length, 4,
+          reason: 'caught on all four paths but passed on from only some '
               'is the same dead end with extra steps');
     });
 

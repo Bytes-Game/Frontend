@@ -345,6 +345,41 @@ void main() {
     expect(d.debugPreviewClosing, 0, reason: 'and the phone closed it');
   });
 
+  testWidgets('the grid: square tiles edge to edge, a hairline between them', (
+    t,
+  ) async {
+    await openSearch(t);
+    Rect tile(int id) => t.getRect(find.byKey(Key('preview_$id')));
+    expect(tile(1).left, 0, reason: 'no margin at the side');
+    expect(tile(3).right, 420, reason: 'nor at the other side');
+    expect(
+      tile(2).left - tile(1).right,
+      closeTo(1, 0.01),
+      reason: 'a thin line between tiles side by side',
+    );
+    expect(
+      tile(4).top - tile(1).bottom,
+      closeTo(1, 0.01),
+      reason: 'and between rows',
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('preview_1')),
+        matching: find.byType(ClipRRect),
+      ),
+      findsNothing,
+      reason: 'square corners, not rounded',
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('preview_1')),
+        matching: find.byKey(const ValueKey('grid_tile_frame')),
+      ),
+      findsOneWidget,
+    );
+    await close(t);
+  });
+
   test('the counter says how many the phone is still closing', () {
     final d = ReelDiagnostics.instance..debugReset();
     d.recordProxiedStart();

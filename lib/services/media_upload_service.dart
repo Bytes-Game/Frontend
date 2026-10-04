@@ -83,6 +83,102 @@ class MediaUploadService {
   static const _multipartThresholdBytes = 8 * 1024 * 1024;
   static const _partSizeBytes = 5 * 1024 * 1024;
 
+  /// Upload the picture of a photo challenge or a photo answer. One file,
+  /// nothing to convert: the photo is already a small JPEG when the picker
+  /// hands it over. It is its own thumbnail too — there is no smaller
+  /// picture worth making of a picture.
+  ///
+  /// Answers the same bag a video upload does, with the photo's address in
+  /// [UploadResult.defaultVideoUrl] (the post's "media", see photo_posts.go
+  /// on the server) and no variants. Null when it did not go; why is said
+  /// in the log.
+  Future<UploadResult?> uploadPhoto({
+    required String userId,
+    required File photo,
+    ValueChanged<UploadProgress>? onProgress,
+  }) async {
+    final int size;
+    try {
+      size = await photo.length();
+    } catch (e) {
+      debugPrint('[upload] the photo could not be read: $e');
+      return null;
+    }
+    onProgress?.call(UploadProgress(
+      bytesSent: 0,
+      bytesTotal: size,
+      stage: 'presigning',
+    ));
+    final presigned = await ApiService.presignMediaUpload(
+      userId: userId,
+      items: const [
+        {'kind': 'photo', 'variant': 'default', 'contentType': 'image/jpeg'},
+      ],
+    );
+    final items = presigned?['items'];
+    final slot = items is List && items.isNotEmpty ? items.first : null;
+    final uploadUrl = slot is Map ? '${slot['uploadUrl'] ?? ''}' : '';
+    final publicUrl = slot is Map ? '${slot['publicUrl'] ?? ''}' : '';
+    if (uploadUrl.isEmpty || publicUrl.isEmpty) {
+      debugPrint('[upload] the server gave no place to put the photo');
+      return null;
+    }
+    for (var attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        final req = http.StreamedRequest('PUT', Uri.parse(uploadUrl));
+        req.headers['Content-Type'] = 'image/jpeg';
+        // Never changes once uploaded, the same as a video: see
+        // _putWithProgress.
+        req.headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+        req.contentLength = size;
+        var sent = 0;
+        photo.openRead().listen(
+          (chunk) {
+            req.sink.add(chunk);
+            sent += chunk.length;
+            onProgress?.call(UploadProgress(
+              bytesSent: sent,
+              bytesTotal: size,
+              stage: 'uploading',
+              activeVariant: 'photo',
+            ));
+          },
+          onDone: req.sink.close,
+          onError: (Object e) {
+            req.sink.addError(e);
+            req.sink.close();
+          },
+        );
+        // Straight to storage, without the app's sign-in: the address is
+        // already signed.
+        final res = await ApiService.httpClient.send(req);
+        await res.stream.drain<void>();
+        if (res.statusCode == 200 || res.statusCode == 201) {
+          onProgress?.call(UploadProgress(
+            bytesSent: size,
+            bytesTotal: size,
+            stage: 'done',
+          ));
+          return UploadResult(
+            defaultVideoUrl: publicUrl,
+            videoVariants: const {},
+            thumbnailUrl: publicUrl,
+            uploadId: '${presigned?['uploadId'] ?? ''}',
+          );
+        }
+        debugPrint('[upload] storage refused the photo: ${res.statusCode} '
+            '(try $attempt of $maxRetries)');
+      } catch (e) {
+        debugPrint('[upload] the photo did not upload: $e '
+            '(try $attempt of $maxRetries)');
+      }
+      if (attempt < maxRetries) {
+        await Future.delayed(Duration(milliseconds: 400 * (1 << (attempt - 1))));
+      }
+    }
+    return null;
+  }
+
   /// Run the whole upload. Returns null if any unrecoverable step
   /// fails — callers should toast and let the user retry.
   Future<UploadResult?> upload({

@@ -515,21 +515,31 @@ void main() {
       expect(picked, isEmpty);
     });
 
-    // Both choices, whole, inside a phone-width screen, and not on top of
+    // Every choice, whole, inside a phone-width screen, and not on top of
     // each other.
     void bothOnScreen(WidgetTester t, double width) {
       final record = t.getRect(find.byIcon(Icons.videocam_rounded));
-      final upload = t.getRect(find.byIcon(Icons.photo_library_rounded));
-      for (final r in [record, upload]) {
+      final upload = t.getRect(find.byIcon(Icons.video_library_rounded));
+      final photo = find.byIcon(Icons.image_rounded);
+      final all = [
+        record,
+        upload,
+        if (photo.evaluate().isNotEmpty) t.getRect(photo),
+      ];
+      for (final r in all) {
         expect(r.left, greaterThanOrEqualTo(0));
         expect(r.right, lessThanOrEqualTo(width));
         expect(r.top, greaterThanOrEqualTo(0));
       }
-      expect(
-        (record.center - upload.center).distance,
-        greaterThan(66),
-        reason: 'the two circles are 66 across; closer and they overlap',
-      );
+      for (var i = 0; i < all.length; i++) {
+        for (var j = i + 1; j < all.length; j++) {
+          expect(
+            (all[i].center - all[j].center).distance,
+            greaterThan(66),
+            reason: 'the circles are 66 across; closer and they overlap',
+          );
+        }
+      }
     }
 
     testWidgets('from a button at the right edge it swings left, so Upload '
@@ -541,7 +551,7 @@ void main() {
       );
       bothOnScreen(t, 390);
       // Still steerable where it now is.
-      final upload = t.getCenter(find.byIcon(Icons.photo_library_rounded));
+      final upload = t.getCenter(find.byIcon(Icons.video_library_rounded));
       handle.pointerMoved(upload);
       await t.pump();
       handle.pointerReleased(upload);
@@ -756,11 +766,12 @@ void main() {
           .readAsLinesSync()
           .where((l) => !l.trimLeft().startsWith('//'))
           .join('\n');
+      // A video prepared while typing, a video sent at Post, and a photo.
       expect(
         RegExp(r'createChallenge\([^;]*visibleTo: meta\.visibleTo,')
             .allMatches(code)
             .length,
-        2,
+        3,
       );
       final page = File('lib/pages/challenge_metadata_page.dart')
           .readAsLinesSync()

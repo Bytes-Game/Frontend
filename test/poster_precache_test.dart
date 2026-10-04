@@ -90,7 +90,7 @@ void main() {
 
     test('the precache and the widget use the same plain provider', () {
       final body = bodyOf(src, 'void _precacheUpcomingPosters()');
-      expect(body, contains('precacheImage(NetworkImage(url), context)'),
+      expect(body, matches(RegExp(r'precacheImage\(\s*NetworkImage\(url\),\s*context')),
           reason: 'anything wrapped around NetworkImage here warms a cache '
               'key the reel never asks for');
       expect(body, isNot(contains('ResizeImage')),

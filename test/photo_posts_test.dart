@@ -1,0 +1,727 @@
+// Photo challenges: "who looks better", "which is the better meme".
+//
+// A challenge can be a photo now, answered with a photo. These go through
+// the real screens — the feed, the + menu, the posting page, the battle
+// page, Search — with only the server, the phone's video player and the
+// phone's camera faked, and check two things everywhere a post appears:
+//
+//   * the photo is SHOWN — the picture is on screen;
+//   * nothing treats it as a video — no player is opened for it, so no
+//     decoder is spent and no JPEG is fed to a video player.
+//
+// Every "nothing opened" check sits next to one showing that a video in
+// the same place DOES open a player, or the check would prove nothing.
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:provider/provider.dart';
+import 'package:video_player/video_player.dart';
+import 'package:video_player_platform_interface/video_player_platform_interface.dart';
+import 'package:visibility_detector/visibility_detector.dart';
+
+import 'package:myapp/models/challenge_model.dart';
+import 'package:myapp/models/user_model.dart';
+import 'package:myapp/pages/search_page.dart';
+import 'package:myapp/providers/data_provider.dart';
+import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/chat_media.dart';
+import 'package:myapp/services/create_flow.dart';
+import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/explore_grid_cache.dart';
+import 'package:myapp/services/reel_diagnostics.dart';
+import 'package:myapp/services/upload_job_manager.dart';
+import 'package:myapp/widgets/create_burst.dart';
+import 'package:myapp/widgets/match_warning.dart';
+import 'package:myapp/widgets/photo_face.dart';
+import 'package:myapp/widgets/smart_reels_feed.dart';
+
+/// A phone video player that records what it was asked to open.
+class _Platform extends VideoPlayerPlatform {
+  final Map<int, StreamController<VideoEvent>> _events = {};
+  final List<String> opened = [];
+  int _id = 0;
+
+  @override
+  Future<void> init() async {}
+
+  @override
+  Future<int?> createWithOptions(VideoCreationOptions options) async {
+    final id = _id++;
+    _events[id] = StreamController<VideoEvent>()
+      ..add(
+        VideoEvent(
+          eventType: VideoEventType.initialized,
+          size: const Size(9, 16),
+          duration: const Duration(seconds: 10),
+        ),
+      );
+    opened.add(options.dataSource.uri ?? '');
+    return id;
+  }
+
+  @override
+  Stream<VideoEvent> videoEventsFor(int playerId) => _events[playerId]!.stream;
+
+  @override
+  Future<void> play(int playerId) async {}
+
+  @override
+  Future<void> pause(int playerId) async {}
+
+  @override
+  Future<void> dispose(int playerId) async => _events.remove(playerId);
+
+  @override
+  Future<void> setVolume(int playerId, double v) async {}
+
+  @override
+  Future<void> setLooping(int playerId, bool looping) async {}
+
+  @override
+  Future<void> setPlaybackSpeed(int playerId, double speed) async {}
+
+  @override
+  Future<void> seekTo(int playerId, Duration position) async {}
+
+  @override
+  Future<Duration> getPosition(int playerId) async => Duration.zero;
+
+  @override
+  Widget buildViewWithOptions(VideoViewOptions options) =>
+      const SizedBox.shrink();
+}
+
+class _Photos implements PhotoSource {
+  File? next;
+  bool? askedCamera;
+  @override
+  Future<File?> pick({required bool camera}) async {
+    askedCamera = camera;
+    return next;
+  }
+}
+
+const photoUrl = 'https://cdn/u/9/a/photo.jpg';
+const answerPhotoUrl = 'https://cdn/u/8/b/photo.jpg';
+
+/// maya's photo challenge, and leo's photo answering it.
+Map<String, dynamic> photoBattle() => {
+  'id': '1',
+  'creatorId': '9',
+  'creatorUsername': 'maya',
+  'mediaType': 'photo',
+  'videoUrl': photoUrl,
+  'thumbnailUrl': photoUrl,
+  'prefix': 'Who looks',
+  'subject': 'better in red',
+  'status': 'active',
+  'createdAt': '2026-09-20T10:00:00Z',
+  'responseCount': 1,
+  'topResponseId': '77',
+  'topResponseUsername': 'leo',
+  'topResponseVideoUrl': answerPhotoUrl,
+  'topResponseThumbnailUrl': answerPhotoUrl,
+};
+
+/// A photo challenge nobody has answered yet.
+Map<String, dynamic> photoShort() => {
+  'id': '3',
+  'creatorId': '9',
+  'creatorUsername': 'maya',
+  'mediaType': 'photo',
+  'videoUrl': photoUrl,
+  'thumbnailUrl': photoUrl,
+  'prefix': 'Which is',
+  'subject': 'the better meme',
+  'status': 'open',
+  'createdAt': '2026-09-20T10:00:00Z',
+};
+
+/// An ordinary video challenge.
+Map<String, dynamic> videoShort() => {
+  'id': '2',
+  'creatorId': '8',
+  'creatorUsername': 'zara',
+  'videoUrl': 'https://x/2.mp4',
+  'prefix': 'Who can',
+  'subject': 'cook pasta in 5 minutes',
+  'status': 'open',
+  'createdAt': '2026-09-20T10:00:00Z',
+};
+
+/// Every request the app made: method, path, body.
+late List<(String, String, String)> asked;
+
+/// The challenge the server sends for the feed and the battle page.
+late Map<String, dynamic> serving;
+
+/// When true, creating a challenge fails once.
+bool createFailsOnce = false;
+
+void fakeServer() {
+  asked = [];
+  createFailsOnce = false;
+  ApiService.useClient(
+    MockClient((req) async {
+      final p = req.url.path;
+      asked.add((req.method, req.url.toString(), req.body));
+      if (p.endsWith('/media/presign')) {
+        final items = (json.decode(req.body)['items'] as List).cast<Map>();
+        return http.Response(
+          json.encode({
+            'uploadId': 'up1',
+            'items': [
+              for (final i in items)
+                {
+                  ...i,
+                  'uploadUrl': 'https://storage/put/${i['kind']}',
+                  'publicUrl': 'https://cdn/u/1/up1/photo.jpg',
+                },
+            ],
+          }),
+          200,
+        );
+      }
+      if (req.url.host == 'storage') return http.Response('', 200);
+      if (p == '/api/v1/challenges' && req.method == 'POST') {
+        if (createFailsOnce) {
+          createFailsOnce = false;
+          return http.Response('down', 503);
+        }
+        return http.Response(
+          json.encode({
+            ...photoShort(),
+            'id': '41',
+            'creatorId': '1',
+            'creatorUsername': 'me',
+          }),
+          201,
+        );
+      }
+      if (p.endsWith('/challenges/accept')) {
+        return http.Response(
+          json.encode({
+            'id': '88',
+            'challengeId': serving['id'],
+            'responderId': '1',
+            'responderUsername': 'me',
+            'videoUrl': 'https://cdn/u/1/up1/photo.jpg',
+            'mediaType': 'photo',
+          }),
+          201,
+        );
+      }
+      if (p.endsWith('/challenges/${serving['id']}')) {
+        return http.Response.bytes(
+          utf8.encode(
+            json.encode({
+              'challenge': serving,
+              'responses': [
+                if (serving['topResponseId'] != null)
+                  {
+                    'id': serving['topResponseId'],
+                    'challengeId': serving['id'],
+                    'responderId': '8',
+                    'responderUsername': serving['topResponseUsername'],
+                    'videoUrl': serving['topResponseVideoUrl'],
+                  },
+              ],
+              'votes': [],
+            }),
+          ),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }
+      if (p.contains('/feed')) {
+        return http.Response.bytes(
+          utf8.encode(
+            json.encode({
+              'items': [
+                {'type': 'challenge', 'challenge': serving},
+              ],
+              'hasMore': false,
+            }),
+          ),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }
+      if (p.endsWith('/watch')) {
+        return http.Response('{"message":"ok"}', 201);
+      }
+      return http.Response('{}', 200);
+    }),
+  );
+}
+
+/// The bodies sent to [path] with [method].
+List<Map<String, dynamic>> sentTo(String method, String path) => [
+  for (final (m, url, body) in asked)
+    if (m == method && Uri.parse(url).path == path)
+      json.decode(body) as Map<String, dynamic>,
+];
+
+DataProvider signedIn() => DataProvider()
+  ..setUser(
+    UserModel(
+      id: '1',
+      username: 'me',
+      wins: 0,
+      losses: 0,
+      followersCount: 0,
+      followingCount: 0,
+    ),
+  );
+
+Future<void> frames(WidgetTester t, [int n = 8]) async {
+  for (var i = 0; i < n; i++) {
+    await t.pump(const Duration(milliseconds: 100));
+  }
+}
+
+/// Lets real file reading and the upload finish. Reading a file goes back
+/// and forth between the real world and the test's clock, so it takes
+/// turns.
+Future<void> letItUpload(WidgetTester t) async {
+  for (var i = 0; i < 12; i++) {
+    await t.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 25)),
+    );
+    await t.pump(const Duration(milliseconds: 50));
+  }
+  await frames(t, 4);
+}
+
+Future<void> close(WidgetTester t) async {
+  await t.pumpWidget(const MaterialApp(home: SizedBox()));
+  // Past the three seconds a finished upload stays on screen.
+  await t.pump(const Duration(seconds: 5));
+  ReelDiagnostics.instance.debugReset();
+  EventTracker.instance.dispose();
+}
+
+/// The feed, opening on whatever [serving] is.
+Future<void> openFeed(WidgetTester t) async {
+  t.view.physicalSize = const Size(400, 860);
+  t.view.devicePixelRatio = 1;
+  addTearDown(t.view.resetPhysicalSize);
+  addTearDown(t.view.resetDevicePixelRatio);
+  EventTracker.instance.dispose();
+  await t.pumpWidget(
+    ChangeNotifierProvider<DataProvider>.value(
+      value: signedIn(),
+      child: const MaterialApp(
+        home: Scaffold(body: SmartReelsFeed(userId: '1')),
+      ),
+    ),
+  );
+  await frames(t, 6);
+}
+
+/// The picture of each photo on screen.
+List<String> photosShown(WidgetTester t) => [
+  for (final f in t.widgetList<PhotoFace>(find.byType(PhotoFace)))
+    if (f.url.isNotEmpty) f.url,
+];
+
+void main() {
+  final platform = _Platform();
+  late _Photos photos;
+  late Directory dir;
+  setUpAll(() => VideoPlayerPlatform.instance = platform);
+
+  setUp(() {
+    SmartReelsFeed.debugForgetAppOpen();
+    platform.opened.clear();
+    serving = photoBattle();
+    fakeServer();
+    photos = _Photos();
+    ChatMedia.instance.photos = photos;
+    dir = Directory.systemTemp.createTempSync('photo_posts');
+    final f = File('${dir.path}/picked.jpg')
+      ..writeAsBytesSync(List.filled(4096, 7));
+    photos.next = f;
+  });
+
+  tearDown(() {
+    ApiService.useClient(http.Client());
+    ChatMedia.instance.debugReset();
+    if (dir.existsSync()) dir.deleteSync(recursive: true);
+  });
+
+  test('a challenge says whether it is a photo; anything else is a video', () {
+    expect(ChallengeModel.fromJson(photoBattle()).isPhoto, isTrue);
+    expect(ChallengeModel.fromJson(videoShort()).isPhoto, isFalse);
+    expect(
+      ChallengeModel.fromJson({...videoShort(), 'mediaType': 'gif'}).isPhoto,
+      isFalse,
+    );
+  });
+
+  group('a photo in the feed', () {
+    testWidgets('a video in the same feed opens a player — so the photo '
+        'checks below mean something', (t) async {
+      serving = videoShort();
+      await openFeed(t);
+      expect(platform.opened, contains('https://x/2.mp4'));
+      expect(find.byType(PhotoFace), findsNothing);
+      await close(t);
+    });
+
+    testWidgets('shows the photo, whole, and opens no player for it', (
+      t,
+    ) async {
+      serving = photoShort();
+      await openFeed(t);
+      expect(photosShown(t), [photoUrl], reason: 'the picture is on screen');
+      expect(
+        t.widget<Image>(find.byKey(const ValueKey('photo_face_picture'))).fit,
+        BoxFit.contain,
+        reason: 'a photo is judged whole, so it is never cropped',
+      );
+      // Both layers — the picture and its blurred backdrop — ask for it the
+      // way the feed fetches it ahead, so it is one download, ready at once.
+      final layers = t.widgetList<Image>(
+        find.descendant(
+          of: find.byType(PhotoFace),
+          matching: find.byType(Image),
+        ),
+      );
+      expect(layers, hasLength(2));
+      for (final i in layers) {
+        expect(i.image, const NetworkImage(photoUrl));
+      }
+      expect(platform.opened, isEmpty, reason: 'nothing to play');
+      expect(find.byType(VideoPlayer), findsNothing);
+      // It is a post like any other: the buttons are there.
+      expect(find.text('Accept challenge'), findsOneWidget);
+      await close(t);
+    });
+
+    testWidgets('looking at a photo counts as a view', (t) async {
+      serving = photoShort();
+      await openFeed(t);
+      await t.pump(const Duration(seconds: 2));
+      await frames(t, 4);
+      final views = sentTo('POST', '/api/v1/watch');
+      expect(views, isNotEmpty);
+      expect(views.first['contentId'], '3');
+      await close(t);
+    });
+
+    testWidgets('a photo battle turns to the answer\'s photo, still with no '
+        'player', (t) async {
+      await openFeed(t);
+      expect(photosShown(t), [photoUrl]);
+      await t.drag(find.byType(PhotoFace).first, const Offset(-300, 0));
+      await frames(t, 8);
+      expect(photosShown(t), contains(answerPhotoUrl));
+      expect(platform.opened, isEmpty);
+      await close(t);
+    });
+  });
+
+  group('reporting a photo that does not match', () {
+    Future<void> openReport(WidgetTester t) async {
+      await openFeed(t);
+      await t.tap(find.byKey(const ValueKey('reel_more')));
+      await frames(t, 5);
+      await t.tap(find.byKey(const ValueKey('reel_report')));
+      await frames(t, 5);
+      expect(find.byKey(const ValueKey('report_dialog')), findsOneWidget);
+    }
+
+    testWidgets('says photo, and that other people decide — no check reads '
+        'a photo', (t) async {
+      serving = photoShort();
+      await openReport(t);
+      expect(find.textContaining('Report this photo only if'), findsOneWidget);
+      expect(find.textContaining('our check'), findsNothing);
+      expect(find.byKey(const ValueKey('report_in_battle')), findsNothing);
+      await t.tap(find.text('Cancel'));
+      await frames(t, 4);
+      await close(t);
+    });
+
+    testWidgets('somebody in a photo battle is told their report will not '
+        'count, not that it may cost them', (t) async {
+      serving = {...photoBattle(), 'topResponseUsername': 'me'};
+      await openReport(t);
+      expect(
+        find.textContaining("on a photo your report won't count"),
+        findsOneWidget,
+      );
+      expect(find.textContaining('cost you rating points'), findsNothing);
+      await t.tap(find.text('Cancel'));
+      await frames(t, 4);
+      await close(t);
+    });
+  });
+
+  group('the + menu', () {
+    Future<List<CreateChoice>> openMenu(
+      WidgetTester t, {
+      List<CreateChoice> choices = allCreateChoices,
+    }) async {
+      await t.binding.setSurfaceSize(const Size(400, 800));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final picked = <CreateChoice>[];
+      await t.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: TextButton(
+                  onPressed: () => CreateBurst.show(
+                    context,
+                    anchor: const Offset(200, 760),
+                    fromHold: false,
+                    choices: choices,
+                    onChoose: picked.add,
+                  ),
+                  child: const Text('+'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await t.tap(find.text('+'));
+      await frames(t, 6);
+      return picked;
+    }
+
+    testWidgets('offers Photo between Record and Upload, and picks it', (
+      t,
+    ) async {
+      final picked = await openMenu(t);
+      expect(find.text('Record'), findsOneWidget);
+      expect(find.text('Photo'), findsOneWidget);
+      expect(find.text('Upload'), findsOneWidget);
+      final record = t.getCenter(find.text('Record'));
+      final photo = t.getCenter(find.text('Photo'));
+      final upload = t.getCenter(find.text('Upload'));
+      expect(record.dx, lessThan(photo.dx));
+      expect(photo.dx, lessThan(upload.dx));
+      // Far enough apart that a finger on one is not on the next.
+      expect((photo - record).distance, greaterThan(90));
+      expect((upload - photo).distance, greaterThan(90));
+      await t.tap(find.text('Photo'));
+      await frames(t, 6);
+      expect(picked, [CreateChoice.photo]);
+    });
+
+    test('the + button and a profile\'s Battle button both go to the photo '
+        'flow', () {
+      String code(String path) => File(path)
+          .readAsLinesSync()
+          .where((l) => !l.trimLeft().startsWith('//'))
+          .join('\n');
+      for (final path in [
+        'lib/screens/main_shell.dart',
+        'lib/pages/profile_page.dart',
+      ]) {
+        expect(
+          code(path),
+          matches(
+            RegExp(r'case CreateChoice\.photo:\s+(await )?CreateFlow\.photo\('),
+          ),
+          reason: path,
+        );
+      }
+    });
+  });
+
+  group('posting a photo challenge', () {
+    Future<void> startFromMenu(WidgetTester t) async {
+      t.view.physicalSize = const Size(1000, 2400);
+      t.view.devicePixelRatio = 1;
+      addTearDown(t.view.resetPhysicalSize);
+      addTearDown(t.view.resetDevicePixelRatio);
+      EventTracker.instance.dispose();
+      await t.pumpWidget(
+        ChangeNotifierProvider<DataProvider>.value(
+          value: signedIn(),
+          child: MaterialApp(
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => Center(
+                  child: TextButton(
+                    onPressed: () => CreateFlow.photo(context),
+                    child: const Text('go'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await t.tap(find.text('go'));
+      await frames(t, 6);
+      expect(find.byKey(const ValueKey('post_photo_gallery')), findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('post_photo_gallery')));
+      await frames(t, 8);
+    }
+
+    testWidgets('choose a photo, fill in the challenge, Post: it goes up as '
+        'a photo, with nothing converted', (t) async {
+      await startFromMenu(t);
+      expect(photos.askedCamera, isFalse);
+      expect(find.text('New photo challenge'), findsOneWidget);
+      expect(find.byKey(const ValueKey('photo_preview')), findsOneWidget);
+      expect(find.text(matchWarningPhotoChallenge), findsOneWidget);
+      expect(find.text(matchWarningChallenge), findsNothing);
+      // The photo starts going up while the challenge is typed.
+      await letItUpload(t);
+      final presign = sentTo('POST', '/api/v1/media/presign');
+      expect(presign, hasLength(1));
+      expect(presign.single['items'], [
+        {'kind': 'photo', 'variant': 'default', 'contentType': 'image/jpeg'},
+      ]);
+      expect(
+        asked.where(
+          (r) => r.$1 == 'PUT' && r.$2 == 'https://storage/put/photo',
+        ),
+        hasLength(1),
+      );
+
+      await t.enterText(find.byType(TextFormField).at(1), 'in red');
+      await t.tap(find.text('Post Challenge'));
+      await letItUpload(t);
+      final posted = sentTo('POST', '/api/v1/challenges');
+      expect(posted, hasLength(1));
+      expect(posted.single['mediaType'], 'photo');
+      expect(posted.single['videoUrl'], 'https://cdn/u/1/up1/photo.jpg');
+      expect(posted.single['prefix'], 'Who looks better');
+      expect(posted.single['subject'], 'in red');
+      expect(posted.single['durationMs'], 0);
+      expect(posted.single['videoVariants'], isEmpty);
+      expect(platform.opened, isEmpty);
+      await close(t);
+    });
+
+    testWidgets('a photo challenge that failed to post is still a photo '
+        'when retried', (t) async {
+      final job = UploadJobManager.instance.submitChallenge(
+        creatorId: '1',
+        sourcePath: photos.next!.path,
+        photo: true,
+        meta: const ChallengeSubmissionMeta(
+          prefix: 'Who looks better',
+          subject: 'in red',
+          visibility: 'arena',
+          category: '',
+          emotionTags: [],
+        ),
+      );
+      createFailsOnce = true;
+      await letItUpload(t);
+      expect(job.state.value.stage, UploadJobStage.failed);
+      final again = UploadJobManager.instance.retry(job)!;
+      await letItUpload(t);
+      expect(again.state.value.stage, UploadJobStage.done);
+      final posted = sentTo('POST', '/api/v1/challenges');
+      expect(posted, hasLength(2));
+      expect(posted.last['mediaType'], 'photo');
+      await t.pump(const Duration(seconds: 5));
+    });
+  });
+
+  group('answering', () {
+    testWidgets('Accept on a video challenge offers Record and Upload, not '
+        'Photo', (t) async {
+      serving = videoShort();
+      await openFeed(t);
+      await t.tap(find.text('Accept challenge'));
+      await frames(t, 6);
+      expect(find.text('Record'), findsOneWidget);
+      expect(find.text('Upload'), findsOneWidget);
+      expect(find.text('Photo'), findsNothing);
+      await close(t);
+    });
+
+    testWidgets('Accept on a photo challenge goes straight to a photo, and '
+        'the answer goes up as a photo', (t) async {
+      serving = photoShort();
+      await openFeed(t);
+      await t.tap(find.text('Accept challenge'));
+      await frames(t, 10);
+      expect(find.text('Record'), findsNothing, reason: 'nothing to choose');
+      expect(find.byKey(const ValueKey('post_photo_camera')), findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('post_photo_camera')));
+      await frames(t, 8);
+      expect(photos.askedCamera, isTrue);
+      // The last check, worded for a photo.
+      expect(find.text('Does your photo answer this?'), findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('answer_check_post')));
+      await frames(t, 6);
+      await letItUpload(t);
+      final answers = sentTo('POST', '/api/v1/challenges/accept');
+      expect(answers, hasLength(1));
+      expect(answers.single['challengeId'], '3');
+      expect(answers.single['mediaType'], 'photo');
+      expect(answers.single['videoUrl'], 'https://cdn/u/1/up1/photo.jpg');
+      expect(platform.opened, isEmpty);
+      await close(t);
+    });
+  });
+
+  group('Search', () {
+    setUp(() {
+      VisibilityDetectorController.instance.updateInterval = Duration.zero;
+      ExploreGridCache.instance.debugReset();
+      ReelDiagnostics.instance.debugReset();
+    });
+    tearDown(ExploreGridCache.instance.debugReset);
+
+    testWidgets('a photo never takes a preview turn; the video next to it '
+        'does', (t) async {
+      ApiService.useClient(
+        MockClient((req) async {
+          if (req.url.path.contains('/feed/explore')) {
+            return http.Response(
+              json.encode({
+                'items': [
+                  {
+                    'type': 'challenge',
+                    'challenge': {...photoShort(), 'thumbnailUrl': ''},
+                  },
+                  {'type': 'challenge', 'challenge': videoShort()},
+                ],
+              }),
+              200,
+            );
+          }
+          return http.Response('{}', 200);
+        }),
+      );
+      await t.binding.setSurfaceSize(const Size(420, 900));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      EventTracker.instance.dispose();
+      await t.pumpWidget(
+        ChangeNotifierProvider<DataProvider>.value(
+          value: signedIn(),
+          child: const MaterialApp(home: SearchPage()),
+        ),
+      );
+      await frames(t, 10);
+      expect(platform.opened, contains('https://x/2.mp4'));
+      expect(platform.opened, isNot(contains(photoUrl)));
+      // Marked as a photo where a video has its play mark.
+      expect(find.byKey(const ValueKey('grid_photo_mark')), findsOneWidget);
+      expect(find.byKey(const ValueKey('grid_video_mark')), findsOneWidget);
+      // Long past a video's turn: the photo is never given one.
+      await t.pump(const Duration(seconds: 30));
+      await frames(t, 4);
+      expect(platform.opened, isNot(contains(photoUrl)));
+      await close(t);
+    });
+  });
+}

@@ -108,8 +108,9 @@ class _VideoCard extends StatelessWidget {
     return Semantics(
       button: true,
       label:
-          '${battle ? 'Battle' : 'Short'}: ${video.title}, by $who. '
-          'Tap to watch.',
+          '${battle ? 'Battle' : video.isPhoto ? 'Photo' : 'Short'}: '
+          '${video.title}, by $who. '
+          'Tap to ${video.isPhoto ? 'open' : 'watch'}.',
       child: GestureDetector(
         key: const ValueKey('shared_video_card'),
         onTap: () => openVideoPlaylist(context, [video], 0),
@@ -151,7 +152,8 @@ class _VideoCard extends StatelessWidget {
                 ),
                 if (battle)
                   const Center(child: _VsBadge())
-                else
+                // A photo has nothing to play: its picture is the card.
+                else if (!video.isPhoto)
                   const Center(child: _PlayBadge()),
                 Positioned(
                   top: 10,

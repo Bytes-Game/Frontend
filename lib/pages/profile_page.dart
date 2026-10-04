@@ -25,6 +25,7 @@ import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/profile_cache.dart';
 import 'package:myapp/services/upload_job_manager.dart';
 import 'package:myapp/widgets/arena_ui.dart';
+import 'package:myapp/widgets/chat_media_widgets.dart' show ChatPhotoViewer;
 import 'package:myapp/widgets/battle_record_panel.dart';
 import 'package:myapp/widgets/battles_tab.dart';
 import 'package:myapp/widgets/create_burst.dart';
@@ -582,6 +583,8 @@ class _ProfilePageState extends State<ProfilePage>
                           CreateFlow.record(context, from: 'profile_battle');
                         case CreateChoice.upload:
                           CreateFlow.upload(context, from: 'profile_battle');
+                        case CreateChoice.photo:
+                          CreateFlow.photo(context, from: 'profile_battle');
                       }
                     },
                   );
@@ -1253,12 +1256,21 @@ class _PostingTile extends StatelessWidget {
         final poster = job.posterPath;
         final pct = (st.progress.clamp(0.0, 1.0) * 100).round();
         return Pressable(
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) =>
-                  VideoPlayerPage(videoUrl: job.sourcePath, title: title),
-            ),
-          ),
+          // A photo opens as a photo — pinch to zoom, swipe down to close —
+          // the same full-screen view a chat photo has. Handing it to the
+          // video player would show nothing.
+          onTap: () => job.isPhoto
+              ? ChatPhotoViewer.open(
+                  context,
+                  {'localPath': job.sourcePath, 'message': title},
+                  username,
+                )
+              : Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        VideoPlayerPage(videoUrl: job.sourcePath, title: title),
+                  ),
+                ),
           pressedScale: 0.97,
           child: ClipRRect(
             borderRadius: BorderRadius.circular(AppTheme.radiusMd),

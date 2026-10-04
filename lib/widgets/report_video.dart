@@ -15,11 +15,15 @@ import 'package:myapp/services/api_service.dart';
 ///
 /// [responseId] names an answer; empty reports the challenge's own video.
 /// Returns what came of it, or null when the person changed their mind.
+///
+/// [photo] on a photo challenge. No check reads a photo — it only reads
+/// videos — so only other viewers' reports can count, and the words say so.
 Future<ReportResult?> reportVideo(
   BuildContext context, {
   required String challengeId,
   String responseId = '',
   bool inBattle = false,
+  bool photo = false,
 }) async {
   final messenger = ScaffoldMessenger.maybeOf(context);
   final sure = await showDialog<bool>(
@@ -31,18 +35,30 @@ Future<ReportResult?> reportVideo(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Report this video only if it has nothing to do with what the '
-            'challenge asks. If our check or other people agree, its owner '
-            'loses rating points. The video stays up.',
+          Text(
+            photo
+                ? 'Report this photo only if it has nothing to do with what '
+                      'the challenge asks. If enough other people agree, its '
+                      'owner loses rating points. The photo stays up.'
+                : 'Report this video only if it has nothing to do with what '
+                      'the challenge asks. If our check or other people '
+                      'agree, its owner loses rating points. The video stays '
+                      'up.',
           ),
           if (inBattle) ...[
             const SizedBox(height: 10),
-            const Text(
-              "You're in this battle. If our check finds the video does "
-              'match the challenge, this report will cost you rating points.',
-              key: ValueKey('report_in_battle'),
-              style: TextStyle(fontWeight: FontWeight.w700),
+            Text(
+              // On a photo the server counts a report from somebody in the
+              // battle only when its check agrees, and it has no check for
+              // photos — so it counts for nothing, and costs nothing.
+              photo
+                  ? "You're in this battle, so on a photo your report won't "
+                        "count — only other viewers' reports do."
+                  : "You're in this battle. If our check finds the video "
+                        'does match the challenge, this report will cost you '
+                        'rating points.',
+              key: const ValueKey('report_in_battle'),
+              style: const TextStyle(fontWeight: FontWeight.w700),
             ),
           ],
         ],

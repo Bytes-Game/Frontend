@@ -65,15 +65,20 @@ class UploadJobManager {
   /// by Post time the bytes are usually already in R2 and
   /// [finalizeChallenge] only has to make one API call: posting feels
   /// instant.
+  ///
+  /// [photo] for a photo challenge: [sourcePath] is the picture, and the
+  /// upload is that one file, with nothing to convert.
   UploadJob prepareChallenge({
     required String creatorId,
     required String sourcePath,
+    bool photo = false,
   }) {
     final job = UploadJob._(
       id: _newId(),
       kind: UploadJobKind.challenge,
       sourcePath: sourcePath,
-      title: 'Preparing video',
+      title: photo ? 'Preparing photo' : 'Preparing video',
+      isPhoto: photo,
     );
     job._creatorId = creatorId;
     job._prepared = Completer<UploadResult?>();
@@ -108,6 +113,7 @@ class UploadJobManager {
         creatorId: job._creatorId ?? '',
         sourcePath: job.sourcePath,
         meta: meta,
+        photo: job.isPhoto,
       );
     }
     // ignore: discarded_futures
@@ -135,12 +141,14 @@ class UploadJobManager {
     required String creatorId,
     required String sourcePath,
     required ChallengeSubmissionMeta meta,
+    bool photo = false,
   }) {
     final job = UploadJob._(
       id: _newId(),
       kind: UploadJobKind.challenge,
       sourcePath: sourcePath,
       title: 'Posting challenge',
+      isPhoto: photo,
     );
     _enqueue(job);
     // Spin off the runner. Errors get caught inside _runChallenge so
@@ -152,10 +160,13 @@ class UploadJobManager {
 
   /// Kick off a response-submission pipeline. Same lifecycle as
   /// [submitChallenge] — fire-and-forget from the caller's POV.
+  ///
+  /// [photo] answers a photo challenge with the picture at [sourcePath].
   UploadJob submitResponse({
     required String responderId,
     required String challengeId,
     required String sourcePath,
+    bool photo = false,
   }) {
     final job = UploadJob._(
       id: _newId(),
@@ -163,6 +174,7 @@ class UploadJobManager {
       sourcePath: sourcePath,
       title: 'Submitting response',
       challengeId: challengeId,
+      isPhoto: photo,
     );
     _enqueue(job);
     // ignore: discarded_futures
@@ -217,6 +229,7 @@ class UploadJobManager {
           creatorId: creatorId,
           sourcePath: job.sourcePath,
           meta: meta,
+          photo: job.isPhoto,
         );
       case UploadJobKind.response:
         final cid = job.challengeId;
@@ -226,6 +239,7 @@ class UploadJobManager {
           responderId: rid,
           challengeId: cid,
           sourcePath: job.sourcePath,
+          photo: job.isPhoto,
         );
     }
     dismiss(job.id);
@@ -238,6 +252,7 @@ class UploadJobManager {
   /// [job._prepared] with the upload result (null on failure) so
   /// [finalizeChallenge] can pick up whenever the user taps Post.
   Future<void> _runPrepare(UploadJob job, {required String userId}) async {
+    if (job.isPhoto) return _preparePhoto(job, userId: userId);
     final pathsToCleanup = <String>[];
     try {
       job._update((s) => s.copyWith(stage: UploadJobStage.processing));
@@ -372,6 +387,7 @@ class UploadJobManager {
         tags: meta.tags,
         battleDays: meta.battleDays,
         visibleTo: meta.visibleTo,
+        mediaType: job.isPhoto ? 'photo' : 'video',
       );
       if (challenge == null) {
         _fail(job, 'create_fail',
@@ -390,9 +406,12 @@ class UploadJobManager {
             message: 'Posted',
             result: challenge,
           ));
-      // Keep what went up, so it plays at once from your profile.
-      unawaited(OwnUploads.instance
-          .keep('challenge:${challenge.id}', job.sourcePath));
+      // Keep what went up, so it plays at once from your profile. A photo
+      // is not played: the picture is fetched like any other.
+      if (!job.isPhoto) {
+        unawaited(OwnUploads.instance
+            .keep('challenge:${challenge.id}', job.sourcePath));
+      }
       _completedCtl.add(job);
       _scheduleAutoDismiss(job);
       await _removePersisted(job.id);
@@ -423,6 +442,28 @@ class UploadJobManager {
       contentType: 'challenge',
       metadata: {'jobId': job.id, 'visibility': meta.visibility},
     );
+    if (job.isPhoto) {
+      return _runPhoto(
+        job,
+        userId: creatorId,
+        failCode: 'create_fail',
+        failMessage: 'Could not save the challenge. Tap retry to try again.',
+        send: (uploaded) => ApiService.createChallenge(
+          creatorId: creatorId,
+          videoUrl: uploaded.defaultVideoUrl,
+          thumbnailUrl: uploaded.thumbnailUrl,
+          prefix: meta.prefix,
+          subject: meta.subject,
+          visibility: meta.visibility,
+          category: meta.category,
+          emotionTags: meta.emotionTags,
+          tags: meta.tags,
+          battleDays: meta.battleDays,
+          visibleTo: meta.visibleTo,
+          mediaType: 'photo',
+        ),
+      );
+    }
 
     final pathsToCleanup = <String>[];
     try {
@@ -591,6 +632,21 @@ class UploadJobManager {
       contentType: 'challenge_response',
       metadata: {'jobId': job.id},
     );
+    if (job.isPhoto) {
+      return _runPhoto(
+        job,
+        userId: responderId,
+        failCode: 'submit_fail',
+        failMessage: 'Could not submit your response. Tap retry to try again.',
+        send: (uploaded) => ApiService.acceptChallenge(
+          challengeId: challengeId,
+          responderId: responderId,
+          videoUrl: uploaded.defaultVideoUrl,
+          thumbnailUrl: uploaded.thumbnailUrl,
+          mediaType: 'photo',
+        ),
+      );
+    }
 
     final pathsToCleanup = <String>[];
     try {
@@ -720,6 +776,120 @@ class UploadJobManager {
     }
   }
 
+  // —— Internal: photos ——————————————————————————————————————————————
+  //
+  // A photo challenge or a photo answer: one picture, already a small JPEG
+  // from the picker. Nothing to convert, so no processing stage — it goes
+  // straight up, and then the same create or accept call a video makes,
+  // saying it is a photo.
+
+  /// Upload [job]'s picture, moving its bar from 0 to [upTo].
+  Future<UploadResult?> _sendPhoto(
+    UploadJob job,
+    String userId, {
+    required double upTo,
+  }) {
+    job._poster = job.sourcePath;
+    job._update((s) => s.copyWith(
+          stage: UploadJobStage.uploading,
+          progress: 0,
+          message: 'Uploading photo…',
+        ));
+    return MediaUploadService.instance.uploadPhoto(
+      userId: userId,
+      photo: File(job.sourcePath),
+      onProgress: (p) => job._update((s) => s.copyWith(
+            stage: UploadJobStage.uploading,
+            progress: p.fraction * upTo,
+            activeVariant: 'photo',
+            message: 'Uploading photo…',
+          )),
+    );
+  }
+
+  /// The prepare leg of a photo challenge: the upload, while the creator
+  /// types. See [prepareChallenge].
+  Future<void> _preparePhoto(UploadJob job, {required String userId}) async {
+    UploadResult? uploaded;
+    try {
+      uploaded = await _sendPhoto(job, userId, upTo: 0.9);
+    } catch (e) {
+      debugPrint('[upload] preparing the photo failed: $e');
+    }
+    job._prepared?.complete(uploaded);
+    if (uploaded == null) {
+      // The same quiet holding state a video gets: Post tries again.
+      job._update((s) => s.copyWith(
+            stage: UploadJobStage.queued,
+            progress: 0,
+            message: 'Will retry on post',
+          ));
+      return;
+    }
+    if (job._abandoned) {
+      dismiss(job.id);
+      return;
+    }
+    job._update((s) => s.copyWith(
+          stage: UploadJobStage.queued,
+          progress: 0.9,
+          message: 'Ready to post',
+        ));
+  }
+
+  /// A photo challenge or answer posted in one go: upload, then [send] it.
+  Future<void> _runPhoto(
+    UploadJob job, {
+    required String userId,
+    required Future<Object?> Function(UploadResult) send,
+    required String failCode,
+    required String failMessage,
+  }) async {
+    final start = DateTime.now();
+    try {
+      final uploaded = await _sendPhoto(job, userId, upTo: 0.95);
+      if (uploaded == null) {
+        throw _PipelineFailure('upload_fail',
+            'Upload failed. Check your connection and retry.');
+      }
+      job._update((s) => s.copyWith(
+            stage: UploadJobStage.finalizing,
+            progress: 0.96,
+            message: job.kind == UploadJobKind.challenge
+                ? 'Posting…'
+                : 'Submitting…',
+          ));
+      final result = await send(uploaded);
+      if (result == null) throw _PipelineFailure(failCode, failMessage);
+      EventTracker.instance.trackUploadComplete(
+        uploadType: job.kind == UploadJobKind.challenge
+            ? 'challenge'
+            : 'challenge_response',
+        contentId: job.challengeId ??
+            (result is ChallengeModel ? result.id : 'pending'),
+        durationMs: DateTime.now().difference(start).inMilliseconds,
+        totalElapsedMs: DateTime.now().difference(start).inMilliseconds,
+      );
+      job._update((s) => s.copyWith(
+            stage: UploadJobStage.done,
+            progress: 1.0,
+            message: 'Posted',
+            result: result,
+          ));
+      _completedCtl.add(job);
+      _scheduleAutoDismiss(job);
+      await _removePersisted(job.id);
+    } on _PipelineFailure catch (f) {
+      _fail(job, f.code, f.message);
+    } on ApiRefused catch (e) {
+      // The server said no, and why — a photo answering a video challenge,
+      // say. Retrying will not change that.
+      _fail(job, 'refused', e.reason);
+    } catch (e) {
+      _fail(job, 'unknown', 'Something went wrong: $e');
+    }
+  }
+
   // —— Internal: misc plumbing ——————————————————————————————————————
 
   void _enqueue(UploadJob job) {
@@ -820,6 +990,7 @@ class UploadJobManager {
               ? 'Posting challenge'
               : 'Submitting response',
           challengeId: m['challengeId'] as String?,
+          isPhoto: m['photo'] == true,
         );
         job._creatorId = m['creatorId'] as String?;
         job._responderId = m['responderId'] as String?;
@@ -947,6 +1118,9 @@ class UploadJob {
   final String sourcePath;
   final String title;
   final String? challengeId;   // set for response jobs
+
+  /// A photo challenge or photo answer: [sourcePath] is the picture.
+  final bool isPhoto;
   final ValueNotifier<UploadJobState> state =
       ValueNotifier(const UploadJobState());
 
@@ -976,6 +1150,7 @@ class UploadJob {
     required this.sourcePath,
     required this.title,
     this.challengeId,
+    this.isPhoto = false,
   });
 
   /// What the creator wrote, from the moment they pressed Post. Null while
@@ -1035,6 +1210,7 @@ class UploadJob {
         'challengeId': challengeId,
         'creatorId': _creatorId,
         'responderId': _responderId,
+        if (isPhoto) 'photo': true,
         if (_challengeMeta != null)
           'meta': {
             'prefix': _challengeMeta!.prefix,

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:video_player/video_player.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/widgets/create_burst.dart';
+import 'package:myapp/widgets/photo_face.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/widgets/league_badge.dart' show leagueWash;
 import 'package:myapp/models/battle_model.dart'
@@ -1419,6 +1420,16 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     if (url.isEmpty) {
       // Image-only post or missing URL — pause everything so we don't leak audio.
       VideoPlayerService.instance.pauseAll();
+      // A photo challenge is a post like any other, just with nothing to
+      // play: it opens on whoever is ahead, and looking at it counts as a
+      // view, the same as a video.
+      if (item.isPhoto) {
+        if (arriving) {
+          item.opensOnAnswer = item.isBattle && item.ahead == 'answer';
+          if (item.opensOnAnswer) item.openOnAnswer.value++;
+        }
+        _scheduleInitialWatchEvent(item);
+      }
       return;
     }
     // Give a deliberately-opened reel a moment to become warm.
@@ -1968,6 +1979,10 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       add(current.thumbnailUrl);
       // A battle's other side is one tap away with no swipe to warn us.
       add(current.opponentThumbnailUrl);
+      // A photo post IS its picture: fetched ahead it opens at once, the
+      // way a warm video does.
+      add(current.photoUrl);
+      add(current.opponentPhotoUrl);
     }
 
     for (
@@ -1978,13 +1993,23 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       final entry = _items[i];
       if (entry is! _ReelItem) continue;
       add(entry.thumbnailUrl);
+      add(entry.photoUrl);
     }
 
     for (final url in wanted) {
       // Already on the phone (a video the app opened on): nothing to fetch.
       if (NextUpStore.instance.posterFile(url) != null) continue;
+      // A picture that could not be fetched ahead is said in one line. With
+      // no onError, precacheImage reports it as an app error instead — the
+      // catchError below never sees it — and the tile fetches it again
+      // when it is drawn anyway.
       // ignore: discarded_futures
-      precacheImage(NetworkImage(url), context).catchError((Object _) {});
+      precacheImage(
+        NetworkImage(url),
+        context,
+        onError: (e, _) =>
+            debugPrint('[reel] could not fetch a picture ahead: $e'),
+      ).catchError((Object _) {});
     }
   }
 
@@ -2289,7 +2314,10 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       creatorId: '',
       creatorUsername: item.creatorUsername,
       creatorLeague: item.creatorLeague,
-      videoUrl: item.videoUrl,
+      // A photo's picture, where a video's file would be: what the server
+      // keeps for either.
+      videoUrl: item.isPhoto ? item.photoUrl : item.videoUrl,
+      mediaType: item.isPhoto ? 'photo' : 'video',
       thumbnailUrl: item.thumbnailUrl,
       prefix: '',
       subject: item.caption,
@@ -2449,6 +2477,23 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       if (mounted && wasPlaying) _playCurrent(fromStart: false);
     }
 
+    Future<void> acceptWith(CreateChoice how) async {
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) =>
+              ChallengeDetailPage(challengeId: item.id, acceptWith: how),
+        ),
+      );
+      unawaited(_refreshCounts(item));
+      resume();
+    }
+
+    // A photo challenge is answered with a photo: nothing to choose.
+    if (item.isPhoto) {
+      unawaited(acceptWith(CreateChoice.photo));
+      return;
+    }
     CreateBurst.show(
       context,
       anchor: anchor,
@@ -2456,17 +2501,8 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       title: 'Accept challenge',
       anchorSize: const Size(34, 34),
       anchorRadius: 17,
-      onChoose: (how) async {
-        if (!mounted) return;
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) =>
-                ChallengeDetailPage(challengeId: item.id, acceptWith: how),
-          ),
-        );
-        unawaited(_refreshCounts(item));
-        resume();
-      },
+      choices: videoCreateChoices,
+      onChoose: acceptWith,
       onDismiss: resume,
     );
   }
@@ -2673,6 +2709,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       context,
       challengeId: item.id,
       responseId: onAnswer ? item.opponentResponseId : '',
+      photo: item.isPhoto,
       // In the battle themselves: told that a false report costs them.
       inBattle: me != null &&
           (item.creatorId == me.id ||
@@ -2937,7 +2974,9 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                     final reel = entry as _ReelItem;
                     // A reel with no video at all is not a tile — there is
                     // nothing to play and no controls worth showing.
-                    if (reel.videoUrl.isEmpty) {
+                    // A photo post has no video either, but it is a tile:
+                    // its picture, with every button a video has.
+                    if (reel.videoUrl.isEmpty && !reel.isPhoto) {
                       return _Placeholder(item: reel);
                     }
                     // Null here means "no player yet", not "no video": this
@@ -3092,6 +3131,16 @@ class _ReelItem implements _FeedEntry {
   final String opponentResponseId;
   final String opponentVideoUrl;
   final String opponentThumbnailUrl;
+
+  /// A photo challenge ("who looks better", "which meme is better"): the
+  /// picture of each side. [videoUrl] and [opponentVideoUrl] stay EMPTY for
+  /// a photo, and that is deliberate — every part of this feed that opens a
+  /// player, fetches the start of a video ahead of time or holds a decoder
+  /// already skips an item with no video address, so a photo can never reach
+  /// any of it. The tile draws [photoUrl] instead (see PhotoFace).
+  final String photoUrl;
+  final String opponentPhotoUrl;
+  bool get isPhoto => photoUrl.isNotEmpty;
   final String opponentUsername;
   final String opponentLeague;
   int likes;
@@ -3206,7 +3255,8 @@ class _ReelItem implements _FeedEntry {
 
   /// True iff this item is a battle — i.e. there's an opponent video to
   /// swipe to. Plain shorts and image posts return false.
-  bool get isBattle => opponentVideoUrl.isNotEmpty;
+  bool get isBattle =>
+      opponentVideoUrl.isNotEmpty || opponentPhotoUrl.isNotEmpty;
 
   _ReelItem({
     required this.id,
@@ -3221,6 +3271,8 @@ class _ReelItem implements _FeedEntry {
     this.opponentResponseId = '',
     this.opponentVideoUrl = '',
     this.opponentThumbnailUrl = '',
+    this.photoUrl = '',
+    this.opponentPhotoUrl = '',
     this.opponentUsername = '',
     this.opponentLeague = '',
     this.leader = '',
@@ -3256,7 +3308,13 @@ class _ReelItem implements _FeedEntry {
       final c = entry['challenge'] as Map<String, dynamic>?;
       if (c == null) return null;
       final title = '${c['prefix'] ?? ''} ${c['subject'] ?? ''}'.trim();
-      final fallbackUrl = (c['videoUrl'] as String?) ?? '';
+      // A photo challenge: the picture is where a video's file would be,
+      // and nothing about it is played. See [_ReelItem.photoUrl].
+      final isPhoto = c['mediaType'] == 'photo';
+      final photo = isPhoto ? (c['videoUrl'] as String?) ?? '' : '';
+      final opponentPhoto =
+          isPhoto ? (c['topResponseVideoUrl'] as String?) ?? '' : '';
+      final fallbackUrl = isPhoto ? '' : (c['videoUrl'] as String?) ?? '';
       // Prefer HLS when the server-side transcode worker has produced
       // the segmented manifest for this challenge — drops first-frame
       // latency from ~2-4s (whole-MP4 seek + buffer) to ~300-500ms
@@ -3272,14 +3330,16 @@ class _ReelItem implements _FeedEntry {
       //
       // Empty hlsManifestUrl means the worker hasn't finished yet (or
       // isn't deployed) — fall back to the per-bitrate MP4 picker.
-      final hlsUrl = (c['hlsManifestUrl'] as String?) ?? '';
+      final hlsUrl = isPhoto ? '' : (c['hlsManifestUrl'] as String?) ?? '';
       // Sticky per video. The same video is re-parsed constantly — the
       // server deliberately re-sends it — and asking again each time meant
       // warming one rendition and opening another. See stickyVariantUrl.
-      final variantPick = NetworkQualityService.instance.stickyVariantUrl(
-        'challenge:${c['id']}',
-        _coerceVariantsMap(c['videoVariants']),
-      );
+      final variantPick = isPhoto
+          ? null
+          : NetworkQualityService.instance.stickyVariantUrl(
+              'challenge:${c['id']}',
+              _coerceVariantsMap(c['videoVariants']),
+            );
       final mp4Url = variantPick?.isNotEmpty == true
           ? variantPick!
           : fallbackUrl;
@@ -3305,8 +3365,10 @@ class _ReelItem implements _FeedEntry {
       // appropriate MP4 variant, then the canonical URL. Keeps a battle
       // left-swipe from stuttering on cellular even though the
       // challenger played fine.
-      final opponentHls = (c['topResponseHlsManifestUrl'] as String?) ?? '';
-      final opponentFallback = (c['topResponseVideoUrl'] as String?) ?? '';
+      final opponentHls =
+          isPhoto ? '' : (c['topResponseHlsManifestUrl'] as String?) ?? '';
+      final opponentFallback =
+          isPhoto ? '' : (c['topResponseVideoUrl'] as String?) ?? '';
       // Only ask when there IS an opponent. Most items in the feed are
       // plain shorts with no response attached, and asking about their
       // opponent video counted a "no quality versions available" against a
@@ -3323,7 +3385,8 @@ class _ReelItem implements _FeedEntry {
           : null;
       // One of your own, still on this phone from when you posted it: play
       // that, and keep the server's copy as the retry. See OwnUploads.
-      final own = OwnUploads.instance.pathFor('challenge:${c['id']}');
+      final own =
+          isPhoto ? null : OwnUploads.instance.pathFor('challenge:${c['id']}');
       final ownAnswer = hasOpponent
           ? OwnUploads.instance.pathFor('response:${c['topResponseId']}')
           : null;
@@ -3338,6 +3401,8 @@ class _ReelItem implements _FeedEntry {
             ? chosenVideoUrl
             : (mp4Url.isNotEmpty ? hlsUrl : ''),
         thumbnailUrl: (c['thumbnailUrl'] as String?) ?? '',
+        photoUrl: photo,
+        opponentPhotoUrl: opponentPhoto,
         caption: title,
         creatorId: (c['creatorId'] as String?) ?? '',
         creatorUsername: (c['creatorUsername'] as String?) ?? '',
@@ -3392,6 +3457,7 @@ class _ReelItem implements _FeedEntry {
   /// already encodes against opponentVideoUrl.isNotEmpty.
   static _ReelItem? fromChallengeModel(ChallengeModel c) {
     if (c.id.isEmpty || c.videoUrl.isEmpty) return null;
+    if (c.isPhoto) return _photoFrom(c);
     // Same HLS preference as fromFeedEntry above — when the worker has
     // produced the segmented manifest, use it; else fall back to the
     // per-bitrate MP4 selection.
@@ -3454,6 +3520,39 @@ class _ReelItem implements _FeedEntry {
       ..shareCount = c.shareCount
       ..saveCount = c.saveCount;
   }
+
+  /// A photo challenge from an already-parsed [ChallengeModel]: the same
+  /// reel as [fromChallengeModel] builds, with the pictures in place of the
+  /// videos and no video address at all. See [photoUrl].
+  static _ReelItem _photoFrom(ChallengeModel c) => _ReelItem(
+    id: c.id,
+    type: 'challenge',
+    videoUrl: '',
+    thumbnailUrl: c.thumbnailUrl ?? '',
+    photoUrl: c.videoUrl,
+    opponentPhotoUrl: c.topResponseVideoUrl,
+    caption: c.title,
+    creatorId: c.creatorId,
+    creatorUsername: c.creatorUsername,
+    creatorLeague: c.creatorLeague,
+    opponentResponseId: c.topResponseId,
+    leader: c.leader,
+    opponentThumbnailUrl: c.topResponseThumbnailUrl,
+    opponentUsername: c.topResponseUsername,
+    opponentLeague: c.topResponseLeague,
+    opponentLikes: c.topResponseLikes,
+    likes: c.likes,
+    views: c.views,
+    comments: c.commentCount,
+    isLiked: c.isLiked,
+  )
+    ..isSaved = c.isSaved
+    ..hasVoted = c.hasVoted
+    ..votedFor = c.votedFor
+    ..opponentLiked = c.topResponseLiked
+    ..voteCount = c.voteCount
+    ..shareCount = c.shareCount
+    ..saveCount = c.saveCount;
 }
 
 /// Normalize a JSON-decoded videoVariants payload into `Map<String,String>`.
@@ -4376,7 +4475,8 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     if (show == _showingOpponent && !_cubeCtl.isAnimating) return;
     // Make sure the opponent's player exists BEFORE the first frame of the
     // turn — both cube faces render live video during the animation.
-    if (show) _ensureOpponentState();
+    // A photo battle has no players: both faces are pictures.
+    if (show && !widget.item.isPhoto) _ensureOpponentState();
     _settleTo(show, track: track);
   }
 
@@ -4466,6 +4566,9 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
       }
       return;
     }
+    // A photo has nothing to start. The feed stopped every video when it
+    // came on screen, and turning to the other photo stops nothing either.
+    if (widget.item.isPhoto) return;
 
     // No player and not the opponent means this reel has not been opened
     // yet — there is nothing to show or play, and the poster is already
@@ -4538,8 +4641,8 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     _cubeCtl.stop();
     // Both faces render during the turn, so the opponent's player must
     // exist from the very first dragged frame (poster shows until its
-    // controller has a frame).
-    _ensureOpponentState();
+    // controller has a frame). A photo battle has no player to open.
+    if (!widget.item.isPhoto) _ensureOpponentState();
   }
 
   void _onHorizontalDragUpdate(DragUpdateDetails d) {
@@ -4608,6 +4711,12 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
 
   Widget _videoFace({required bool opponent}) {
     final item = widget.item;
+    if (item.isPhoto) {
+      return PhotoFace(
+        key: ValueKey('reel-photo-${item.id}-${opponent ? 'opp' : 'pri'}'),
+        url: opponent ? item.opponentPhotoUrl : item.photoUrl,
+      );
+    }
     final url = opponent ? item.opponentVideoUrl : item.videoUrl;
     final poster = opponent && item.opponentThumbnailUrl.isNotEmpty
         ? item.opponentThumbnailUrl
@@ -5604,7 +5713,15 @@ class _MoreMenuButton extends StatelessWidget {
               children: [
                 Icon(Icons.flag_outlined, color: Colors.white, size: 20),
                 SizedBox(width: 10),
-                Text(reportMenuLabel, style: TextStyle(color: Colors.white)),
+                // A menu is at most 280 wide: with the phone's text set
+                // large, the words have to give rather than spill out.
+                Flexible(
+                  child: Text(
+                    reportMenuLabel,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
               ],
             ),
           ),

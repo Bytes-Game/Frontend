@@ -59,9 +59,14 @@ const maxSubject = 30;
 /// UploadStatusOverlay shows progress.
 class ChallengeMetadataPage extends StatefulWidget {
   final String processedSourcePath;
+
+  /// A photo challenge: [processedSourcePath] is the picture, and it goes
+  /// up as a photo (see UploadJobManager).
+  final bool photo;
   const ChallengeMetadataPage({
     super.key,
     required this.processedSourcePath,
+    this.photo = false,
   });
 
   @override
@@ -75,7 +80,18 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
 
   // ── Form state ─────────────────────────────────────────────────────
   final _formKey = GlobalKey<FormState>();
-  final _prefixCtl = TextEditingController(text: 'Who is better at');
+  late final _prefixCtl = TextEditingController(
+    text: widget.photo ? photoOpenings.first : 'Who is better at',
+  );
+
+  /// How a photo challenge usually starts. Offered first on a photo, ahead
+  /// of the server's suggestions, which are about videos.
+  static const photoOpenings = [
+    'Who looks better',
+    'Which is the better meme',
+    'Who wore it better',
+    'Which photo is better',
+  ];
   final _subjectCtl = TextEditingController();
 
   String _visibility = 'arena';
@@ -163,6 +179,7 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
       _preparedJob = UploadJobManager.instance.prepareChallenge(
         creatorId: creatorId,
         sourcePath: widget.processedSourcePath,
+        photo: widget.photo,
       );
       EventTracker.instance.trackUploadStep(
         uploadType: 'challenge',
@@ -191,9 +208,17 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
     if (!mounted) return;
     if (_prefixLastQuery != q) return; // stale response
     setState(() {
-      _prefixSuggestions = results.isEmpty
+      final found = results.isEmpty
           ? List<String>.from(_localPrefixFallback)
           : results;
+      _prefixSuggestions = widget.photo
+          ? [
+              for (final p in photoOpenings)
+                if (q.isEmpty || p.toLowerCase().contains(q.toLowerCase())) p,
+              for (final p in found)
+                if (!photoOpenings.contains(p)) p,
+            ]
+          : found;
     });
   }
 
@@ -297,6 +322,7 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
         creatorId: creatorId,
         sourcePath: widget.processedSourcePath,
         meta: meta,
+        photo: widget.photo,
       );
     }
 
@@ -321,7 +347,7 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
       appBar: AppBar(
         elevation: 0,
         centerTitle: false,
-        title: const Text('New challenge'),
+        title: Text(widget.photo ? 'New photo challenge' : 'New challenge'),
       ),
       body: Form(
         key: _formKey,
@@ -337,7 +363,7 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
             SuggestField<String>(
               controller: _prefixCtl,
               label: 'Prefix',
-              hint: 'Who is better at',
+              hint: widget.photo ? photoOpenings.first : 'Who is better at',
               validator: (v) => _limitedText(v, maxPrefix),
               maxLength: maxPrefix,
               suggestions: _prefixSuggestions,
@@ -389,7 +415,7 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
             SuggestField<Map<String, dynamic>>(
               controller: _subjectCtl,
               label: 'Subject',
-              hint: 'pranks',
+              hint: widget.photo ? 'in red' : 'pranks',
               validator: (v) => _limitedText(v, maxSubject),
               maxLength: maxSubject,
               suggestions: _subjectSuggestions,
@@ -445,7 +471,11 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const MatchWarning(text: matchWarningChallenge),
+              MatchWarning(
+                text: widget.photo
+                    ? matchWarningPhotoChallenge
+                    : matchWarningChallenge,
+              ),
               const SizedBox(height: 8),
               SizedBox(
             height: 52,
@@ -508,7 +538,22 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
               child: SizedBox(
                 width: 92,
                 height: 164,
-                child: _ClipPreview(path: widget.processedSourcePath),
+                child: widget.photo
+                    ? Image.file(
+                        File(widget.processedSourcePath),
+                        key: const ValueKey('photo_preview'),
+                        fit: BoxFit.cover,
+                        cacheWidth: 300,
+                        errorBuilder: (_, _, _) => const ColoredBox(
+                          color: Colors.black26,
+                          child: Icon(
+                            Icons.image_outlined,
+                            color: Colors.white54,
+                            size: 30,
+                          ),
+                        ),
+                      )
+                    : _ClipPreview(path: widget.processedSourcePath),
               ),
             ),
             const SizedBox(width: 14),

@@ -23,6 +23,7 @@ import 'package:myapp/widgets/feed_action_bar.dart'
 import 'package:myapp/widgets/league_badge.dart' show leagueWash;
 import 'package:myapp/widgets/people_list_sheet.dart';
 import 'package:myapp/widgets/match_warning.dart';
+import 'package:myapp/widgets/photo_choice.dart';
 import 'package:myapp/widgets/report_video.dart';
 import 'package:myapp/widgets/video_grid_tile.dart' show openVideoPlaylist;
 
@@ -166,8 +167,13 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
   }
 
   /// "Accept challenge": Record or Upload rising out of the button, then
-  /// the same steps as ever.
+  /// the same steps as ever. A photo challenge is answered with a photo, so
+  /// there is nothing to choose: straight to taking or choosing one.
   void _acceptFrom(Offset anchor) {
+    if (_challenge?.isPhoto ?? false) {
+      _onPickPhoto();
+      return;
+    }
     CreateBurst.show(
       context,
       anchor: anchor,
@@ -175,16 +181,21 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
       title: 'Accept challenge',
       anchorSize: const Size(44, 44),
       anchorRadius: 22,
-      onChoose: (how) {
-        if (!mounted) return;
-        switch (how) {
-          case CreateChoice.record:
-            _onRecord();
-          case CreateChoice.upload:
-            _onPickFile();
-        }
-      },
+      choices: videoCreateChoices,
+      onChoose: _acceptWith,
     );
+  }
+
+  void _acceptWith(CreateChoice how) {
+    if (!mounted) return;
+    switch (how) {
+      case CreateChoice.record:
+        _onRecord();
+      case CreateChoice.upload:
+        _onPickFile();
+      case CreateChoice.photo:
+        _onPickPhoto();
+    }
   }
 
   static String _question(ChallengeModel c) {
@@ -202,15 +213,7 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     final how = widget.acceptWith;
     if (how == null || _acceptStarted) return;
     _acceptStarted = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      switch (how) {
-        case CreateChoice.record:
-          _onRecord();
-        case CreateChoice.upload:
-          _onPickFile();
-      }
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _acceptWith(how));
   }
 
   Future<void> _like() async {
@@ -344,6 +347,7 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
       context,
       challengeId: c.id,
       responseId: responseId,
+      photo: c.isPhoto,
       inBattle: me != null &&
           (c.creatorId == me || _responses.any((r) => r.responderId == me)),
     );
@@ -474,6 +478,34 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     }
   }
 
+  /// A photo challenge's answer: a photo, taken now or chosen from the
+  /// phone. Nothing to trim, so straight to the last check and the same
+  /// hand-off a video answer goes through.
+  Future<void> _onPickPhoto() async {
+    if (_challenge == null || _accepting) return;
+    EventTracker.instance.trackTap(
+      target: 'accept_challenge_photo',
+      pageName: 'challenge_detail_page',
+      params: {'challengeId': _challenge!.id},
+    );
+    final file = await choosePhoto(context, title: 'Answer with a photo');
+    if (!mounted || file == null || _challenge == null) return;
+    if (!await confirmAnswerMatches(context, _question(_challenge!),
+            photo: true) ||
+        !mounted) {
+      return;
+    }
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => SubmitResponseUploadPage(
+          processedSourcePath: file.path,
+          challengeId: _challenge!.id,
+          photo: true,
+        ),
+      ),
+    );
+  }
+
   /// Push the trim screen (which pops with the trimmed path), then
   /// dispatch the response upload to [UploadJobManager] via the
   /// [SubmitResponseUploadPage] hand-off screen. The hand-off pops
@@ -597,7 +629,8 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                         const SizedBox(width: 10),
                         Flexible(
                           child: Text(
-                            "$whose video doesn't match",
+                            "$whose ${c.isPhoto ? 'photo' : 'video'} "
+                            "doesn't match",
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -783,6 +816,7 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                         ..._responses.skip(1).map(
                               (r) => _ResponseCard(
                                 response: r,
+                                photo: c.isPhoto,
                                 onWatch: () => _watch(answer: true),
                                 onVote: c.status == 'active'
                                     ? () => _voteFromList(r.id)
@@ -850,6 +884,7 @@ class _Versus extends StatelessWidget {
                 league: challenge.creatorLeague,
                 thumbnailUrl: challenge.thumbnailUrl ?? '',
                 videoUrl: challenge.videoUrl,
+                photo: challenge.isPhoto,
                 title: challenge.title,
                 onTap: () => onWatch(answer: false),
                 leading: _leading(true),
@@ -866,6 +901,9 @@ class _Versus extends StatelessWidget {
                       league: a.responderLeague,
                       thumbnailUrl: a.thumbnailUrl ?? '',
                       videoUrl: a.videoUrl,
+                      // A photo challenge's answers are photos: the server
+                      // takes no other kind.
+                      photo: challenge.isPhoto,
                       title: "${a.responderUsername}'s answer",
                       onTap: () => onWatch(answer: true),
                       leading: _leading(false),
@@ -914,6 +952,10 @@ class _VideoCard extends StatelessWidget {
   final String league;
   final String thumbnailUrl;
   final String videoUrl;
+
+  /// A photo, not a video: [videoUrl] is the picture, and there is nothing
+  /// to play, so no play button. A tap still opens it full screen.
+  final bool photo;
   final String title;
   final bool leading;
   final bool decided;
@@ -926,6 +968,7 @@ class _VideoCard extends StatelessWidget {
     required this.league,
     required this.thumbnailUrl,
     required this.videoUrl,
+    this.photo = false,
     required this.title,
     required this.onTap,
     this.leading = false,
@@ -977,22 +1020,23 @@ class _VideoCard extends StatelessWidget {
                   ),
                 ),
               ),
-              Center(
-                child: Container(
-                  width: 46,
-                  height: 46,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.black.withValues(alpha: 0.35),
-                    border: Border.all(color: Colors.white38),
-                  ),
-                  child: const Icon(
-                    Icons.play_arrow_rounded,
-                    color: Colors.white,
-                    size: 30,
+              if (!photo)
+                Center(
+                  child: Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.black.withValues(alpha: 0.35),
+                      border: Border.all(color: Colors.white38),
+                    ),
+                    child: const Icon(
+                      Icons.play_arrow_rounded,
+                      color: Colors.white,
+                      size: 30,
+                    ),
                   ),
                 ),
-              ),
               Positioned(
                 top: 10,
                 left: 10,
@@ -1614,10 +1658,14 @@ class _ResponseCard extends StatelessWidget {
   final VoidCallback? onVote;
   final VoidCallback onWatch;
 
+  /// An answer to a photo challenge: a photo, so no play mark on it.
+  final bool photo;
+
   const _ResponseCard({
     required this.response,
     required this.onWatch,
     this.onVote,
+    this.photo = false,
   });
 
   @override
@@ -1651,11 +1699,13 @@ class _ResponseCard extends StatelessWidget {
                           )
                         : null,
                   ),
-                  child: const Icon(
-                    Icons.play_arrow_rounded,
-                    color: Colors.white70,
-                    size: 26,
-                  ),
+                  child: photo
+                      ? null
+                      : const Icon(
+                          Icons.play_arrow_rounded,
+                          color: Colors.white70,
+                          size: 26,
+                        ),
                 ),
               ),
               const SizedBox(width: 12),

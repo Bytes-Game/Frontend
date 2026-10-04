@@ -31,10 +31,15 @@ class SubmitResponseUploadPage extends StatefulWidget {
   /// Challenge being responded to.
   final String challengeId;
 
+  /// A photo answering a photo challenge: [processedSourcePath] is the
+  /// picture.
+  final bool photo;
+
   const SubmitResponseUploadPage({
     super.key,
     required this.processedSourcePath,
     required this.challengeId,
+    this.photo = false,
   });
 
   @override
@@ -87,6 +92,7 @@ class _SubmitResponseUploadPageState extends State<SubmitResponseUploadPage>
       responderId: responderId,
       challengeId: widget.challengeId,
       sourcePath: widget.processedSourcePath,
+      photo: widget.photo,
     );
 
     // Bump feed refresh so when the user lands back on the feed, it
