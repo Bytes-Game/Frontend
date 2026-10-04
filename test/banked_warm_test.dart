@@ -289,6 +289,16 @@ void main() {
 
     test('the summary says how long the oldest download has been going, '
         'and how much of it has arrived', () async {
+      // The test before can leave a download still winding down after its
+      // release — clear() does not wait for one to stop. Wait for quiet
+      // first: "nothing running" has to be true before it can be checked.
+      expect(
+        await eventually(() =>
+            VideoCacheService.instance.debugPipeline.contains('active=0/')),
+        isTrue,
+        reason: 'downloads from the test before never finished: '
+            '${VideoCacheService.instance.debugPipeline}',
+      );
       expect(VideoCacheService.instance.debugPipeline, isNot(contains('oldest=')),
           reason: 'nothing running, nothing to say');
       final release = Completer<void>();

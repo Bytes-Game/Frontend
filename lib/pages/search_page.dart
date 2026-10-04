@@ -733,7 +733,7 @@ class _SearchPageState extends State<SearchPage>
         slivers: [
           // Straight onto the videos: no title, no rows above them.
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(12, 2, 12, 24),
+            padding: const EdgeInsets.only(bottom: 24),
             sliver: SliverGrid(
               gridDelegate: _gridDelegate,
               delegate: SliverChildBuilderDelegate(
@@ -754,10 +754,16 @@ class _SearchPageState extends State<SearchPage>
     );
   }
 
+  /// The grid: square-cornered tiles edge to edge across the screen, with
+  /// only a hairline between them — the way Instagram's explore grid looks.
+  /// It used to have rounded corners, a wide margin and wide gaps, so a
+  /// third of the screen was empty space around the videos.
+  static const double gridGap = 1;
+
   static const _gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
     crossAxisCount: 3,
-    mainAxisSpacing: 6,
-    crossAxisSpacing: 6,
+    mainAxisSpacing: gridGap,
+    crossAxisSpacing: gridGap,
     childAspectRatio: 0.66,
   );
 
@@ -1097,7 +1103,7 @@ class _SearchPageState extends State<SearchPage>
       // contents fit on a single screen. Without it, a short result list
       // makes the pull-to-refresh silently drop.
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 24),
+      padding: const EdgeInsets.only(top: gridGap, bottom: 24),
       gridDelegate: _gridDelegate,
       itemCount: items.length,
       itemBuilder: (context, i) => _PreviewableTile(
@@ -2285,13 +2291,17 @@ class _PreviewableTileState extends State<_PreviewableTile> {
       key: Key('preview_${ch.id}'),
       onVisibilityChanged: (info) {
         if (!mounted) return;
+        // A photo has nothing to preview. It never takes a turn — so it
+        // never opens a player or downloads anything as a video — and the
+        // videos around it take theirs.
+        if (ch.isPhoto) return;
         widget.coordinator.report(_id, info.visibleFraction, url: _originUrl());
       },
       child: Pressable(
         onTap: widget.onTap,
         pressedScale: 0.97,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+        child: ClipRect(
+          key: const ValueKey('grid_tile_frame'),
           child: Stack(
             fit: StackFit.expand,
             children: [
@@ -2435,8 +2445,15 @@ class _PreviewableTileState extends State<_PreviewableTile> {
                     const SizedBox(height: 3),
                     Row(
                       children: [
-                        const Icon(Icons.play_arrow_rounded,
-                            color: Colors.white, size: 14),
+                        // A photo says so, where a video has its play mark.
+                        Icon(
+                            ch.isPhoto
+                                ? Icons.image_rounded
+                                : Icons.play_arrow_rounded,
+                            key: ValueKey(
+                                ch.isPhoto ? 'grid_photo_mark' : 'grid_video_mark'),
+                            color: Colors.white,
+                            size: ch.isPhoto ? 12 : 14),
                         const SizedBox(width: 1),
                         Text(
                           _formatCount(ch.views),
@@ -2495,12 +2512,12 @@ class _GridPlaceholder extends StatelessWidget {
     return ShimmerLoading(
       child: GridView.builder(
         physics: const NeverScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(12, 2, 12, 24),
+        padding: const EdgeInsets.only(bottom: 24),
         gridDelegate: _SearchPageState._gridDelegate,
         itemCount: 12,
         itemBuilder: (_, _) => const SkeletonBone(
           height: double.infinity,
-          borderRadius: AppTheme.radiusMd,
+          borderRadius: 0,
         ),
       ),
     );

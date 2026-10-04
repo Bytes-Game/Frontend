@@ -11,6 +11,13 @@ const matchWarningChallenge =
     "Post a video that matches what you've written. If it doesn't, "
     "you'll lose rating points.";
 
+/// Above the button that posts a photo challenge. No model checks a photo
+/// (it only reads videos), but people can still report one that does not
+/// match.
+const matchWarningPhotoChallenge =
+    "Post a photo that matches what you've written. If people report that "
+    "it doesn't, you'll lose rating points.";
+
 /// Under the button that takes a challenge on.
 const matchWarningAnswer =
     'Your answer must do what the challenge asks. If it doesn\'t, '
@@ -57,12 +64,19 @@ class MatchWarning extends StatelessWidget {
 /// The last check before an answer is sent: does it answer [question]?
 /// True to go ahead; false when the person wants to look again, and nothing
 /// is sent.
-Future<bool> confirmAnswerMatches(BuildContext context, String question) async {
+///
+/// [photo] for an answer to a photo challenge, which is a photo.
+Future<bool> confirmAnswerMatches(
+  BuildContext context,
+  String question, {
+  bool photo = false,
+}) async {
+  final what = photo ? 'photo' : 'video';
   final ok = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
       key: const ValueKey('answer_check'),
-      title: const Text('Does your video answer this?'),
+      title: Text('Does your $what answer this?'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -72,8 +86,8 @@ Future<bool> confirmAnswerMatches(BuildContext context, String question) async {
             style: const TextStyle(fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 10),
-          const Text(
-            "Only post a video that does what the challenge asks. If it "
+          Text(
+            "Only post a $what that does what the challenge asks. If it "
             "doesn't, you'll lose rating points.",
           ),
         ],

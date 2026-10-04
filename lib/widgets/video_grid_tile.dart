@@ -178,10 +178,13 @@ class VideoGridTile extends StatelessWidget {
                   const SizedBox(height: 3),
                   Row(
                     children: [
-                      const Icon(
-                        Icons.play_arrow_rounded,
+                      // A photo says so, where a video has its play mark.
+                      Icon(
+                        video.isPhoto
+                            ? Icons.image_rounded
+                            : Icons.play_arrow_rounded,
                         color: Colors.white,
-                        size: 14,
+                        size: video.isPhoto ? 12 : 14,
                       ),
                       const SizedBox(width: 1),
                       Text(

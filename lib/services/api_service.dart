@@ -833,6 +833,9 @@ class ApiService {
     // How many days voting runs once somebody answers. The server keeps it
     // between 7 and 30; zero means "the usual", which is 7.
     int battleDays = 0,
+    // 'photo' for a photo challenge, whose picture is in [videoUrl]. A
+    // video sends nothing, which is how the server has always read it.
+    String mediaType = 'video',
   }) async {
     try {
       final res = await _authHttp.post(
@@ -858,6 +861,7 @@ class ApiService {
           'emotionTags': emotionTags,
           'tags': tags,
           if (battleDays > 0) 'battleDays': battleDays,
+          if (mediaType == 'photo') 'mediaType': 'photo',
         }),
       );
       if (res.statusCode == 200 || res.statusCode == 201) {
@@ -976,6 +980,9 @@ class ApiService {
     String category = '',
     List<String> tags = const [],
     List<String> emotionTags = const [],
+    // 'photo' for a photo answer. A photo challenge only takes photos, and
+    // a video challenge only videos — the server refuses the other kind.
+    String mediaType = 'video',
   }) async {
     try {
       final res = await _authHttp.post(
@@ -991,6 +998,7 @@ class ApiService {
           if (category.isNotEmpty) 'category': category,
           if (tags.isNotEmpty) 'tags': tags,
           if (emotionTags.isNotEmpty) 'emotionTags': emotionTags,
+          if (mediaType == 'photo') 'mediaType': 'photo',
         }),
       );
       if (res.statusCode == 200 || res.statusCode == 201) {

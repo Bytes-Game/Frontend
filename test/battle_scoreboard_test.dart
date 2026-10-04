@@ -344,8 +344,9 @@ void main() {
     final jobs = code('lib/services/upload_job_manager.dart');
     expect(
       'battleDays: meta.battleDays'.allMatches(jobs).length,
-      2,
-      reason: 'both ways a challenge gets posted must send the length',
+      3,
+      reason: 'every way a challenge gets posted must send the length: a '
+          'video prepared while typing, a video sent at Post, and a photo',
     );
   });
 

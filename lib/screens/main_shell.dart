@@ -168,6 +168,8 @@ class _MainShellState extends State<MainShell> {
               await CreateFlow.record(context, from: 'create_burst');
             case CreateChoice.upload:
               await CreateFlow.upload(context, from: 'create_burst');
+            case CreateChoice.photo:
+              await CreateFlow.photo(context, from: 'create_burst');
           }
         } finally {
           _resumeIf(wasPlaying);

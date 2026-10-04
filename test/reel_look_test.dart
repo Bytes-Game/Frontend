@@ -978,11 +978,11 @@ void main() {
     );
     final page = code('lib/pages/challenge_detail_page.dart');
     expect(page, contains('_startAcceptIfAsked();'));
-    expect(page, contains('case CreateChoice.record:\n          _onRecord();'));
-    expect(
-      page,
-      contains('case CreateChoice.upload:\n          _onPickFile();'),
-    );
+    // Asked for on the way in, it goes through the same choice a tap makes.
+    expect(page, contains('addPostFrameCallback((_) => _acceptWith(how))'));
+    expect(page, matches(RegExp(r'case CreateChoice\.record:\s+_onRecord\(\);')));
+    expect(page, matches(RegExp(r'case CreateChoice\.upload:\s+_onPickFile\(\);')));
+    expect(page, matches(RegExp(r'case CreateChoice\.photo:\s+_onPickPhoto\(\);')));
   });
 
   group('caption and comments', () {
