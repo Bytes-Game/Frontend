@@ -1,5 +1,5 @@
-// Search, faster: the grid on the first open of the app, the video you tap,
-// and the results as you type.
+// Search: the quality a video opened from it plays at, and the results as
+// you type.
 //
 // Each of these goes through the real page. A check that called the cache
 // or the picker by hand would pass with the wire to it cut, which is the
@@ -8,7 +8,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -20,7 +19,6 @@ import 'package:visibility_detector/visibility_detector.dart';
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/search_page.dart';
-import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
@@ -133,19 +131,10 @@ Future<void> settle(WidgetTester t) async {
   }
 }
 
-/// The smallest PNG there is.
-final Uint8List png = base64Decode(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
-);
 
 void main() {
-  late Directory dir;
-
   setUp(() {
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
-    dir = Directory.systemTemp.createTempSync('search_speed');
-    ExploreGridCache.directory = () async => dir;
-    ExploreGridCache.download = (url) async => png;
     ExploreGridCache.instance.debugReset();
     fakeServer();
   });
@@ -153,100 +142,9 @@ void main() {
   tearDown(() {
     ApiService.useClient(http.Client());
     ExploreGridCache.instance.debugReset();
-    if (dir.existsSync()) dir.deleteSync(recursive: true);
   });
 
-  /// Runs the app once far enough for the grid to be fetched and written
-  /// down, then forgets everything in memory, as closing the app does.
-  Future<void> lastRun(WidgetTester t, {String userId = '1'}) async {
-    await t.runAsync(() async {
-      await ExploreGridCache.instance.load(userId);
-      await ExploreGridCache.instance.debugLastSave;
-      ExploreGridCache.instance.debugReset();
-      await ExploreGridCache.instance.restore();
-    });
-  }
-
-  group('opening the app and going straight to Search', () {
-    testWidgets('shows last time\'s videos on the first frame, with their '
-        'pictures from the phone, while the new list comes', (t) async {
-      await lastRun(t);
-      gridIds = [101, 102, 103];
-      holdGrid = Completer<void>();
-
-      await t.pumpWidget(app(const SearchPage()));
-      expect(tile(1), findsOneWidget, reason: 'last time\'s, at once');
-      final img = t.widget<Image>(
-        find.descendant(of: tile(1), matching: find.byType(Image)).first,
-      );
-      final shown = img.image as ResizeImage;
-      expect(shown.imageProvider, isA<FileImage>(),
-          reason: 'the picture kept on the phone, not fetched again');
-
-      // The new list, asked for behind it, replaces it at the top.
-      holdGrid!.complete();
-      await settle(t);
-      expect(tile(101), findsOneWidget);
-      expect(tile(1), findsNothing);
-    });
-
-    testWidgets('somebody else\'s grid is not shown', (t) async {
-      await lastRun(t, userId: '1');
-      holdGrid = Completer<void>();
-      await t.pumpWidget(app(const SearchPage(), userId: '2'));
-      expect(tile(1), findsNothing);
-      holdGrid!.complete();
-      await settle(t);
-    });
-
-    testWidgets('a grid kept days ago is not shown', (t) async {
-      await lastRun(t);
-      await t.runAsync(() async {
-        ExploreGridCache.instance.debugReset();
-        ExploreGridCache.instance.now = () => DateTime.now().add(
-          ExploreGridCache.keptMaxAge + const Duration(hours: 1),
-        );
-        await ExploreGridCache.instance.restore();
-        ExploreGridCache.instance.now = DateTime.now;
-      });
-      holdGrid = Completer<void>();
-      await t.pumpWidget(app(const SearchPage()));
-      expect(tile(1), findsNothing);
-      holdGrid!.complete();
-      await settle(t);
-    });
-
-    testWidgets('signing out deletes it from the phone', (t) async {
-      await lastRun(t);
-      expect(File('${dir.path}/explore_grid.json').existsSync(), isTrue);
-      late BuildContext ctx;
-      await t.pumpWidget(app(Builder(builder: (c) {
-        ctx = c;
-        return const SizedBox();
-      })));
-      AuthProvider().logout(ctx);
-      // Real file work: let it run, then let the test's clock catch up.
-      for (var i = 0; i < 6; i++) {
-        await t.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 50)),
-        );
-        await t.pump();
-      }
-      expect(File('${dir.path}/explore_grid.json').existsSync(), isFalse);
-      expect(Directory('${dir.path}/explore_grid_posters').existsSync(),
-          isFalse);
-    });
-
-    test('the app reads it before the first frame', () {
-      final code = File('lib/main.dart')
-          .readAsLinesSync()
-          .where((l) => !l.trimLeft().startsWith('//'))
-          .join('\n');
-      expect(code, contains('ExploreGridCache.instance.restore()'));
-    });
-  });
-
-  group('the video a tile warms is the one a tap opens', () {
+  group('a video opened from Search chooses its own quality', () {
     late Directory cacheDir;
     final nq = NetworkQualityService.instance;
 
@@ -264,33 +162,35 @@ void main() {
       if (cacheDir.existsSync()) cacheDir.deleteSync(recursive: true);
     });
 
-    testWidgets('even when the connection has changed since the video was '
-        'first given a quality', (t) async {
-      // Seen on a slow link first, the way the app opened in the device log
-      // (3 Mbps), so the video is given the small file.
+    testWidgets('not the one the grid saw when Search opened', (t) async {
+      // For a while the grid chose the quality for every video it showed,
+      // at whatever speed the connection had when Search opened, and the
+      // full-screen player was held to it. Two device logs after that show
+      // the videos opened from Search starving.
+
+      // Search opens on a slow link: the grid takes the small file.
       for (var i = 0; i < 3; i++) {
         nq.recordThroughput(100 * 1024, const Duration(milliseconds: 900));
       }
-      final c = ChallengeModel.fromJson(video(1));
-      final opens = SmartReelsFeed.playbackUrlFor(c);
-      expect(opens, contains('480p'));
-
-      // Then the link got fast (9.5 Mbps by the time Search was opened).
-      for (var i = 0; i < 12; i++) {
-        nq.recordThroughput(8 * 1024 * 1024, const Duration(seconds: 1));
-      }
-      expect(nq.pickVariantUrl(c.videoVariants), isNot(opens),
-          reason: 'without this the test would prove nothing: asked afresh, '
-              'the picker now chooses a different file');
-
       gridIds = [1];
       await t.pumpWidget(app(const SearchPage()));
       await settle(t);
       expect(tile(1), findsOneWidget);
-      expect(VideoCacheService.instance.debugWindow, contains(opens),
-          reason: 'the grid fetches the start of the file a tap will open');
-      expect(VideoCacheService.instance.debugWindow,
-          isNot(contains(nq.pickVariantUrl(c.videoVariants))));
+      final c = ChallengeModel.fromJson(video(1));
+      final gridSaw = nq.pickVariantUrl(c.videoVariants);
+      expect(gridSaw, contains('480p'));
+      expect(VideoCacheService.instance.debugWindow, contains(gridSaw),
+          reason: 'the grid fetched the start of the small file');
+
+      // Then the link gets fast, and the video is tapped.
+      for (var i = 0; i < 12; i++) {
+        nq.recordThroughput(8 * 1024 * 1024, const Duration(seconds: 1));
+      }
+      final fastPick = nq.pickVariantUrl(c.videoVariants);
+      expect(fastPick, isNot(gridSaw),
+          reason: 'without this the test would prove nothing');
+      expect(SmartReelsFeed.playbackUrlFor(c), fastPick,
+          reason: 'the full-screen player picks for the link it has now');
     });
   });
 

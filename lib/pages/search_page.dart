@@ -152,9 +152,7 @@ class _SearchPageState extends State<SearchPage>
     // app opened, go up at once. Only a missing or old list is asked for
     // again, and an old one stays on screen while it is.
     final cache = ExploreGridCache.instance;
-    _exploreChallenges = cache.itemsFor(
-      Provider.of<DataProvider>(context, listen: false).user?.id ?? '',
-    );
+    _exploreChallenges = cache.items;
     debugPrint(
       '[search_page] opened with ${_exploreChallenges.length} videos '
       'already in hand${cache.isStale ? '; fetching a fresh list' : ''}',
@@ -2142,17 +2140,17 @@ class _PreviewableTileState extends State<_PreviewableTile> {
     final cached = _origin;
     if (cached != null) return cached;
     final c = widget.challenge;
-    // The same choice, under the same name, as the full-screen player that
-    // opens when this tile is tapped. This used to ask afresh, so when the
-    // connection had moved since the video was last seen — 3 Mbps when the
-    // app opened, 9.5 by the time Search was, in one device log — the grid
-    // fetched the start of one quality and the tap opened another, with
-    // none of it on the phone. That log has taps from Search going straight
-    // to the internet while the grid had been fetching all along.
-    final picked = NetworkQualityService.instance.stickyVariantUrl(
-      'challenge:${c.id}',
-      c.videoVariants,
-    );
+    // Asked afresh, and NOT written down for the full-screen player.
+    //
+    // For a while this used the full-screen player's own remembered choice,
+    // so the grid would fetch the same file a tap opens. But that made the
+    // grid the one choosing — for thirty videos at once, at whatever speed
+    // the connection had the moment Search opened — and every video opened
+    // from Search was then held to that choice. Two device logs after it
+    // went in show the videos after a tap from Search starving: new frames
+    // every 63 to 345 milliseconds instead of every 33. The full-screen
+    // player chooses for itself again.
+    final picked = NetworkQualityService.instance.pickVariantUrl(c.videoVariants);
     final chosen = (picked != null && picked.isNotEmpty) ? picked : c.videoUrl;
     _origin = chosen;
     return chosen;

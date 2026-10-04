@@ -751,21 +751,6 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
         if (seed != null) _items.add(seed);
       }
     });
-    // The video tapped in Search starts NOW, not after the rest of the list.
-    //
-    // It used to wait for the server to send the videos that come after it
-    // before it played at all. The picture was on screen, so it looked like
-    // the video itself was slow to load — and the first time it really was:
-    // a device log shows the tap and that list arriving up to two seconds
-    // apart. Nothing about playing the video you tapped needs that list.
-    final startedEarly = hasSeed && !refresh && _items.isNotEmpty;
-    if (startedEarly) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _prefetchUpcomingVideos();
-        _playCurrent(waitForWarm: true, arriving: true);
-      });
-    }
     await _loadNextPage(refresh: refresh || freshOnOpen);
     if (!mounted) return;
     // Only once it worked: a first load that failed is retried, and the
@@ -803,10 +788,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       // hands the feed one reel and shows it immediately, so there is no
       // earlier moment at which anything could have warmed it.
       _prefetchUpcomingVideos();
-      // A video already started above is only given the ones after it to
-      // fetch. Starting it a second time would jump it back to the start,
-      // or turn a battle back to the side it opened on.
-      if (!startedEarly) _playCurrent(waitForWarm: true, arriving: true);
+      _playCurrent(waitForWarm: true, arriving: true);
     });
     // Cut the cold-connection tax for the media origin: the app can't
     // know the R2/CDN hostname until real video URLs arrive, so the

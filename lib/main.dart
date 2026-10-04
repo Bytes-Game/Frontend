@@ -18,7 +18,6 @@ import 'package:myapp/services/leftover_files.dart';
 import 'package:myapp/services/own_uploads.dart';
 import 'package:myapp/services/link_speed_store.dart';
 import 'package:myapp/services/network_quality_service.dart';
-import 'package:myapp/services/explore_grid_cache.dart';
 import 'package:myapp/services/next_up_store.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
@@ -175,10 +174,6 @@ Future<void> main() async {
   // instead of a loading screen. A small file; read before Home asks.
   // ignore: discarded_futures
   NextUpStore.instance.load();
-  // And Search's grid from last time, so going straight to Search opens on
-  // videos instead of waiting for the server.
-  // ignore: discarded_futures
-  ExploreGridCache.instance.restore();
 
   // Crash + uncaught-error reporting via Sentry. The SDK installs:
   //   * FlutterError.onError handler   — catches framework errors

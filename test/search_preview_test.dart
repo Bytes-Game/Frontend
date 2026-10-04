@@ -33,11 +33,11 @@ void main() {
 
   group('a preview plays what the feed would play', () {
     test('the rendition is picked for the connection', () {
-      // The same pick, under the same name, as the full-screen player, so
-      // the file the grid warms is the file a tap opens. See
-      // search_speed_test.dart for that checked through the real page.
+      // Picked afresh, and not written down for the full-screen player,
+      // which chooses for itself. See search_speed_test.dart for that
+      // checked through the real page.
       final body = codeOf('String _originUrl()');
-      expect(body, contains('stickyVariantUrl('),
+      expect(body, contains('pickVariantUrl('),
           reason: 'without this the grid streams the raw upload — up to '
               'thirteen times the bytes, on the slowest thing in the app');
       expect(body, contains('c.videoVariants'));
