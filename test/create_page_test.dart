@@ -2,10 +2,11 @@
 // camera, the way Instagram and TikTok do it.
 //
 // Nobody is asked "photo or video?". These check that the app works it out
-// from what was picked — a photo goes straight to the details page as a
-// photo, a video goes to the trim screen — through the real pages, with
-// only the phone faked: its gallery (FakeGallery), its camera, its video
-// player and its permission prompt.
+// from what was picked — a photo goes to the photo editor and then the
+// details page as a photo, a video to the video editor — through the real
+// pages, with only the phone faked: its gallery (FakeGallery), its camera,
+// its video player and video tools (FakeVideoEngine), and its permission
+// prompt.
 
 import 'dart:async';
 import 'dart:io';
@@ -17,18 +18,23 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
+import 'package:myapp/config/editor_setup.dart';
 import 'package:myapp/pages/challenge_metadata_page.dart';
 import 'package:myapp/pages/create_page.dart';
+import 'package:myapp/pages/photo_editor_page.dart';
 import 'package:myapp/pages/record_video_page.dart';
+import 'package:myapp/pages/video_editor_page.dart';
 import 'package:myapp/pages/video_trim_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/create_flow.dart';
 import 'package:myapp/services/device_gallery.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/video_edit_engine.dart';
 
 import 'fake_gallery.dart';
+import 'fake_video_engine.dart';
 
-/// A video player that opens anything, for the trim screen's preview.
+/// A video player that opens anything, for the video editor's preview.
 class _Videos extends VideoPlayerPlatform {
   final Map<int, StreamController<VideoEvent>> _events = {};
   int _id = 0;
@@ -135,8 +141,7 @@ class _Camera extends CameraPlatform {
   @override
   Future<XFile> takePicture(int cameraId) async {
     asked.add('photo');
-    final f = File('${dir.path}/camera_shot.jpg')
-      ..writeAsBytesSync(tinyPicture);
+    final f = File('${dir.path}/camera_shot.jpg')..writeAsBytesSync(tinyJpeg);
     return XFile(f.path);
   }
 
@@ -182,10 +187,12 @@ void main() {
     camera.asked.clear();
     gallery = FakeGallery();
     DeviceGallery.instance = gallery;
+    VideoEditEngine.instance = FakeVideoEngine(dir);
   });
 
   tearDown(() {
     DeviceGallery.instance = PhoneGallery();
+    VideoEditEngine.instance = PhoneVideoEditEngine();
     if (dir.existsSync()) dir.deleteSync(recursive: true);
   });
 
@@ -222,6 +229,7 @@ void main() {
         // background, and nothing here is about the upload.
         create: (_) => DataProvider(),
         child: MaterialApp(
+          localizationsDelegates: editorLocalizations,
           home: Scaffold(
             body: Builder(
               builder: (context) => Center(
@@ -238,6 +246,12 @@ void main() {
     await t.tap(find.text('launcher'));
     await frames(t, 8);
     expect(find.byType(CreatePage), findsOneWidget);
+  }
+
+  /// Done in the editor, with nothing changed.
+  Future<void> editorDone(WidgetTester t) async {
+    await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
+    await letFilesMove(t);
   }
 
   Future<void> close(WidgetTester t) async {
@@ -339,7 +353,8 @@ void main() {
   });
 
   group('the app tells a photo from a video by itself', () {
-    testWidgets('a photo goes straight to the details, as a photo', (t) async {
+    testWidgets('a photo goes to the photo editor, then the details, as a '
+        'photo', (t) async {
       gallery
         ..addVideo(dir, 'v1', const Duration(seconds: 9))
         ..addPhoto(dir, 'p1');
@@ -347,29 +362,53 @@ void main() {
       await t.tap(find.byKey(const ValueKey('create_item_p1')));
       await frames(t, 2);
       await t.tap(find.byKey(const ValueKey('create_next')));
-      await frames(t, 8);
+      await letFilesMove(t);
       expect(gallery.filesAsked, ['p1']);
+      final editor = t.widget<PhotoEditorPage>(find.byType(PhotoEditorPage));
+      expect(editor.sourcePath, gallery.files['p1']!.path);
+      expect(find.byType(VideoEditorPage), findsNothing);
+      expect(find.byType(ChallengeMetadataPage), findsNothing);
+
+      await editorDone(t);
       final details = t.widget<ChallengeMetadataPage>(
         find.byType(ChallengeMetadataPage),
       );
       expect(details.photo, isTrue);
-      expect(details.processedSourcePath, gallery.files['p1']!.path);
-      expect(find.byType(VideoTrimPage), findsNothing);
+      expect(
+        details.processedSourcePath,
+        gallery.files['p1']!.path,
+        reason: 'nothing changed: the very same file',
+      );
       expect(find.text('New photo challenge'), findsOneWidget);
       await close(t);
     });
 
-    testWidgets('a video goes to the trim screen', (t) async {
+    testWidgets('a video goes to the video editor, then the details, as a '
+        'video', (t) async {
       gallery
         ..addVideo(dir, 'v1', const Duration(seconds: 9))
         ..addPhoto(dir, 'p1');
       await openCreate(t);
       await t.tap(find.byKey(const ValueKey('create_next')));
-      await frames(t, 8);
+      await letFilesMove(t);
       expect(gallery.filesAsked, ['v1']);
-      final trim = t.widget<VideoTrimPage>(find.byType(VideoTrimPage));
-      expect(trim.sourcePath, gallery.files['v1']!.path);
+      final editor = t.widget<VideoEditorPage>(find.byType(VideoEditorPage));
+      expect(editor.sourcePath, gallery.files['v1']!.path);
+      expect(
+        find.byType(VideoTrimPage),
+        findsNothing,
+        reason:
+            'the old trim screen is only for a video the editor '
+            'cannot open',
+      );
       expect(find.byType(ChallengeMetadataPage), findsNothing);
+
+      await editorDone(t);
+      final details = t.widget<ChallengeMetadataPage>(
+        find.byType(ChallengeMetadataPage),
+      );
+      expect(details.photo, isFalse);
+      expect(details.processedSourcePath, gallery.files['v1']!.path);
       await close(t);
     });
 
@@ -383,16 +422,21 @@ void main() {
       await close(t);
     });
 
-    testWidgets('back from the details lands on the grid, still open', (
-      t,
-    ) async {
+    testWidgets('back from the details lands in the editor; back again '
+        'lands on the grid, still open', (t) async {
       gallery.addPhoto(dir, 'p1');
       await openCreate(t);
       await t.tap(find.byKey(const ValueKey('create_next')));
-      await frames(t, 8);
+      await letFilesMove(t);
+      await editorDone(t);
       expect(find.byType(ChallengeMetadataPage), findsOneWidget);
       await t.pageBack();
-      await frames(t, 8);
+      await letFilesMove(t);
+      expect(find.byType(ChallengeMetadataPage), findsNothing);
+      expect(find.byType(PhotoEditorPage), findsOneWidget);
+      await t.tap(find.byTooltip('Cancel'));
+      await letFilesMove(t);
+      expect(find.byType(PhotoEditorPage), findsNothing);
       expect(find.byType(CreatePage), findsOneWidget);
       expect(find.byKey(const ValueKey('create_preview_p1')), findsOneWidget);
       await close(t);
@@ -413,8 +457,10 @@ void main() {
 
       gallery.phonePick = PickedMedia(gallery.files['p1']!, isVideo: false);
       await t.tap(find.byKey(const ValueKey('create_phone_picker')));
-      await frames(t, 8);
+      await letFilesMove(t);
       expect(gallery.phonePickerOpened, 1);
+      expect(find.byType(PhotoEditorPage), findsOneWidget);
+      await editorDone(t);
       final details = t.widget<ChallengeMetadataPage>(
         find.byType(ChallengeMetadataPage),
       );
@@ -422,17 +468,17 @@ void main() {
       await close(t);
     });
 
-    testWidgets('a video from the phone\'s picker goes to the trim screen', (
-      t,
-    ) async {
+    testWidgets('a video from the phone\'s picker goes to the video '
+        'editor', (t) async {
       gallery
         ..access = GalleryAccess.denied
         ..addVideo(dir, 'v1', const Duration(seconds: 5));
       gallery.phonePick = PickedMedia(gallery.files['v1']!, isVideo: true);
       await openCreate(t);
       await t.tap(find.byKey(const ValueKey('create_phone_picker')));
-      await frames(t, 8);
-      expect(find.byType(VideoTrimPage), findsOneWidget);
+      await letFilesMove(t);
+      final editor = t.widget<VideoEditorPage>(find.byType(VideoEditorPage));
+      expect(editor.sourcePath, gallery.files['v1']!.path);
       await close(t);
     });
 
@@ -476,7 +522,7 @@ void main() {
 
   group('the camera', () {
     testWidgets('opens with Photo and Video; a photo taken goes to the '
-        'details as a photo', (t) async {
+        'photo editor, then the details as a photo', (t) async {
       allowCamera(t);
       await openCreate(t);
       await t.tap(find.byKey(const ValueKey('create_camera')));
@@ -491,6 +537,8 @@ void main() {
       await t.tap(find.byKey(const ValueKey('camera_shutter')));
       await letFilesMove(t);
       expect(camera.asked, ['photo']);
+      expect(find.byType(PhotoEditorPage), findsOneWidget);
+      await editorDone(t);
       final details = t.widget<ChallengeMetadataPage>(
         find.byType(ChallengeMetadataPage),
       );
@@ -501,7 +549,7 @@ void main() {
     });
 
     testWidgets('in Video it records, as before, and the clip goes to the '
-        'trim screen', (t) async {
+        'video editor', (t) async {
       allowCamera(t);
       await openCreate(t);
       await t.tap(find.byKey(const ValueKey('create_camera')));
@@ -514,8 +562,9 @@ void main() {
       await t.tap(find.byKey(const ValueKey('camera_shutter')));
       await letFilesMove(t);
       expect(camera.asked, ['record', 'stop']);
-      final trim = t.widget<VideoTrimPage>(find.byType(VideoTrimPage));
-      expect(trim.sourcePath, endsWith('.mp4'));
+      final editor = t.widget<VideoEditorPage>(find.byType(VideoEditorPage));
+      expect(editor.sourcePath, endsWith('.mp4'));
+      expect(find.byType(VideoTrimPage), findsNothing);
       await close(t);
     });
 

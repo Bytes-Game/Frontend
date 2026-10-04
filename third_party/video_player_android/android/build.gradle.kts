@@ -56,7 +56,11 @@ android {
     }
 
     dependencies {
-        val exoplayerVersion = "1.9.2"
+        // Kept the same as the video editor's (pro_video_editor): it brings
+        // in media3-exoplayer 1.10.1, which would otherwise replace the
+        // player's own 1.9.2 while the HLS part stayed on 1.9.2. The parts
+        // of media3 are made to be used at one version.
+        val exoplayerVersion = "1.10.1"
         implementation("androidx.media3:media3-exoplayer:${exoplayerVersion}")
         implementation("androidx.media3:media3-exoplayer-hls:${exoplayerVersion}")
         implementation("androidx.media3:media3-exoplayer-dash:${exoplayerVersion}")

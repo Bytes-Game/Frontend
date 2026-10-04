@@ -31,6 +31,7 @@ import 'package:myapp/services/call_service.dart';
 import 'package:myapp/services/push_service.dart';
 import 'package:myapp/services/webrtc_call_media.dart';
 import 'package:myapp/widgets/call_host.dart';
+import 'package:myapp/config/editor_setup.dart';
 import 'package:myapp/pages/onboarding_interests_page.dart';
 import 'package:myapp/screens/login_screen.dart';
 import 'package:myapp/screens/main_shell.dart';
@@ -317,6 +318,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
             themeMode: theme.themeMode,
             navigatorKey: MyApp.navigatorKey,
             navigatorObservers: [MyApp.routeObserver],
+            // The photo and video editors' words. Without them the editors'
+            // top bar, and the "please wait" box they open up here while
+            // saving, refuse to draw. See editor_setup.
+            localizationsDelegates: editorLocalizations,
             // UploadStatusOverlay is mounted INSIDE the WebSocket wrapper
             // so the floating "Posting…" banner sits above every routed
             // page in the authenticated app. It's outside the Navigator's

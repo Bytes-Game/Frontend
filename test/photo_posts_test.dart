@@ -1,9 +1,10 @@
 // Photo challenges: "who looks better", "which is the better meme".
 //
 // A challenge can be a photo now, answered with a photo. These go through
-// the real screens — the feed, the + button's page, the posting page, the
-// battle page, Search — with only the server, the phone's video player,
-// camera and gallery faked, and check two things everywhere a post appears:
+// the real screens — the feed, the + button's page, the editors, the
+// posting page, the battle page, Search — with only the server, the phone's
+// video player, video tools, camera and gallery faked, and check two things
+// everywhere a post appears:
 //
 //   * the photo is SHOWN — the picture is on screen;
 //   * nothing treats it as a video — no player is opened for it, so no
@@ -16,6 +17,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -25,10 +27,13 @@ import 'package:video_player/video_player.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
+import 'package:myapp/config/editor_setup.dart';
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/create_page.dart';
+import 'package:myapp/pages/photo_editor_page.dart';
 import 'package:myapp/pages/search_page.dart';
+import 'package:myapp/pages/video_editor_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/chat_media.dart';
@@ -38,11 +43,13 @@ import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/upload_job_manager.dart';
+import 'package:myapp/services/video_edit_engine.dart';
 import 'package:myapp/widgets/match_warning.dart';
 import 'package:myapp/widgets/photo_face.dart';
 import 'package:myapp/widgets/smart_reels_feed.dart';
 
 import 'fake_gallery.dart';
+import 'fake_video_engine.dart';
 
 /// A phone video player that records what it was asked to open.
 class _Platform extends VideoPlayerPlatform {
@@ -107,6 +114,37 @@ class _Photos implements PhotoSource {
   Future<File?> pick({required bool camera}) async {
     askedCamera = camera;
     return next;
+  }
+}
+
+/// The phone's file picker: hands back [next].
+class _Picker extends FilePicker {
+  String? next;
+
+  @override
+  Future<FilePickerResult?> pickFiles({
+    String? dialogTitle,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+    Function(FilePickerStatus)? onFileLoading,
+    bool allowCompression = true,
+    int compressionQuality = 30,
+    bool allowMultiple = false,
+    bool withData = false,
+    bool withReadStream = false,
+    bool lockParentWindow = false,
+    bool readSequential = false,
+  }) async {
+    final path = next;
+    if (path == null) return null;
+    return FilePickerResult([
+      PlatformFile(
+        path: path,
+        name: path.split('/').last,
+        size: File(path).lengthSync(),
+      ),
+    ]);
   }
 }
 
@@ -326,6 +364,7 @@ Future<void> openFeed(WidgetTester t) async {
     ChangeNotifierProvider<DataProvider>.value(
       value: signedIn(),
       child: const MaterialApp(
+        localizationsDelegates: editorLocalizations,
         home: Scaffold(body: SmartReelsFeed(userId: '1')),
       ),
     ),
@@ -353,12 +392,13 @@ void main() {
     photos = _Photos();
     ChatMedia.instance.photos = photos;
     dir = Directory.systemTemp.createTempSync('photo_posts');
-    final f = File('${dir.path}/picked.jpg')
-      ..writeAsBytesSync(List.filled(4096, 7));
+    final f = File('${dir.path}/picked.jpg')..writeAsBytesSync(tinyJpeg);
     photos.next = f;
+    VideoEditEngine.instance = FakeVideoEngine(dir);
   });
 
   tearDown(() {
+    VideoEditEngine.instance = PhoneVideoEditEngine();
     ApiService.useClient(http.Client());
     ChatMedia.instance.debugReset();
     if (dir.existsSync()) dir.deleteSync(recursive: true);
@@ -474,8 +514,9 @@ void main() {
   });
 
   group('posting a photo challenge', () {
-    /// The + button's page, with a photo on the phone, picked and Next
-    /// pressed. Nobody said it is a photo: the page knows.
+    /// The + button's page, with a photo on the phone, picked, Next
+    /// pressed, and Done in the photo editor. Nobody said it is a photo:
+    /// the page knows.
     Future<void> startFromCreatePage(WidgetTester t) async {
       t.view.physicalSize = const Size(1000, 2400);
       t.view.devicePixelRatio = 1;
@@ -489,6 +530,7 @@ void main() {
         ChangeNotifierProvider<DataProvider>.value(
           value: signedIn(),
           child: MaterialApp(
+            localizationsDelegates: editorLocalizations,
             home: Scaffold(
               body: Builder(
                 builder: (context) => Center(
@@ -507,7 +549,10 @@ void main() {
       await t.tap(find.byKey(const ValueKey('create_item_p1')));
       await frames(t, 2);
       await t.tap(find.byKey(const ValueKey('create_next')));
-      await frames(t, 8);
+      await letItUpload(t);
+      expect(find.byType(PhotoEditorPage), findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
+      await letItUpload(t);
     }
 
     testWidgets('choose a photo, fill in the challenge, Post: it goes up as '
@@ -598,8 +643,13 @@ void main() {
       expect(find.text('Record'), findsNothing, reason: 'nothing to choose');
       expect(find.byKey(const ValueKey('post_photo_camera')), findsOneWidget);
       await t.tap(find.byKey(const ValueKey('post_photo_camera')));
-      await frames(t, 8);
+      await letItUpload(t);
       expect(photos.askedCamera, isTrue);
+      // The photo editor first, as for a new challenge.
+      final editor = t.widget<PhotoEditorPage>(find.byType(PhotoEditorPage));
+      expect(editor.sourcePath, photos.next!.path);
+      await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
+      await letItUpload(t);
       // The last check, worded for a photo.
       expect(find.text('Does your photo answer this?'), findsOneWidget);
       await t.tap(find.byKey(const ValueKey('answer_check_post')));
@@ -611,6 +661,36 @@ void main() {
       expect(answers.single['mediaType'], 'photo');
       expect(answers.single['videoUrl'], 'https://cdn/u/1/up1/photo.jpg');
       expect(platform.opened, isEmpty);
+      expect(find.byType(PhotoEditorPage), findsNothing, reason: 'it closed');
+      await close(t);
+    });
+
+    testWidgets('Upload on a video challenge: the video editor, then the '
+        'last check, then the answer goes, as a video', (t) async {
+      serving = videoShort();
+      final video = File('${dir.path}/answer.mp4')
+        ..writeAsBytesSync(List.filled(2048, 1));
+      FilePicker.platform = _Picker()..next = video.path;
+      await openFeed(t);
+      await t.tap(find.text('Accept challenge'));
+      await frames(t, 6);
+      await t.tap(find.text('Upload'));
+      await letItUpload(t);
+      final editor = t.widget<VideoEditorPage>(find.byType(VideoEditorPage));
+      expect(editor.sourcePath, video.path);
+
+      await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
+      await letItUpload(t);
+      expect(find.text('Does your video answer this?'), findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('answer_check_post')));
+      await letItUpload(t);
+      final job = UploadJobManager.instance.activeJobs.value.last;
+      expect(job.sourcePath, video.path, reason: 'nothing changed: the same');
+      expect(job.isPhoto, isFalse);
+      expect(find.byType(VideoEditorPage), findsNothing, reason: 'it closed');
+      for (final j in [...UploadJobManager.instance.activeJobs.value]) {
+        UploadJobManager.instance.dismiss(j.id);
+      }
       await close(t);
     });
   });

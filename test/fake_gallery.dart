@@ -13,6 +13,17 @@ final Uint8List tinyPicture = base64.decode(
   'iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAEElEQVR4nGP4z8AARww4OQD1MQv1NXv7ggAAAABJRU5ErkJggg==',
 );
 
+/// A 16 x 12 blue photo, as a real JPEG — what the phone's gallery hands
+/// over. The photo editor hands back these very bytes when nothing was
+/// changed, which it only does for a photo that is a JPEG already.
+final Uint8List tinyJpeg = base64.decode(
+  '/9j/4AAQSkZJRgABAgAAAQABAAD//gAQTGF2YzYwLjMxLjEwMgD/2wBDAAgGBgcGBwgICAgI'
+  'CAkJCQoKCgkJCQkKCgoKCgoMDAwKCgoKCgoKDAwMDA0ODQ0NDA0ODg8PDxISEREVFRUZGR//'
+  'xABLAAEBAAAAAAAAAAAAAAAAAAAABQEBAAAAAAAAAAAAAAAAAAAABhABAAAAAAAAAAAAAAAA'
+  'AAAAABEBAAAAAAAAAAAAAAAAAAAAAP/AABEIAAwAEAMBIgACEQADEQD/2gAMAwEAAhEDEQA/'
+  'AIIB2Ov/2Q==',
+);
+
 class FakeGallery implements DeviceGallery {
   /// What [requestAccess] answers once [answers] has run out.
   GalleryAccess access = GalleryAccess.all;
@@ -81,7 +92,7 @@ class FakeGallery implements DeviceGallery {
   /// A photo and a video, each with a real file in [dir].
   void addPhoto(Directory dir, String id) {
     items.add(GalleryItem(id: id, isVideo: false));
-    files[id] = File('${dir.path}/$id.jpg')..writeAsBytesSync(tinyPicture);
+    files[id] = File('${dir.path}/$id.jpg')..writeAsBytesSync(tinyJpeg);
   }
 
   void addVideo(Directory dir, String id, Duration length) {

@@ -9,7 +9,8 @@ import 'package:provider/provider.dart';
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/pages/record_video_page.dart';
 import 'package:myapp/pages/submit_response_upload_page.dart';
-import 'package:myapp/pages/video_trim_page.dart';
+import 'package:myapp/pages/photo_editor_page.dart';
+import 'package:myapp/pages/video_editor_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/widgets/battle_scoreboard.dart';
@@ -490,28 +491,20 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     );
     final file = await choosePhoto(context, title: 'Answer with a photo');
     if (!mounted || file == null || _challenge == null) return;
-    if (!await confirmAnswerMatches(context, _question(_challenge!),
-            photo: true) ||
-        !mounted) {
-      return;
-    }
+    // The photo editor first, as for a new challenge.
     await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (_) => SubmitResponseUploadPage(
-          processedSourcePath: file.path,
-          challengeId: _challenge!.id,
-          photo: true,
+        builder: (_) => PhotoEditorPage(
+          sourcePath: file.path,
+          onDone: (from, edited) => _sendAnswer(from, edited, photo: true),
         ),
       ),
     );
   }
 
-  /// Push the trim screen (which pops with the trimmed path), then
-  /// dispatch the response upload to [UploadJobManager] via the
-  /// [SubmitResponseUploadPage] hand-off screen. The hand-off pops
-  /// immediately with `true`; the actual upload runs in the background
-  /// and we rely on [_uploadSub] (subscribed in initState) to refresh
-  /// the detail page once the new response is live in the backend.
+  /// The video editor (with its trim bar), then the answer goes. The
+  /// hand-off page dispatches the upload and pops at once; [_uploadSub]
+  /// (subscribed in initState) refreshes this page once the answer is live.
   Future<void> _continueWithSource(String sourcePath) async {
     if (_challenge == null) return;
     EventTracker.instance.track(
@@ -519,34 +512,41 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
       contentId: _challenge!.id,
       contentType: 'challenge_response',
     );
-
-    final trimmed = await Navigator.of(context).push<String>(
-      MaterialPageRoute(
-        builder: (_) => VideoTrimPage(
-          sourcePath: sourcePath,
-          popOnComplete: true,
-        ),
-      ),
-    );
-    if (!mounted || trimmed == null || trimmed.isEmpty) return;
-
-    // The last word before it goes: does this video answer the challenge?
-    // One that doesn't costs its owner rating points, so they are asked
-    // now rather than told afterwards.
-    final question = _challenge == null ? '' : _question(_challenge!);
-    if (!await confirmAnswerMatches(context, question) || !mounted) return;
-
-    // The hand-off page dispatches the job and pops instantly with
-    // `true`. We don't await the upload here — onCompleted listener
-    // refreshes the detail page once the response is actually live.
     await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (_) => SubmitResponseUploadPage(
-          processedSourcePath: trimmed,
-          challengeId: _challenge!.id,
+        builder: (_) => VideoEditorPage(
+          sourcePath: sourcePath,
+          onDone: (from, edited) => _sendAnswer(from, edited, photo: false),
         ),
       ),
     );
+  }
+
+  /// The last word before an answer goes — does it answer the challenge?
+  /// One that doesn't costs its owner rating points, so they are asked now
+  /// rather than told afterwards — and then it goes. True when it went.
+  Future<bool> _sendAnswer(
+    BuildContext from,
+    String path, {
+    required bool photo,
+  }) async {
+    final challenge = _challenge;
+    if (challenge == null) return false;
+    if (!await confirmAnswerMatches(from, _question(challenge), photo: photo) ||
+        !from.mounted) {
+      return false;
+    }
+    // The hand-off page dispatches the job and pops instantly with `true`.
+    await Navigator.of(from).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => SubmitResponseUploadPage(
+          processedSourcePath: path,
+          challengeId: challenge.id,
+          photo: photo,
+        ),
+      ),
+    );
+    return true;
   }
 
   void _toast(String msg) {
