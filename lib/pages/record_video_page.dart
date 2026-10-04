@@ -26,14 +26,28 @@ Future<void> adoptCameraRecording(String cameraPath, String dest) async {
   }
 }
 
-/// Full-screen camera with record button. Returns the recorded video's
-/// local file path on Navigator.pop, or null on cancel.
+/// Full-screen camera. Returns the local path of what was made on
+/// Navigator.pop — a video (.mp4) or, when [allowPhoto] and the person
+/// switched to Photo, a photo (.jpg) — or null on cancel. [isPhotoPath]
+/// tells the two apart, so nobody has to say which it is.
 ///
 /// We cap recording at [VideoProcessorService.maxReelDuration]; if the
 /// user holds the button longer the recorder auto-stops. This way the
 /// trim screen never has to deal with a 5-minute file.
 class RecordVideoPage extends StatefulWidget {
-  const RecordVideoPage({super.key});
+  /// Offer Photo beside Video, under the shutter, the way Instagram's and
+  /// TikTok's cameras do. Off where only a video will do: answering a
+  /// video challenge.
+  final bool allowPhoto;
+
+  const RecordVideoPage({super.key, this.allowPhoto = false});
+
+  /// Whether a path this page returned is a photo rather than a video.
+  static bool isPhotoPath(String path) {
+    final p = path.toLowerCase();
+    return p.endsWith('.jpg') || p.endsWith('.jpeg') || p.endsWith('.png') ||
+        p.endsWith('.heic') || p.endsWith('.webp');
+  }
 
   @override
   State<RecordVideoPage> createState() => _RecordVideoPageState();
@@ -54,6 +68,11 @@ class _RecordVideoPageState extends State<RecordVideoPage>
   Duration _elapsed = Duration.zero;
   FlashMode _flash = FlashMode.off;
   String? _initError;
+
+  /// Photo rather than video: the shutter takes a picture. Only when the
+  /// page offers it.
+  bool _photoMode = false;
+  bool _taking = false;
 
   @override
   void initState() {
@@ -203,6 +222,32 @@ class _RecordVideoPageState extends State<RecordVideoPage>
     }
   }
 
+  /// Photo mode: one picture, kept under our own name like a recording.
+  Future<void> _takePhoto() async {
+    final c = _controller;
+    if (c == null || _taking) return;
+    setState(() => _taking = true);
+    try {
+      final shot = await c.takePicture();
+      final tmp = await getTemporaryDirectory();
+      final dest = File(
+        '${tmp.path}/devf_photo_${DateTime.now().millisecondsSinceEpoch}.jpg',
+      );
+      await adoptCameraRecording(shot.path, dest.path);
+      EventTracker.instance.track(
+        eventType: 'photo_taken',
+        contentId: 'pending',
+        contentType: 'challenge',
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(dest.path);
+    } catch (e) {
+      if (!mounted) return;
+      _toast('Could not take the photo: $e');
+      setState(() => _taking = false);
+    }
+  }
+
   void _toast(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating),
@@ -272,22 +317,23 @@ class _RecordVideoPageState extends State<RecordVideoPage>
                     : () => Navigator.of(context).pop(),
               ),
               const Spacer(),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  _formatElapsed(_elapsed, maxSec),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                    fontFeatures: [FontFeature.tabularFigures()],
+              if (!_photoMode)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    _formatElapsed(_elapsed, maxSec),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
                   ),
                 ),
-              ),
               const Spacer(),
               IconButton(
                 icon: Icon(_flashIcon(), color: Colors.white),
@@ -298,64 +344,109 @@ class _RecordVideoPageState extends State<RecordVideoPage>
         ),
 
         // Progress bar fills as we approach the duration cap.
-        Positioned(
-          top: 56,
-          left: 16,
-          right: 16,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(2),
-            child: LinearProgressIndicator(
-              value: fraction,
-              minHeight: 3,
-              backgroundColor: Colors.white12,
+        if (!_photoMode)
+          Positioned(
+            top: 56,
+            left: 16,
+            right: 16,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(2),
+              child: LinearProgressIndicator(
+                value: fraction,
+                minHeight: 3,
+                backgroundColor: Colors.white12,
+              ),
             ),
           ),
-        ),
 
         // Bottom controls.
         Positioned(
           bottom: 24,
           left: 0,
           right: 0,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              const SizedBox(width: 56),
-              GestureDetector(
-                onTap: _recording ? _stopRecording : _startRecording,
-                child: Container(
-                  width: 76,
-                  height: 76,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 4),
-                  ),
-                  child: Center(
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      width: _recording ? 28 : 60,
-                      height: _recording ? 28 : 60,
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  const SizedBox(width: 56),
+                  GestureDetector(
+                    key: const ValueKey('camera_shutter'),
+                    onTap: _photoMode
+                        ? _takePhoto
+                        : (_recording ? _stopRecording : _startRecording),
+                    child: Container(
+                      width: 76,
+                      height: 76,
                       decoration: BoxDecoration(
-                        color: Colors.red,
-                        borderRadius:
-                            BorderRadius.circular(_recording ? 6 : 30),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 4),
+                      ),
+                      child: Center(
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          width: _recording ? 28 : 60,
+                          height: _recording ? 28 : 60,
+                          decoration: BoxDecoration(
+                            // White for a photo, red for a recording: which
+                            // one the button makes, at a glance.
+                            color: _photoMode ? Colors.white : Colors.red,
+                            borderRadius:
+                                BorderRadius.circular(_recording ? 6 : 30),
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                ),
+                  IconButton(
+                    icon: const Icon(
+                      Icons.flip_camera_ios_outlined,
+                      color: Colors.white,
+                      size: 28,
+                    ),
+                    onPressed: _recording ? null : _flipCamera,
+                  ),
+                ],
               ),
-              IconButton(
-                icon: const Icon(
-                  Icons.flip_camera_ios_outlined,
-                  color: Colors.white,
-                  size: 28,
+              if (widget.allowPhoto && !_recording) ...[
+                const SizedBox(height: 14),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _modeLabel('PHOTO', photo: true),
+                    const SizedBox(width: 22),
+                    _modeLabel('VIDEO', photo: false),
+                  ],
                 ),
-                onPressed: _recording ? null : _flipCamera,
-              ),
+              ],
             ],
           ),
         ),
       ],
+    );
+  }
+
+  /// PHOTO or VIDEO under the shutter. The one in use is bright.
+  Widget _modeLabel(String label, {required bool photo}) {
+    final on = _photoMode == photo;
+    return GestureDetector(
+      key: ValueKey('camera_mode_${photo ? 'photo' : 'video'}'),
+      behavior: HitTestBehavior.opaque,
+      onTap: () => setState(() => _photoMode = photo),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: on ? Colors.white : Colors.white54,
+            fontSize: 13,
+            fontWeight: on ? FontWeight.w700 : FontWeight.w500,
+            letterSpacing: 1.1,
+            shadows: const [Shadow(blurRadius: 6)],
+          ),
+        ),
+      ),
     );
   }
 

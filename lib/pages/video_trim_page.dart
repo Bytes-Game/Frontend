@@ -273,10 +273,10 @@ class _VideoTrimPageState extends State<VideoTrimPage>
 
       if (!mounted) return;
       if (widget.popOnComplete) {
-        // Submit-response flow: hand the trimmed path back to the
-        // caller (challenge_detail_page) and let it decide what to
-        // push next. We pop instead of pushReplacement because the
-        // caller doesn't have a chooser screen sitting behind us.
+        // Hand the trimmed path back to whoever opened this — answering
+        // a challenge, or the create page — and let it decide what comes
+        // next. Back from the details then lands on the create page's
+        // grid, with the same video still picked, rather than here.
         Navigator.of(context).pop(dest.path);
         return;
       }

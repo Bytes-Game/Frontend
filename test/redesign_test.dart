@@ -16,18 +16,22 @@ import 'package:visibility_detector/visibility_detector.dart';
 
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/challenge_metadata_page.dart';
+import 'package:myapp/pages/create_page.dart';
 import 'package:myapp/pages/edit_profile_page.dart';
 import 'package:myapp/pages/notifications_page.dart';
 import 'package:myapp/pages/profile_page.dart';
 import 'package:myapp/pages/search_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/device_gallery.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/create_burst.dart';
 import 'package:myapp/widgets/user_tile.dart';
+
+import 'fake_gallery.dart';
 
 UserModel person(String id, String name, {String bio = ''}) => UserModel(
   id: id,
@@ -580,75 +584,48 @@ void main() {
       );
     });
 
-    testWidgets('a profile\'s Battle button opens it, rising out of the '
-        'button, instead of a new page', (t) async {
+    testWidgets('a profile\'s Battle button opens the same create page as '
+        'the +: the phone\'s photos and videos, and the camera', (t) async {
+      DeviceGallery.instance = FakeGallery()..access = GalleryAccess.denied;
+      addTearDown(() => DeviceGallery.instance = PhoneGallery());
       phone(t, const Size(390, 900));
       await t.pumpWidget(
         app(ProfilePage(user: person('5', 'maya'), isEmbedded: false)),
       );
       await settle(t);
-      final battle = t.getCenter(find.byTooltip('Challenge to a battle'));
 
       await t.tap(find.byTooltip('Challenge to a battle'));
       await settle(t);
 
-      expect(find.text('Start a battle'), findsOneWidget);
-      expect(find.text('Record'), findsOneWidget);
-      expect(find.text('Upload'), findsOneWidget);
-      bothOnScreen(t, 390);
-      // The × that closes it sits exactly where the Battle button is.
-      final close = t.getCenter(find.byIcon(Icons.add_rounded).last);
-      expect((close - battle).distance, lessThan(1));
-      // Still on the profile underneath: no page was pushed.
-      expect(find.byType(ProfilePage), findsOneWidget);
-      expect(find.byType(ChallengeMetadataPage), findsNothing);
-
-      await t.tapAt(close);
-      await settle(t);
+      expect(find.byType(CreatePage), findsOneWidget);
+      expect(find.byKey(const ValueKey('create_camera')), findsOneWidget);
+      // No menu of choices any more.
       expect(find.text('Start a battle'), findsNothing);
+      expect(find.text('Upload'), findsNothing);
+
+      await t.tap(find.byKey(const ValueKey('create_close')));
+      await settle(t);
+      expect(find.byType(CreatePage), findsNothing);
       expect(find.byTooltip('Challenge to a battle'), findsOneWidget);
     });
 
-    test('Battle\'s choices go to the same record and upload steps as the '
-        '+, and the old chooser page is gone', () {
-      final code = File('lib/pages/profile_page.dart')
+    test('the + button and Battle both open the create page, and the old '
+        'chooser page is gone', () {
+      String code(String path) => File(path)
           .readAsLinesSync()
           .where((l) => !l.trimLeft().startsWith('//'))
           .join('\n');
       expect(
-        code,
-        contains("CreateFlow.record(context, from: 'profile_battle')"),
+        code('lib/pages/profile_page.dart'),
+        contains("CreateFlow.open(context, from: 'profile_battle')"),
       );
+      final shell = code('lib/screens/main_shell.dart');
       expect(
-        code,
-        contains("CreateFlow.upload(context, from: 'profile_battle')"),
+        shell,
+        contains("CreateFlow.open(context, from: 'create_button')"),
       );
+      expect(shell, isNot(contains('CreateBurst')));
       expect(File('lib/pages/create_challenge_page.dart').existsSync(), false);
-    });
-
-    test('the + button opens it on a tap and on a hold, and follows the '
-        'finger', () {
-      final code = File('lib/screens/main_shell.dart')
-          .readAsLinesSync()
-          .where((l) => !l.trimLeft().startsWith('//'))
-          .join('\n');
-      expect(code, contains('_openBurst(fromHold: false)'));
-      expect(code, contains('_openBurst(fromHold: true)'));
-      expect(code, contains('_burst?.pointerMoved(d.globalPosition)'));
-      expect(code, contains('_burst?.pointerReleased(d.globalPosition)'));
-      expect(
-        code,
-        contains("CreateFlow.record(context, from: 'create_burst')"),
-      );
-      expect(
-        code,
-        contains("CreateFlow.upload(context, from: 'create_burst')"),
-      );
-      expect(
-        code,
-        isNot(contains('const CreateChallengePage()')),
-        reason: 'the + still opens the old chooser page',
-      );
     });
   });
 

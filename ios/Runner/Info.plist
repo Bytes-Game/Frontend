@@ -3,11 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>NSCameraUsageDescription</key>
-	<string>The camera records your challenges, takes photos for your chats, and shows you on video calls.</string>
+	<string>The camera takes the photos and videos for your challenges, takes photos for your chats, and shows you on video calls.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>The microphone records the sound for your challenges and voice messages, and carries your voice on calls.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Choose photos to send in your chats.</string>
+	<string>Shows your photos and videos so you can post one as a challenge, and choose photos to send in your chats.</string>
+	<key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
