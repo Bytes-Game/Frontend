@@ -13,7 +13,12 @@
     <!-- Notifications outside the app (new messages, missed calls).
          Android 13 and newer ask the person for this. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- The create page shows the phone's own photos and videos (Android
+         13 and newer ask for each kind; 14 and newer let people share
+         only some, which READ_MEDIA_VISUAL_USER_SELECTED allows). -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
     <application

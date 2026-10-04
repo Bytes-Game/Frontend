@@ -1,9 +1,9 @@
 // The video behind the + button starts again.
 //
-// Pressing + paused the reel on Home so the Create pop-out could sit on top,
-// and nothing ever started it again: not when the pop-out was closed, and
-// not when the person came back from recording or uploading. They had to
-// scroll away and back.
+// Pressing + paused the reel on Home so the create page could sit on top,
+// and nothing ever started it again: not when it was closed, and not when
+// the person came back from recording or uploading. They had to scroll away
+// and back.
 //
 // These go through the real app shell and the real + button, with only the
 // server, the video player and the permission prompt faked. Each checks the
@@ -22,9 +22,11 @@ import 'package:provider/provider.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
 import 'package:myapp/models/user_model.dart';
+import 'package:myapp/pages/create_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/screens/main_shell.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/device_gallery.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/video_cache_service.dart';
@@ -33,6 +35,7 @@ import 'package:myapp/widgets/smart_reels_feed.dart';
 import 'package:myapp/services/call_service.dart';
 import 'package:myapp/widgets/call_host.dart';
 
+import 'fake_gallery.dart';
 import 'support/call_fakes.dart';
 
 /// A platform that knows which players are playing.
@@ -122,6 +125,7 @@ void main() {
 
   setUp(() {
     SmartReelsFeed.debugForgetAppOpen();
+    DeviceGallery.instance = FakeGallery();
     cacheDir = Directory.systemTemp.createTempSync('create_resume');
     VideoCacheService.instance.debugSetDirectory(cacheDir);
     ApiService.useClient(
@@ -143,6 +147,7 @@ void main() {
   });
 
   tearDown(() {
+    DeviceGallery.instance = PhoneGallery();
     ApiService.useClient(http.Client());
     VideoCacheService.instance.warm(const []);
     ReelDiagnostics.instance.debugReset();
@@ -213,24 +218,29 @@ void main() {
   Future<void> pressPlus(WidgetTester t) async {
     await t.tap(find.byIcon(Icons.add_rounded));
     await frames(t, 6);
-    expect(find.text('Record'), findsOneWidget, reason: 'the pop-out did not open');
-    expect(platform.sounding, isEmpty, reason: 'the reel plays on under the pop-out');
+    expect(find.byType(CreatePage), findsOneWidget,
+        reason: 'the create page did not open');
+    expect(platform.sounding, isEmpty,
+        reason: 'the reel plays on under the create page');
   }
 
-  testWidgets('closing the pop-out starts the video again', (t) async {
+  Future<void> closeCreate(WidgetTester t) async {
+    await t.tap(find.byKey(const ValueKey('create_close')));
+    await frames(t, 8);
+    expect(find.byType(CreatePage), findsNothing);
+  }
+
+  testWidgets('closing the create page starts the video again', (t) async {
     await openHome(t);
     await pressPlus(t);
-    // Tap the dimmed screen behind it.
-    await t.tapAt(const Offset(30, 120));
-    await frames(t, 8);
-    expect(find.text('Record'), findsNothing);
+    await closeCreate(t);
     expect(platform.sounding, {_video});
     await close(t);
   });
 
-  testWidgets('coming back from Record starts the video again', (t) async {
-    // The camera is refused, so Record says so and the person is back on
-    // Home — the shortest real way through the record steps.
+  testWidgets('coming back from the camera starts the video again', (t) async {
+    // The camera is refused, so the page says so, and the person closes it
+    // and is back on Home — the shortest real way through the camera steps.
     t.binding.defaultBinaryMessenger.setMockMethodCallHandler(permissions, (
       call,
     ) async {
@@ -245,13 +255,15 @@ void main() {
     );
     await openHome(t);
     await pressPlus(t);
-    await t.tap(find.text('Record'));
+    await t.tap(find.byKey(const ValueKey('create_camera')));
     await frames(t, 10);
     expect(
       find.text('Camera and microphone permission required.'),
       findsOneWidget,
-      reason: 'the record steps did not run',
+      reason: 'the camera steps did not run',
     );
+    expect(platform.sounding, isEmpty, reason: 'still on the create page');
+    await closeCreate(t);
     expect(platform.sounding, {_video});
     await close(t);
   });
@@ -308,8 +320,7 @@ void main() {
     await frames(t, 4);
     expect(platform.sounding, isEmpty, reason: 'tapping did not pause it');
     await pressPlus(t);
-    await t.tapAt(const Offset(30, 120));
-    await frames(t, 8);
+    await closeCreate(t);
     expect(platform.sounding, isEmpty, reason: 'it started on its own');
     await close(t);
   });

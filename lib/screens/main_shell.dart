@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/providers/data_provider.dart';
@@ -15,14 +14,13 @@ import 'package:myapp/pages/chat_list_page.dart';
 import 'package:myapp/pages/search_page.dart';
 import 'package:myapp/pages/profile_page.dart';
 import 'package:myapp/services/create_flow.dart';
-import 'package:myapp/widgets/create_burst.dart';
 
 /// Root shell — 5-slot bottom nav using standard Material 3 NavigationBar.
 /// 0 - Home      (TikTok-style reels: challenges + unaccepted-as-shorts mix)
 /// 1 - Messages  (chat list)
-/// 2 - Create    (NOT a tab — the "+" opens the Create pop-out on top of
-///                whatever tab is active: tap it, or hold it and slide to
-///                Record or Upload. Selecting it never updates
+/// 2 - Create    (NOT a tab — the "+" opens the create page on top of
+///                whatever tab is active: the phone's photos and videos,
+///                and the camera. Selecting it never updates
 ///                _currentIndex.)
 /// 3 - Search
 /// 4 - Profile
@@ -46,14 +44,13 @@ class _MainShellState extends State<MainShell> {
   static const _tabLabels = ['Home', 'Messages', 'Create', 'Search', 'Profile'];
   static const _createIndex = 2;
 
-  /// The + button, so the pop-out can open exactly where it is.
-  final _plusKey = GlobalKey();
-
   /// Bumped when Home is tapped while Home is already showing: the feed on
   /// screen goes back to the top with fresh videos.
   final _homeTappedAgain = ValueNotifier<int>(0);
   final _searchTappedAgain = ValueNotifier<int>(0);
-  CreateBurstHandle? _burst;
+
+  /// The create page is open: a second tap on + does not open another.
+  bool _creating = false;
 
   /// Fetches Search's videos in the background, once Home has had its
   /// turn. See [prefetchDelay].
@@ -98,10 +95,10 @@ class _MainShellState extends State<MainShell> {
 
   void _onDestination(int index) {
     // The center "+" is not a tab — it's a launcher. Tapping it opens the
-    // Create pop-out over the current tab and leaves _currentIndex
-    // untouched, so closing it lands back on whatever tab they were on.
+    // create page over the current tab and leaves _currentIndex untouched,
+    // so closing it lands back on whatever tab they were on.
     if (index == _createIndex) {
-      _openBurst(fromHold: false);
+      unawaited(_openCreate());
       return;
     }
 
@@ -133,72 +130,37 @@ class _MainShellState extends State<MainShell> {
     setState(() => _currentIndex = index);
   }
 
-  /// Open the Create pop-out over the + button. From a hold, the finger
-  /// that is still down keeps steering it: see the pill's gesture below.
-  void _openBurst({required bool fromHold}) {
-    if (_burst != null && !_burst!.isClosed) return;
-    // Mute the reels feed while the pop-out sits on top — the home tab is
+  /// Open the create page: the phone's photos and videos, and the camera.
+  Future<void> _openCreate() async {
+    if (_creating) return;
+    _creating = true;
+    // Mute the reels feed while the page sits on top — the home tab is
     // still mounted underneath, but nobody is watching it. Whether it was
-    // playing is kept, so it can start again when the pop-out closes, or
-    // when recording or uploading is over: nothing used to, and the video
-    // behind stayed stopped.
+    // playing is kept, so it can start again when the page closes, posted
+    // or not: nothing used to, and the video behind stayed stopped.
     final wasPlaying = VideoPlayerService.instance.activeIsPlaying;
     VideoPlayerService.instance.pauseAll();
     EventTracker.instance.trackTap(
       target: 'nav_create_challenge',
       pageName: '${_tabLabels[_currentIndex].toLowerCase()}_tab',
-      params: {'how': fromHold ? 'hold' : 'tap'},
     );
-    final box = _plusKey.currentContext?.findRenderObject() as RenderBox?;
-    final anchor = box == null
-        ? Offset(MediaQuery.sizeOf(context).width / 2,
-            MediaQuery.sizeOf(context).height - 40)
-        : box.localToGlobal(box.size.center(Offset.zero));
-    _burst = CreateBurst.show(
-      context,
-      anchor: anchor,
-      fromHold: fromHold,
-      onChoose: (choice) async {
-        if (!mounted) return;
-        // Even if recording or uploading fails part-way, the video behind
-        // starts again when the person is back here.
-        try {
-          switch (choice) {
-            case CreateChoice.record:
-              await CreateFlow.record(context, from: 'create_burst');
-            case CreateChoice.upload:
-              await CreateFlow.upload(context, from: 'create_burst');
-            case CreateChoice.photo:
-              await CreateFlow.photo(context, from: 'create_burst');
-          }
-        } finally {
-          _resumeIf(wasPlaying);
-        }
-      },
-      onDismiss: () => _resumeIf(wasPlaying),
-    );
+    try {
+      await CreateFlow.open(context, from: 'create_button');
+    } finally {
+      _creating = false;
+      _resumeIf(wasPlaying);
+    }
   }
 
-  /// Start the video that was playing before the pop-out covered it.
+  /// Start the video that was playing before the create page covered it.
   void _resumeIf(bool wasPlaying) {
     if (!mounted || !wasPlaying) return;
     // ignore: discarded_futures
     VideoPlayerService.instance.resumeActive();
   }
 
-  /// The + itself. A tap goes through the bar and opens the pop-out; a
-  /// hold opens it at once and then follows the finger, so sliding onto
-  /// Record or Upload and letting go picks it in one movement.
-  Widget get _createPill => GestureDetector(
-        key: _plusKey,
-        onLongPressStart: (_) {
-          HapticFeedback.mediumImpact();
-          _openBurst(fromHold: true);
-        },
-        onLongPressMoveUpdate: (d) => _burst?.pointerMoved(d.globalPosition),
-        onLongPressEnd: (d) => _burst?.pointerReleased(d.globalPosition),
-        child: const _CreatePill(),
-      );
+  /// The + itself. A tap goes through the bar and opens the create page.
+  Widget get _createPill => const _CreatePill();
 
   Widget _body() {
     final dp = Provider.of<DataProvider>(context, listen: false);

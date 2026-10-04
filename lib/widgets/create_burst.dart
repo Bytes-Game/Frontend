@@ -9,20 +9,13 @@ import 'package:myapp/config/app_theme.dart';
 /// What the person picked from the burst.
 enum CreateChoice { record, upload, photo }
 
-/// Everything a new challenge can start from: a video recorded now, a video
-/// from the phone, or a photo.
-const allCreateChoices = [
-  CreateChoice.record,
-  CreateChoice.photo,
-  CreateChoice.upload,
-];
-
 /// What answers a video challenge: a video. A photo challenge is answered
 /// with a photo, which needs no menu (see [CreateChoice.photo]).
 const videoCreateChoices = [CreateChoice.record, CreateChoice.upload];
 
-/// The + button's pop-out: Record, Photo and Upload rise out of the button
-/// in 3D.
+/// The "Accept challenge" pop-out: Record and Upload rise out of the button
+/// in 3D. (A new challenge starts on the create page instead — the phone's
+/// photos and videos, and the camera; see CreatePage.)
 ///
 /// They start lying flat and small at the button, then swing upright as
 /// they fly out along an arc, while the screen behind blurs and dims. It can
@@ -60,7 +53,7 @@ class CreateBurst {
     String title = 'Create a challenge',
     Size anchorSize = const Size(44, 30),
     double anchorRadius = 9,
-    List<CreateChoice> choices = allCreateChoices,
+    List<CreateChoice> choices = videoCreateChoices,
   }) {
     final handle = CreateBurstHandle._();
     late final OverlayEntry entry;

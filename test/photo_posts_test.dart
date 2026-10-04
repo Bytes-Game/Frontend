@@ -1,9 +1,9 @@
 // Photo challenges: "who looks better", "which is the better meme".
 //
 // A challenge can be a photo now, answered with a photo. These go through
-// the real screens — the feed, the + menu, the posting page, the battle
-// page, Search — with only the server, the phone's video player and the
-// phone's camera faked, and check two things everywhere a post appears:
+// the real screens — the feed, the + button's page, the posting page, the
+// battle page, Search — with only the server, the phone's video player,
+// camera and gallery faked, and check two things everywhere a post appears:
 //
 //   * the photo is SHOWN — the picture is on screen;
 //   * nothing treats it as a video — no player is opened for it, so no
@@ -27,19 +27,22 @@ import 'package:visibility_detector/visibility_detector.dart';
 
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
+import 'package:myapp/pages/create_page.dart';
 import 'package:myapp/pages/search_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/chat_media.dart';
 import 'package:myapp/services/create_flow.dart';
+import 'package:myapp/services/device_gallery.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/upload_job_manager.dart';
-import 'package:myapp/widgets/create_burst.dart';
 import 'package:myapp/widgets/match_warning.dart';
 import 'package:myapp/widgets/photo_face.dart';
 import 'package:myapp/widgets/smart_reels_feed.dart';
+
+import 'fake_gallery.dart';
 
 /// A phone video player that records what it was asked to open.
 class _Platform extends VideoPlayerPlatform {
@@ -170,7 +173,12 @@ void fakeServer() {
   ApiService.useClient(
     MockClient((req) async {
       final p = req.url.path;
-      asked.add((req.method, req.url.toString(), req.body));
+      // A photo's bytes are not text: read them leniently.
+      asked.add((
+        req.method,
+        req.url.toString(),
+        utf8.decode(req.bodyBytes, allowMalformed: true),
+      ));
       if (p.endsWith('/media/presign')) {
         final items = (json.decode(req.body)['items'] as List).cast<Map>();
         return http.Response(
@@ -465,87 +473,18 @@ void main() {
     });
   });
 
-  group('the + menu', () {
-    Future<List<CreateChoice>> openMenu(
-      WidgetTester t, {
-      List<CreateChoice> choices = allCreateChoices,
-    }) async {
-      await t.binding.setSurfaceSize(const Size(400, 800));
-      addTearDown(() => t.binding.setSurfaceSize(null));
-      final picked = <CreateChoice>[];
-      await t.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Builder(
-              builder: (context) => Center(
-                child: TextButton(
-                  onPressed: () => CreateBurst.show(
-                    context,
-                    anchor: const Offset(200, 760),
-                    fromHold: false,
-                    choices: choices,
-                    onChoose: picked.add,
-                  ),
-                  child: const Text('+'),
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-      await t.tap(find.text('+'));
-      await frames(t, 6);
-      return picked;
-    }
-
-    testWidgets('offers Photo between Record and Upload, and picks it', (
-      t,
-    ) async {
-      final picked = await openMenu(t);
-      expect(find.text('Record'), findsOneWidget);
-      expect(find.text('Photo'), findsOneWidget);
-      expect(find.text('Upload'), findsOneWidget);
-      final record = t.getCenter(find.text('Record'));
-      final photo = t.getCenter(find.text('Photo'));
-      final upload = t.getCenter(find.text('Upload'));
-      expect(record.dx, lessThan(photo.dx));
-      expect(photo.dx, lessThan(upload.dx));
-      // Far enough apart that a finger on one is not on the next.
-      expect((photo - record).distance, greaterThan(90));
-      expect((upload - photo).distance, greaterThan(90));
-      await t.tap(find.text('Photo'));
-      await frames(t, 6);
-      expect(picked, [CreateChoice.photo]);
-    });
-
-    test('the + button and a profile\'s Battle button both go to the photo '
-        'flow', () {
-      String code(String path) => File(path)
-          .readAsLinesSync()
-          .where((l) => !l.trimLeft().startsWith('//'))
-          .join('\n');
-      for (final path in [
-        'lib/screens/main_shell.dart',
-        'lib/pages/profile_page.dart',
-      ]) {
-        expect(
-          code(path),
-          matches(
-            RegExp(r'case CreateChoice\.photo:\s+(await )?CreateFlow\.photo\('),
-          ),
-          reason: path,
-        );
-      }
-    });
-  });
-
   group('posting a photo challenge', () {
-    Future<void> startFromMenu(WidgetTester t) async {
+    /// The + button's page, with a photo on the phone, picked and Next
+    /// pressed. Nobody said it is a photo: the page knows.
+    Future<void> startFromCreatePage(WidgetTester t) async {
       t.view.physicalSize = const Size(1000, 2400);
       t.view.devicePixelRatio = 1;
       addTearDown(t.view.resetPhysicalSize);
       addTearDown(t.view.resetDevicePixelRatio);
       EventTracker.instance.dispose();
+      final gallery = FakeGallery()..addPhoto(dir, 'p1');
+      DeviceGallery.instance = gallery;
+      addTearDown(() => DeviceGallery.instance = PhoneGallery());
       await t.pumpWidget(
         ChangeNotifierProvider<DataProvider>.value(
           value: signedIn(),
@@ -554,7 +493,7 @@ void main() {
               body: Builder(
                 builder: (context) => Center(
                   child: TextButton(
-                    onPressed: () => CreateFlow.photo(context),
+                    onPressed: () => CreateFlow.open(context),
                     child: const Text('go'),
                   ),
                 ),
@@ -565,15 +504,15 @@ void main() {
       );
       await t.tap(find.text('go'));
       await frames(t, 6);
-      expect(find.byKey(const ValueKey('post_photo_gallery')), findsOneWidget);
-      await t.tap(find.byKey(const ValueKey('post_photo_gallery')));
+      await t.tap(find.byKey(const ValueKey('create_item_p1')));
+      await frames(t, 2);
+      await t.tap(find.byKey(const ValueKey('create_next')));
       await frames(t, 8);
     }
 
     testWidgets('choose a photo, fill in the challenge, Post: it goes up as '
         'a photo, with nothing converted', (t) async {
-      await startFromMenu(t);
-      expect(photos.askedCamera, isFalse);
+      await startFromCreatePage(t);
       expect(find.text('New photo challenge'), findsOneWidget);
       expect(find.byKey(const ValueKey('photo_preview')), findsOneWidget);
       expect(find.text(matchWarningPhotoChallenge), findsOneWidget);
@@ -604,6 +543,9 @@ void main() {
       expect(posted.single['durationMs'], 0);
       expect(posted.single['videoVariants'], isEmpty);
       expect(platform.opened, isEmpty);
+      // Posted: the create page has closed too, back to where + was.
+      expect(find.byType(CreatePage), findsNothing);
+      expect(find.text('go'), findsOneWidget);
       await close(t);
     });
 

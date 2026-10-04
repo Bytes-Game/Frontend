@@ -1,104 +1,105 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'package:myapp/pages/challenge_metadata_page.dart';
+import 'package:myapp/pages/create_page.dart';
 import 'package:myapp/pages/record_video_page.dart';
 import 'package:myapp/pages/video_trim_page.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/video_processor_service.dart';
-import 'package:myapp/widgets/photo_choice.dart';
 
-/// The ways a challenge starts — record now, upload a video from the phone,
-/// or post a photo — in one place, so the pop-out on the + button and the
-/// one on a profile's Battle button run the same steps rather than two
-/// copies that drift apart.
+/// How a challenge starts, in one place, so the + button and a profile's
+/// Battle button run the same steps rather than two copies that drift
+/// apart.
 ///
-/// A video ends on the trim screen with the clip, which then carries on to
-/// the details screen and the upload. A photo has nothing to trim and goes
-/// straight to the details screen.
+/// Both open the create page: the phone's photos and videos in a grid,
+/// with the camera first — the way Instagram and TikTok do it. Nobody is
+/// asked "photo or video?": the thing picked already is one or the other.
+/// A video goes on to the trim screen and then the details; a photo has
+/// nothing to trim and goes straight to the details.
 class CreateFlow {
   CreateFlow._();
 
-  /// Open the in-app camera. Asks for camera and microphone first; without
-  /// both there is no preview to show, so it says so rather than opening a
-  /// black screen.
-  static Future<void> record(BuildContext context, {String from = ''}) async {
+  /// The create page. Returns when it closes — after a post, or when the
+  /// person backed out.
+  static Future<void> open(BuildContext context, {String from = ''}) async {
+    EventTracker.instance.trackTap(
+      target: 'create_challenge_open',
+      pageName: from.isEmpty ? 'create_challenge_page' : from,
+    );
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => CreatePage(from: from)));
+  }
+
+  /// The in-app camera, which takes a photo or records a video. Asks for
+  /// the camera and microphone first; without both there is no preview to
+  /// show, so it says so rather than opening a black screen. True when
+  /// what it made was posted.
+  static Future<bool> camera(BuildContext context, {String from = ''}) async {
     EventTracker.instance.trackTap(
       target: 'create_challenge_record',
       pageName: from.isEmpty ? 'create_challenge_page' : from,
     );
     final cam = await Permission.camera.request();
     final mic = await Permission.microphone.request();
-    if (!context.mounted) return;
+    if (!context.mounted) return false;
     if (!cam.isGranted || !mic.isGranted) {
       _toast(context, 'Camera and microphone permission required.');
-      return;
+      return false;
     }
-    final recorded = await Navigator.of(
-      context,
-    ).push<String>(MaterialPageRoute(builder: (_) => const RecordVideoPage()));
-    if (!context.mounted || recorded == null || recorded.isEmpty) return;
-    await _continueWithSource(context, recorded);
-  }
-
-  /// Pick a video from the phone.
-  static Future<void> upload(BuildContext context, {String from = ''}) async {
-    EventTracker.instance.trackTap(
-      target: 'create_challenge_pick',
-      pageName: from.isEmpty ? 'create_challenge_page' : from,
-    );
-    final picked = await FilePicker.platform.pickFiles(
-      type: FileType.video,
-      allowMultiple: false,
-      // A real path on disk, not a stream — the trim step hands the path
-      // straight to the native trimmer.
-      withData: false,
-    );
-    if (!context.mounted) return;
-    if (picked == null || picked.files.isEmpty) return;
-    final path = picked.files.first.path;
-    if (path == null || path.isEmpty) {
-      _toast(context, 'Could not read the selected file. Try another.');
-      return;
-    }
-    await _continueWithSource(context, path);
-  }
-
-  /// Post a photo: "who looks better", "which is the better meme". Taken
-  /// now or chosen from the phone, then the same details screen a video
-  /// gets.
-  static Future<void> photo(BuildContext context, {String from = ''}) async {
-    EventTracker.instance.trackTap(
-      target: 'create_challenge_photo',
-      pageName: from.isEmpty ? 'create_challenge_page' : from,
-    );
-    final file = await choosePhoto(context, title: 'Photo challenge');
-    if (!context.mounted || file == null) return;
-    await Navigator.of(context).push(
+    final made = await Navigator.of(context).push<String>(
       MaterialPageRoute(
-        builder: (_) =>
-            ChallengeMetadataPage(processedSourcePath: file.path, photo: true),
+        builder: (_) => const RecordVideoPage(allowPhoto: true),
       ),
     );
+    if (!context.mounted || made == null || made.isEmpty) return false;
+    return continueWith(
+      context,
+      made,
+      photo: RecordVideoPage.isPhotoPath(made),
+    );
   }
 
-  /// With a clip in hand, recorded or picked: on to the trim screen.
-  static Future<void> _continueWithSource(
+  /// With a photo or a video in hand: a video to the trim screen and then
+  /// the details, a photo straight to the details. True when it was posted;
+  /// false when the person came back without posting.
+  static Future<bool> continueWith(
     BuildContext context,
-    String sourcePath,
-  ) async {
+    String path, {
+    required bool photo,
+  }) async {
     EventTracker.instance.track(
       eventType: 'create_challenge_source_selected',
       contentId: 'pending',
       contentType: 'challenge',
       metadata: {
+        'kind': photo ? 'photo' : 'video',
         'reelMaxSeconds': VideoProcessorService.maxReelDuration.inSeconds,
       },
     );
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => VideoTrimPage(sourcePath: sourcePath)),
+    final nav = Navigator.of(context);
+    if (photo) {
+      final posted = await nav.push<bool>(
+        MaterialPageRoute(
+          builder: (_) =>
+              ChallengeMetadataPage(processedSourcePath: path, photo: true),
+        ),
+      );
+      return posted == true;
+    }
+    final trimmed = await nav.push<String>(
+      MaterialPageRoute(
+        builder: (_) => VideoTrimPage(sourcePath: path, popOnComplete: true),
+      ),
     );
+    if (!context.mounted || trimmed == null || trimmed.isEmpty) return false;
+    final posted = await nav.push<bool>(
+      MaterialPageRoute(
+        builder: (_) => ChallengeMetadataPage(processedSourcePath: trimmed),
+      ),
+    );
+    return posted == true;
   }
 
   static void _toast(BuildContext context, String msg) {

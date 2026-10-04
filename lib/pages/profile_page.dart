@@ -28,7 +28,6 @@ import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/chat_media_widgets.dart' show ChatPhotoViewer;
 import 'package:myapp/widgets/battle_record_panel.dart';
 import 'package:myapp/widgets/battles_tab.dart';
-import 'package:myapp/widgets/create_burst.dart';
 import 'package:myapp/widgets/profile_arena_header.dart';
 import 'package:myapp/widgets/scroll_reveal.dart';
 import 'package:myapp/widgets/video_grid_tile.dart';
@@ -559,35 +558,17 @@ class _ProfilePageState extends State<ProfilePage>
                     ),
                   );
                 },
-                onChallenge: (anchor) {
+                onChallenge: (_) {
                   EventTracker.instance.trackTap(
                     target: 'profile_open_battle',
                     pageName: pageName,
                     params: {'targetUserId': widget.user.id},
                   );
-                  // The same Record / Upload pop-out as the + button,
-                  // rising out of the Battle button itself. It starts an
-                  // open challenge anyone can answer: naming this person
-                  // as the opponent is not built yet.
-                  CreateBurst.show(
-                    context,
-                    anchor: anchor,
-                    fromHold: false,
-                    title: 'Start a battle',
-                    anchorSize: const Size(44, 44),
-                    anchorRadius: 22,
-                    onChoose: (choice) {
-                      if (!mounted) return;
-                      switch (choice) {
-                        case CreateChoice.record:
-                          CreateFlow.record(context, from: 'profile_battle');
-                        case CreateChoice.upload:
-                          CreateFlow.upload(context, from: 'profile_battle');
-                        case CreateChoice.photo:
-                          CreateFlow.photo(context, from: 'profile_battle');
-                      }
-                    },
-                  );
+                  // The same create page as the + button: the phone's
+                  // photos and videos, and the camera. It starts an open
+                  // challenge anyone can answer: naming this person as the
+                  // opponent is not built yet.
+                  CreateFlow.open(context, from: 'profile_battle');
                 },
                 compact: _compact,
               ),
@@ -1060,8 +1041,7 @@ class _OtherActionRow extends StatelessWidget {
   final VoidCallback onFollowToggle;
   final VoidCallback onMessage;
 
-  /// Gets the centre of the Battle button, so the pop-out can rise out of
-  /// it.
+  /// The Battle button was pressed, with where its centre is.
   final ValueChanged<Offset> onChallenge;
 
   const _OtherActionRow({
