@@ -661,6 +661,13 @@ class MediaUploadService {
     return publicUrl;
   }
 
+  /// The client a video goes to storage with: a plain one on purpose, not
+  /// [ApiService.httpClient]. On Android that one is Cronet, which reads a
+  /// whole request into memory before sending it — fine for a photo, not
+  /// for a video. A seam: tests put a stand-in here.
+  @visibleForTesting
+  static http.Client Function() storageClient = http.Client.new;
+
   /// Streaming PUT with byte-level progress callbacks. We use
   /// http.StreamedRequest so the file isn't slurped into RAM — a 1080p
   /// reel can be ~10MB and we'd OOM phones with the basic
@@ -709,7 +716,7 @@ class MediaUploadService {
       },
     );
 
-    final res = await http.Client().send(req);
+    final res = await storageClient().send(req);
     await sub.cancel();
     if (!completer.isCompleted) completer.complete();
 

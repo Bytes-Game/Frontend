@@ -836,6 +836,9 @@ class ApiService {
     // 'photo' for a photo challenge, whose picture is in [videoUrl]. A
     // video sends nothing, which is how the server has always read it.
     String mediaType = 'video',
+    // The free song mixed into the video, by its id in the music library
+    // (MusicLibrary.pick). Empty for none. The post then credits it.
+    String musicTrackId = '',
   }) async {
     try {
       final res = await _authHttp.post(
@@ -862,6 +865,7 @@ class ApiService {
           'tags': tags,
           if (battleDays > 0) 'battleDays': battleDays,
           if (mediaType == 'photo') 'mediaType': 'photo',
+          if (musicTrackId.isNotEmpty) 'musicTrackId': musicTrackId,
         }),
       );
       if (res.statusCode == 200 || res.statusCode == 201) {
@@ -983,6 +987,8 @@ class ApiService {
     // 'photo' for a photo answer. A photo challenge only takes photos, and
     // a video challenge only videos — the server refuses the other kind.
     String mediaType = 'video',
+    // The free song mixed into the answer, as for a challenge.
+    String musicTrackId = '',
   }) async {
     try {
       final res = await _authHttp.post(
@@ -999,6 +1005,7 @@ class ApiService {
           if (tags.isNotEmpty) 'tags': tags,
           if (emotionTags.isNotEmpty) 'emotionTags': emotionTags,
           if (mediaType == 'photo') 'mediaType': 'photo',
+          if (musicTrackId.isNotEmpty) 'musicTrackId': musicTrackId,
         }),
       );
       if (res.statusCode == 200 || res.statusCode == 201) {
@@ -1010,6 +1017,51 @@ class ApiService {
     } catch (_) {
       return null;
     }
+  }
+
+  // ─── Free music for videos ──────────────────────────────────────────
+
+  /// GET /api/v1/music/search?q=&page= — free songs for the video editor's
+  /// Music button (the server's free_music.go). Null when the server could
+  /// not be reached or refused, which the picker says out loud.
+  static Future<Map<String, dynamic>?> searchMusic(
+    String query, {
+    int page = 1,
+  }) async {
+    try {
+      final res = await _authHttp.get(
+        Uri.parse('$_base/api/v1/music/search').replace(
+          queryParameters: {
+            if (query.isNotEmpty) 'q': query,
+            'page': '$page',
+          },
+        ),
+      );
+      if (res.statusCode == 200) {
+        return json.decode(res.body) as Map<String, dynamic>;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// POST /api/v1/music/tracks — keeps the song somebody picked. The server
+  /// reads it fresh from the music library and checks its licence again,
+  /// and answers it with our own id, which the post then carries.
+  ///
+  /// Throws [ApiRefused] with the server's own words when it says no ("that
+  /// song is not free to use"), and a plain error for anything else.
+  static Future<Map<String, dynamic>> pickMusic(String sourceId) async {
+    final res = await _authHttp.post(
+      Uri.parse('$_base/api/v1/music/tracks'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({'sourceId': sourceId}),
+    );
+    if (res.statusCode == 200) {
+      return json.decode(res.body) as Map<String, dynamic>;
+    }
+    throw _refusalOr(res, "Couldn't use that song.");
   }
 
   /// POST /api/v1/challenges/like -> toggle like on a challenge

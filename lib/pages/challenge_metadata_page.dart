@@ -7,6 +7,7 @@ import 'package:video_player/video_player.dart';
 import 'package:myapp/config/app_theme.dart';
 
 import 'package:myapp/config/constants.dart';
+import 'package:myapp/models/music_track.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
@@ -63,10 +64,15 @@ class ChallengeMetadataPage extends StatefulWidget {
   /// A photo challenge: [processedSourcePath] is the picture, and it goes
   /// up as a photo (see UploadJobManager).
   final bool photo;
+
+  /// The free song mixed into the video, if one was chosen in the editor.
+  /// The post credits it.
+  final MusicTrack? music;
   const ChallengeMetadataPage({
     super.key,
     required this.processedSourcePath,
     this.photo = false,
+    this.music,
   });
 
   @override
@@ -306,6 +312,7 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
       visibleTo: _visibility == 'friends'
           ? [for (final u in _friends) u.id]
           : const [],
+      musicTrackId: widget.music?.id ?? '',
     );
 
     // Prepared path: the upload has (usually) been running since this
@@ -624,6 +631,15 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
                             Icons.timer_outlined,
                             '$_battleDays-day battle',
                           ),
+                          // The song from the editor, credited on the post.
+                          if (widget.music != null)
+                            KeyedSubtree(
+                              key: const ValueKey('details_music'),
+                              child: _posterChip(
+                                Icons.music_note_rounded,
+                                widget.music!.credit.line,
+                              ),
+                            ),
                         ],
                       ),
                     ],
@@ -649,12 +665,16 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
         children: [
           Icon(icon, size: 13, color: Colors.white),
           const SizedBox(width: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],

@@ -14,6 +14,7 @@ import 'package:myapp/models/battle_model.dart'
 import 'package:myapp/widgets/people_list_sheet.dart'
     show PeopleList, showPeople;
 import 'package:myapp/models/challenge_model.dart';
+import 'package:myapp/models/music_track.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/challenge_detail_page.dart';
 import 'package:myapp/pages/profile_page.dart';
@@ -30,6 +31,7 @@ import 'package:myapp/services/playback_reporter.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/video_player_service.dart';
+import 'package:myapp/widgets/music_credit.dart';
 import 'package:myapp/widgets/report_video.dart';
 import 'package:myapp/widgets/follow_flow.dart';
 import 'package:myapp/widgets/feed_action_bar.dart'
@@ -3113,6 +3115,11 @@ class _ReelItem implements _FeedEntry {
   final String thumbnailUrl;
   final String caption;
 
+  /// The free song under each side's video, with its credit; null for
+  /// none.
+  final MusicCredit? music;
+  final MusicCredit? opponentMusic;
+
   /// Stable creator user id. Required to check ownership for the
   /// owner-only delete affordance on the reel — comparing usernames
   /// is unsafe because they can collide / change. Empty for legacy
@@ -3265,6 +3272,8 @@ class _ReelItem implements _FeedEntry {
     this.fallbackVideoUrl = '',
     required this.thumbnailUrl,
     required this.caption,
+    this.music,
+    this.opponentMusic,
     this.creatorId = '',
     required this.creatorUsername,
     required this.creatorLeague,
@@ -3404,6 +3413,8 @@ class _ReelItem implements _FeedEntry {
         photoUrl: photo,
         opponentPhotoUrl: opponentPhoto,
         caption: title,
+        music: MusicCredit.fromJson(c['music']),
+        opponentMusic: MusicCredit.fromJson(c['topResponseMusic']),
         creatorId: (c['creatorId'] as String?) ?? '',
         creatorUsername: (c['creatorUsername'] as String?) ?? '',
         creatorLeague: (c['creatorLeague'] as String?) ?? '',
@@ -3492,6 +3503,8 @@ class _ReelItem implements _FeedEntry {
           : (mp4Url.isNotEmpty ? c.hlsManifestUrl : ''),
       thumbnailUrl: c.thumbnailUrl ?? '',
       caption: c.title,
+      music: c.music,
+      opponentMusic: c.topResponseMusic,
       creatorId: c.creatorId,
       creatorUsername: c.creatorUsername,
       creatorLeague: c.creatorLeague,
@@ -5105,6 +5118,16 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                   shadows: _textShadow,
                 ),
               ),
+              // The song under the side on screen, credited the way its
+              // licence asks. Tap for the whole credit.
+              if ((_showingOpponent ? item.opponentMusic : item.music)
+                  case final song?) ...[
+                const SizedBox(height: 4),
+                MusicCreditLine(
+                  key: const ValueKey('reel_music'),
+                  credit: song,
+                ),
+              ],
               if (isChallenge) ...[
                 const SizedBox(height: 10),
                 // A battle shows its score — the thing you want to know

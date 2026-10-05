@@ -101,6 +101,7 @@ void main() {
       ('blur', const VideoEdits(hasBlur: true)),
       ('crop, rotate or flip', const VideoEdits(isTransformed: true)),
       ('the sound turned off', const VideoEdits(muted: true)),
+      ('a song added', const VideoEdits(hasMusic: true)),
     ]) {
       test(name, () {
         expect(_plan(edits).way, VideoSaveWay.remake);
