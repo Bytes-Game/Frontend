@@ -1,3 +1,5 @@
+import 'package:myapp/models/music_track.dart';
+
 /// Represents a challenge created by a user.
 /// Maps to the Go backend's `Challenge` struct.
 class ChallengeModel {
@@ -15,6 +17,11 @@ class ChallengeModel {
   final String mediaType;
 
   bool get isPhoto => mediaType == 'photo';
+
+  /// The free song under the video, with the credit its licence asks for;
+  /// [topResponseMusic] is the top answer's. Null for none.
+  final MusicCredit? music;
+  final MusicCredit? topResponseMusic;
   /// Multi-bitrate variants keyed by quality label ("360p","480p","720p",
   /// "720p_hq","1080p").
   /// Empty map means "no variants encoded yet" — fall back to [videoUrl],
@@ -111,6 +118,8 @@ class ChallengeModel {
   required this.creatorLeague,
   required this.videoUrl,
   this.mediaType = 'video',
+  this.music,
+  this.topResponseMusic,
   this.videoVariants = const {},
   this.hlsManifestUrl = '',
   this.thumbnailUrl,
@@ -163,6 +172,8 @@ class ChallengeModel {
       creatorLeague: json['creatorLeague'] ?? 'Unranked',
       videoUrl: json['videoUrl'] ?? '',
       mediaType: json['mediaType'] == 'photo' ? 'photo' : 'video',
+      music: MusicCredit.fromJson(json['music']),
+      topResponseMusic: MusicCredit.fromJson(json['topResponseMusic']),
       videoVariants: (json['videoVariants'] as Map<String, dynamic>?)
               ?.map((k, v) => MapEntry(k, v?.toString() ?? '')) ??
           const {},

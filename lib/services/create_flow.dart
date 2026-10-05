@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'package:myapp/models/music_track.dart';
 import 'package:myapp/pages/challenge_metadata_page.dart';
 import 'package:myapp/pages/create_page.dart';
 import 'package:myapp/pages/photo_editor_page.dart';
@@ -83,11 +84,18 @@ class CreateFlow {
       },
     );
     final nav = Navigator.of(context);
-    Future<bool> details(BuildContext from, String edited) async {
+    Future<bool> details(
+      BuildContext from,
+      String edited,
+      MusicTrack? music,
+    ) async {
       final posted = await Navigator.of(from).push<bool>(
         MaterialPageRoute(
-          builder: (_) =>
-              ChallengeMetadataPage(processedSourcePath: edited, photo: photo),
+          builder: (_) => ChallengeMetadataPage(
+            processedSourcePath: edited,
+            photo: photo,
+            music: music,
+          ),
         ),
       );
       return posted == true;

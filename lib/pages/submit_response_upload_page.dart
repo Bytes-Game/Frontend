@@ -35,11 +35,16 @@ class SubmitResponseUploadPage extends StatefulWidget {
   /// picture.
   final bool photo;
 
+  /// The free song mixed into the answer, by its id in the music library;
+  /// empty for none. The answer credits it.
+  final String musicTrackId;
+
   const SubmitResponseUploadPage({
     super.key,
     required this.processedSourcePath,
     required this.challengeId,
     this.photo = false,
+    this.musicTrackId = '',
   });
 
   @override
@@ -93,6 +98,7 @@ class _SubmitResponseUploadPageState extends State<SubmitResponseUploadPage>
       challengeId: widget.challengeId,
       sourcePath: widget.processedSourcePath,
       photo: widget.photo,
+      musicTrackId: widget.musicTrackId,
     );
 
     // Bump feed refresh so when the user lands back on the feed, it

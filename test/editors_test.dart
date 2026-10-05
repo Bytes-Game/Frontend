@@ -20,6 +20,7 @@ import 'package:pro_image_editor/pro_image_editor.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
 import 'package:myapp/config/editor_setup.dart';
+import 'package:myapp/models/music_track.dart';
 import 'package:myapp/pages/photo_editor_page.dart';
 import 'package:myapp/pages/video_editor_page.dart';
 import 'package:myapp/pages/video_trim_page.dart';
@@ -107,10 +108,16 @@ void main() {
   /// What the next step (the posting page) was handed, and what it
   /// answered.
   final handed = <String>[];
+  final handedMusic = <MusicTrack?>[];
   var postAnswers = <bool>[];
 
-  Future<bool> next(BuildContext context, String path) async {
+  Future<bool> next(
+    BuildContext context,
+    String path,
+    MusicTrack? music,
+  ) async {
     handed.add(path);
+    handedMusic.add(music);
     return postAnswers.isNotEmpty ? postAnswers.removeAt(0) : true;
   }
 
@@ -118,6 +125,7 @@ void main() {
   /// a way to read what the editor closed with.
   Future<bool? Function()> open(WidgetTester t, Widget page) async {
     handed.clear();
+    handedMusic.clear();
     postAnswers = [];
     t.view.physicalSize = const Size(400, 860);
     t.view.devicePixelRatio = 1;

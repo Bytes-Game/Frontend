@@ -10,7 +10,7 @@ import 'dart:math' as math;
 ///   * Only cut shorter: the video is cut without being remade (see
 ///     [VideoSaveWay.cut]). Not a single pixel changes.
 ///   * Anything else — text, emoji, drawing, a filter, brightness, crop,
-///     blur, the sound turned off — means the picture has to be remade with
+///     blur, the sound turned off, a song added — means it has to be remade with
 ///     the change baked in. Every app does this. It is remade at the
 ///     original video's own size and its own data rate (how much detail it
 ///     keeps each second), never less than a healthy floor and never above
@@ -45,6 +45,9 @@ class VideoEdits {
   /// The sound turned off.
   final bool muted;
 
+  /// A free song added under the video.
+  final bool hasMusic;
+
   /// Where the kept part starts and ends; null for the very start and end.
   final Duration? start;
   final Duration? end;
@@ -55,6 +58,7 @@ class VideoEdits {
     this.hasBlur = false,
     this.isTransformed = false,
     this.muted = false,
+    this.hasMusic = false,
     this.start,
     this.end,
   });
@@ -150,7 +154,7 @@ VideoSavePlan planVideoSave({
   final to = end ?? duration;
   if (to - from > maxLength) end = from + maxLength;
 
-  if (edits.changesPicture || edits.muted) {
+  if (edits.changesPicture || edits.muted || edits.hasMusic) {
     return VideoSavePlan(
       way: VideoSaveWay.remake,
       start: start,

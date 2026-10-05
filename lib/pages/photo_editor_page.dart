@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pro_image_editor/pro_image_editor.dart';
 
 import 'package:myapp/config/editor_setup.dart';
+import 'package:myapp/models/music_track.dart';
 import 'package:myapp/services/event_tracker.dart';
 
 /// The photo editor: crop and rotate, filters, brightness and colour, text,
@@ -27,7 +28,14 @@ import 'package:myapp/services/event_tracker.dart';
 /// posting lands here again, with the edits still there.
 class PhotoEditorPage extends StatefulWidget {
   final String sourcePath;
-  final Future<bool> Function(BuildContext context, String path) onDone;
+  /// The next step, with the photo. (A photo has no song: [MusicTrack] is
+  /// always null here; the type is the one the video editor shares.)
+  final Future<bool> Function(
+    BuildContext context,
+    String path,
+    MusicTrack? music,
+  )
+  onDone;
 
   const PhotoEditorPage({
     super.key,
@@ -104,7 +112,7 @@ class _PhotoEditorPageState extends State<PhotoEditorPage> {
       if (mounted) Navigator.of(context).pop(false);
       return;
     }
-    final posted = await widget.onDone(context, finished);
+    final posted = await widget.onDone(context, finished, null);
     if (posted && mounted) Navigator.of(context).pop(true);
   }
 

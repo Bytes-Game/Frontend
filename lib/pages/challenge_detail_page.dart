@@ -7,6 +7,7 @@ import 'package:myapp/widgets/create_burst.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/models/challenge_model.dart';
+import 'package:myapp/models/music_track.dart';
 import 'package:myapp/pages/record_video_page.dart';
 import 'package:myapp/pages/submit_response_upload_page.dart';
 import 'package:myapp/pages/photo_editor_page.dart';
@@ -496,7 +497,7 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
       MaterialPageRoute(
         builder: (_) => PhotoEditorPage(
           sourcePath: file.path,
-          onDone: (from, edited) => _sendAnswer(from, edited, photo: true),
+          onDone: (from, edited, _) => _sendAnswer(from, edited, photo: true),
         ),
       ),
     );
@@ -516,7 +517,8 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
       MaterialPageRoute(
         builder: (_) => VideoEditorPage(
           sourcePath: sourcePath,
-          onDone: (from, edited) => _sendAnswer(from, edited, photo: false),
+          onDone: (from, edited, music) =>
+              _sendAnswer(from, edited, photo: false, music: music),
         ),
       ),
     );
@@ -529,6 +531,7 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     BuildContext from,
     String path, {
     required bool photo,
+    MusicTrack? music,
   }) async {
     final challenge = _challenge;
     if (challenge == null) return false;
@@ -543,6 +546,7 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
           processedSourcePath: path,
           challengeId: challenge.id,
           photo: photo,
+          musicTrackId: music?.id ?? '',
         ),
       ),
     );

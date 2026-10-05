@@ -19,6 +19,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -41,6 +42,8 @@ import 'package:myapp/services/create_flow.dart';
 import 'package:myapp/services/device_gallery.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
+import 'package:myapp/services/media_upload_service.dart';
+import 'package:myapp/services/music_library.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/upload_job_manager.dart';
 import 'package:myapp/services/video_edit_engine.dart';
@@ -49,6 +52,7 @@ import 'package:myapp/widgets/photo_face.dart';
 import 'package:myapp/widgets/smart_reels_feed.dart';
 
 import 'fake_gallery.dart';
+import 'fake_music.dart';
 import 'fake_video_engine.dart';
 
 /// A phone video player that records what it was asked to open.
@@ -205,9 +209,13 @@ late Map<String, dynamic> serving;
 /// When true, creating a challenge fails once.
 bool createFailsOnce = false;
 
+/// When true, sending an answer fails once.
+bool acceptFailsOnce = false;
+
 void fakeServer() {
   asked = [];
   createFailsOnce = false;
+  acceptFailsOnce = false;
   ApiService.useClient(
     MockClient((req) async {
       final p = req.url.path;
@@ -251,6 +259,10 @@ void fakeServer() {
         );
       }
       if (p.endsWith('/challenges/accept')) {
+        if (acceptFailsOnce) {
+          acceptFailsOnce = false;
+          return http.Response('down', 503);
+        }
         return http.Response(
           json.encode({
             'id': '88',
@@ -411,6 +423,70 @@ void main() {
       ChallengeModel.fromJson({...videoShort(), 'mediaType': 'gif'}).isPhoto,
       isFalse,
     );
+  });
+
+  group('a song on a reel', () {
+    const alpha = {
+      'id': '7',
+      'title': 'Alpha',
+      'artist': 'Some Artist',
+      'license': 'by',
+      'licenseVersion': '4.0',
+      'sourceUrl': 'https://www.jamendo.com/track/a',
+      'attribution': '"Alpha" by Some Artist is licensed under CC BY 4.0.',
+    };
+    const beta = {
+      'id': '8',
+      'title': 'Beta',
+      'artist': 'Other',
+      'license': 'cc0',
+    };
+
+    testWidgets('a video with a song credits it; tapped, the whole credit', (
+      t,
+    ) async {
+      serving = {...videoShort(), 'music': alpha};
+      await openFeed(t);
+      expect(find.byKey(const ValueKey('reel_music')), findsOneWidget);
+      expect(find.text('Alpha · Some Artist'), findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('reel_music')));
+      await frames(t, 6);
+      expect(find.byKey(const ValueKey('music_credit_sheet')), findsOneWidget);
+      expect(find.text('Free music · CC BY 4.0'), findsOneWidget);
+      expect(find.text(alpha['attribution']!), findsOneWidget);
+      await close(t);
+    });
+
+    testWidgets('a video with no song says nothing about one', (t) async {
+      serving = videoShort();
+      await openFeed(t);
+      expect(find.textContaining('cook pasta'), findsOneWidget);
+      expect(find.byKey(const ValueKey('reel_music')), findsNothing);
+      await close(t);
+    });
+
+    testWidgets('a battle credits the song of the side on screen', (t) async {
+      serving = {
+        ...videoShort(),
+        'status': 'active',
+        'responseCount': 1,
+        'topResponseId': '77',
+        'topResponseUsername': 'leo',
+        'topResponseVideoUrl': 'https://x/77.mp4',
+        'music': alpha,
+        'topResponseMusic': beta,
+      };
+      await openFeed(t);
+      await t.tap(find.text('leo').first);
+      await frames(t, 6);
+      expect(find.text('Beta · Other'), findsOneWidget);
+      expect(find.text('Alpha · Some Artist'), findsNothing);
+      await t.tap(find.text('zara').first);
+      await frames(t, 6);
+      expect(find.text('Alpha · Some Artist'), findsOneWidget);
+      expect(find.text('Beta · Other'), findsNothing);
+      await close(t);
+    });
   });
 
   group('a photo in the feed', () {
@@ -692,6 +768,168 @@ void main() {
         UploadJobManager.instance.dismiss(j.id);
       }
       await close(t);
+    });
+
+    testWidgets('a video answer with a song from the editor goes to the '
+        'server with its song', (t) async {
+      serving = videoShort();
+      final video = File('${dir.path}/answer.mp4')
+        ..writeAsBytesSync(List.filled(2048, 1));
+      FilePicker.platform = _Picker()..next = video.path;
+      final library = FakeMusicLibrary(dir)..all = [song('a', title: 'Alpha')];
+      MusicLibrary.instance = library;
+      MusicPlayer.create = FakeMusicPlayer.new;
+      // The answer is processed and uploaded here as on a phone.
+      fakeVideoProcessing(t);
+      MediaUploadService.storageClient = () => ApiService.httpClient;
+      const temp = MethodChannel('plugins.flutter.io/path_provider');
+      addTearDown(() {
+        t.binding.defaultBinaryMessenger.setMockMethodCallHandler(temp, null);
+        MusicLibrary.instance = ServerMusicLibrary();
+        MusicPlayer.create = DeviceMusicPlayer.new;
+        MediaUploadService.storageClient = http.Client.new;
+      });
+
+      await openFeed(t);
+      // The phone's temporary folder, for processing the answer — given
+      // only now, after the feed has opened: given earlier, the feed's own
+      // video cache would start a server that outlives the test.
+      t.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        temp,
+        (call) async => dir.path,
+      );
+      await t.tap(find.text('Accept challenge'));
+      await frames(t, 6);
+      await t.tap(find.text('Upload'));
+      await letItUpload(t);
+      await t.tap(find.byKey(const ValueKey('editor_add_music')));
+      await letItUpload(t);
+      await t.tap(find.byKey(const ValueKey('music_use_a')));
+      await letItUpload(t);
+      await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
+      await letItUpload(t);
+      await letItUpload(t);
+      await t.tap(find.byKey(const ValueKey('answer_check_post')));
+      await letItUpload(t);
+      await letItUpload(t);
+
+      final answers = sentTo('POST', '/api/v1/challenges/accept');
+      expect(
+        answers,
+        hasLength(1),
+        reason: [for (final a in asked) a.$2].join(', '),
+      );
+      expect(answers.single['musicTrackId'], library.idFor(song('a')));
+      expect(answers.single.containsKey('mediaType'), isFalse, reason: 'video');
+      expect(
+        UploadJobManager.instance.activeJobs.value.last.musicTrackId,
+        library.idFor(song('a')),
+      );
+      for (final j in [...UploadJobManager.instance.activeJobs.value]) {
+        UploadJobManager.instance.dismiss(j.id);
+      }
+      await close(t);
+    });
+  });
+
+  group('a post with a song that fails', () {
+    testWidgets('a challenge keeps its song through the app closing and '
+        'Retry', (t) async {
+      final video = File('${dir.path}/mine.mp4')
+        ..writeAsBytesSync(List.filled(2048, 1));
+      fakeVideoProcessing(t);
+      MediaUploadService.storageClient = () => ApiService.httpClient;
+      const temp = MethodChannel('plugins.flutter.io/path_provider');
+      t.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        temp,
+        (call) async => dir.path,
+      );
+      addTearDown(() {
+        t.binding.defaultBinaryMessenger.setMockMethodCallHandler(temp, null);
+        MediaUploadService.storageClient = http.Client.new;
+      });
+      final jobs = UploadJobManager.instance..debugForgetJobsFile();
+      for (final j in [...jobs.activeJobs.value]) {
+        jobs.dismiss(j.id);
+      }
+      createFailsOnce = true;
+      final first = jobs.submitChallenge(
+        creatorId: '1',
+        sourcePath: video.path,
+        meta: const ChallengeSubmissionMeta(
+          prefix: 'Who dances',
+          subject: 'best to this',
+          visibility: 'arena',
+          category: '',
+          emotionTags: [],
+          musicTrackId: '742',
+        ),
+      );
+      await letItUpload(t);
+      expect(first.state.value.stage, UploadJobStage.failed);
+
+      jobs.dismiss(first.id);
+      await t.runAsync(jobs.restorePersisted);
+      final restored = jobs.activeJobs.value.single;
+      expect(restored.postedAs?.musicTrackId, '742');
+
+      jobs.retry(restored);
+      await letItUpload(t);
+      final posts = sentTo('POST', '/api/v1/challenges');
+      expect(posts, hasLength(2));
+      expect(posts.first['musicTrackId'], '742');
+      expect(posts.last['musicTrackId'], '742');
+      for (final j in [...jobs.activeJobs.value]) {
+        jobs.dismiss(j.id);
+      }
+      await t.pump(const Duration(seconds: 5));
+    });
+  });
+
+  group('an answer with a song that fails', () {
+    testWidgets('keeps its song through the app closing and Retry', (t) async {
+      final video = File('${dir.path}/answer.mp4')
+        ..writeAsBytesSync(List.filled(2048, 1));
+      fakeVideoProcessing(t);
+      MediaUploadService.storageClient = () => ApiService.httpClient;
+      const temp = MethodChannel('plugins.flutter.io/path_provider');
+      t.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        temp,
+        (call) async => dir.path,
+      );
+      addTearDown(() {
+        t.binding.defaultBinaryMessenger.setMockMethodCallHandler(temp, null);
+        MediaUploadService.storageClient = http.Client.new;
+      });
+      final jobs = UploadJobManager.instance..debugForgetJobsFile();
+      for (final j in [...jobs.activeJobs.value]) {
+        jobs.dismiss(j.id);
+      }
+      acceptFailsOnce = true;
+      final first = jobs.submitResponse(
+        responderId: '1',
+        challengeId: '2',
+        sourcePath: video.path,
+        musicTrackId: '742',
+      );
+      await letItUpload(t);
+      expect(first.state.value.stage, UploadJobStage.failed);
+
+      // The app is closed and opened again: the job comes back from disk.
+      jobs.dismiss(first.id);
+      await t.runAsync(jobs.restorePersisted);
+      final restored = jobs.activeJobs.value.single;
+      expect(restored.musicTrackId, '742');
+
+      jobs.retry(restored);
+      await letItUpload(t);
+      final answers = sentTo('POST', '/api/v1/challenges/accept');
+      expect(answers, hasLength(2));
+      expect(answers.last['musicTrackId'], '742');
+      for (final j in [...jobs.activeJobs.value]) {
+        jobs.dismiss(j.id);
+      }
+      await t.pump(const Duration(seconds: 5));
     });
   });
 

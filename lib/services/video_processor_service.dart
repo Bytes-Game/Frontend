@@ -146,7 +146,14 @@ class VideoProcessorService {
   /// MissingPluginException on the first call. Callers that surface
   /// the create or response pipelines in their UI should check this
   /// first and route around (e.g. hide the "Post" button on desktop).
-  static bool get isSupported => Platform.isAndroid || Platform.isIOS;
+  static bool get isSupported =>
+      debugSupported ?? (Platform.isAndroid || Platform.isIOS);
+
+  /// For tests: treat this machine as a phone, so a test can follow a video
+  /// post through processing to the server (with the phone's media tools
+  /// faked). Null on a real phone.
+  @visibleForTesting
+  static bool? debugSupported;
 
   /// The variant label this source will be uploaded under.
   ///

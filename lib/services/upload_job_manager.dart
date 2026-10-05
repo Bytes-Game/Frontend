@@ -167,6 +167,7 @@ class UploadJobManager {
     required String challengeId,
     required String sourcePath,
     bool photo = false,
+    String musicTrackId = '',
   }) {
     final job = UploadJob._(
       id: _newId(),
@@ -176,6 +177,7 @@ class UploadJobManager {
       challengeId: challengeId,
       isPhoto: photo,
     );
+    job._musicTrackId = musicTrackId;
     _enqueue(job);
     // ignore: discarded_futures
     _runResponse(job, responderId: responderId, challengeId: challengeId);
@@ -240,6 +242,7 @@ class UploadJobManager {
           challengeId: cid,
           sourcePath: job.sourcePath,
           photo: job.isPhoto,
+          musicTrackId: job._musicTrackId,
         );
     }
     dismiss(job.id);
@@ -388,6 +391,7 @@ class UploadJobManager {
         battleDays: meta.battleDays,
         visibleTo: meta.visibleTo,
         mediaType: job.isPhoto ? 'photo' : 'video',
+        musicTrackId: meta.musicTrackId,
       );
       if (challenge == null) {
         _fail(job, 'create_fail',
@@ -574,6 +578,7 @@ class UploadJobManager {
         tags: meta.tags,
         battleDays: meta.battleDays,
         visibleTo: meta.visibleTo,
+        musicTrackId: meta.musicTrackId,
         // energyLevel removed from the create payload — the server
         // derives it from the metadata it already has. See
         // energy_classifier.go on the backend.
@@ -739,6 +744,7 @@ class UploadJobManager {
         videoVariants: uploaded.videoVariants,
         thumbnailUrl: uploaded.thumbnailUrl,
         duration: uploadedDuration,
+        musicTrackId: job._musicTrackId,
       );
       if (response == null) {
         throw _PipelineFailure('submit_fail',
@@ -938,6 +944,11 @@ class UploadJobManager {
 
   File? _persistFile;
 
+  /// For tests: find the jobs file again, in whatever folder the phone's
+  /// documents are in now — each test has a folder of its own.
+  @visibleForTesting
+  void debugForgetJobsFile() => _persistFile = null;
+
   Future<File?> _jobsFile() async {
     if (_persistFile != null) return _persistFile;
     try {
@@ -994,6 +1005,7 @@ class UploadJobManager {
         );
         job._creatorId = m['creatorId'] as String?;
         job._responderId = m['responderId'] as String?;
+        job._musicTrackId = m['musicTrackId'] as String? ?? '';
         final metaJson = m['meta'] as Map<String, dynamic>?;
         if (metaJson != null) {
           job._challengeMeta = ChallengeSubmissionMeta(
@@ -1015,6 +1027,7 @@ class UploadJobManager {
             visibleTo: (metaJson['visibleTo'] as List? ?? [])
                 .map((e) => e.toString())
                 .toList(),
+            musicTrackId: metaJson['musicTrackId'] as String? ?? '',
           );
         }
         if (!job._hasRetryInfo) continue;
@@ -1130,6 +1143,13 @@ class UploadJob {
   String? _creatorId;
   String? _responderId;
 
+  /// An answer's free song, by its id in the music library; empty for
+  /// none. (A challenge's rides in [_challengeMeta].)
+  String _musicTrackId = '';
+
+  /// The free song this answer credits, by its id; empty for none.
+  String get musicTrackId => _musicTrackId;
+
   // Early-upload (prepare/finalize) state. _prepared completes with the
   // upload result when the prepare leg lands; _abandoned marks a job
   // whose create-flow was backed out of before Post.
@@ -1211,6 +1231,7 @@ class UploadJob {
         'creatorId': _creatorId,
         'responderId': _responderId,
         if (isPhoto) 'photo': true,
+        if (_musicTrackId.isNotEmpty) 'musicTrackId': _musicTrackId,
         if (_challengeMeta != null)
           'meta': {
             'prefix': _challengeMeta!.prefix,
@@ -1221,6 +1242,8 @@ class UploadJob {
             'tags': _challengeMeta!.tags,
             'battleDays': _challengeMeta!.battleDays,
             'visibleTo': _challengeMeta!.visibleTo,
+            if (_challengeMeta!.musicTrackId.isNotEmpty)
+              'musicTrackId': _challengeMeta!.musicTrackId,
           },
       };
 }
@@ -1256,6 +1279,10 @@ class ChallengeSubmissionMeta {
   /// means all of them.
   final List<String> visibleTo;
 
+  /// The free song mixed into the video, by its id in the music library.
+  /// Empty for none.
+  final String musicTrackId;
+
   const ChallengeSubmissionMeta({
     required this.prefix,
     required this.subject,
@@ -1265,6 +1292,7 @@ class ChallengeSubmissionMeta {
     this.tags = const [],
     this.battleDays = 0,
     this.visibleTo = const [],
+    this.musicTrackId = '',
   });
 }
 
