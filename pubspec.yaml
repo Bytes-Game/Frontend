@@ -20,6 +20,14 @@ version: 1.0.0+1
 
 environment:
   sdk: ^3.11.0
+  # Flutter 3.47 or newer. The app is only tested on 3.47 (CI uses the
+  # current stable), and 3.44 has a bug that breaks it: tap anything while
+  # a page is closing and that page's animations fail to start (a button's
+  # hint, a fade), then throw on every tap after. 90 of the app's tests fail
+  # on 3.44 for that one reason; 3.47 fixed it. Saying so here makes
+  # `flutter pub get` on an older Flutter say "needs 3.47" in plain words,
+  # instead of a puzzle about some package's version.
+  flutter: ">=3.47.0"
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
