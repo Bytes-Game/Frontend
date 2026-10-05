@@ -173,9 +173,26 @@ void main() {
     EventTracker.instance.dispose();
   }
 
+  /// Taps Done and waits until the save has an outcome: a file handed to
+  /// the next step, "couldn't save" said, or the lost-sound question asked.
+  /// A set number of turns was not enough: on a busy machine the real JPEG
+  /// encode, or the steps before a remake, took longer, and the test looked
+  /// before anything had happened.
   Future<void> done(WidgetTester t) async {
+    final before = handed.length;
+    bool answered() =>
+        handed.length > before ||
+        find
+            .text("Couldn't save your edit. Try again.")
+            .evaluate()
+            .isNotEmpty ||
+        find.byKey(const ValueKey('edit_lost_sound')).evaluate().isNotEmpty;
     await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
-    await settle(t, 14);
+    for (var i = 0; i < 300 && !answered(); i++) {
+      await settle(t, 1);
+    }
+    // Then what follows: the editor closing after a post.
+    await settle(t, 6);
   }
 
   /// Text typed on top of the picture: an edit, made the way a person
@@ -596,7 +613,12 @@ void main() {
       );
       state(t).controller!.setMuteState(true);
       await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
-      await settle(t, 4);
+      // Until the remake has started: a real one says how far it has got
+      // only once it has, and Cancel only shows after that.
+      for (var i = 0; i < 300 && engine.renders.isEmpty; i++) {
+        await settle(t, 1);
+      }
+      await settle(t, 2);
       expect(find.byKey(const ValueKey('video_saving')), findsOneWidget);
       expect(find.text('Saving…'), findsOneWidget);
       expect(find.byKey(const ValueKey('video_saving_cancel')), findsNothing);
