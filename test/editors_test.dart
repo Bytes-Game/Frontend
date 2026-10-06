@@ -418,6 +418,70 @@ void main() {
       await close(t);
     });
 
+    group('going back', () {
+      Future<void> back(WidgetTester t) async {
+        await t.binding.handlePopRoute();
+        await settle(t);
+      }
+
+      testWidgets('the phone\'s back button, nothing changed', (t) async {
+        final closed = await open(
+          t,
+          VideoEditorPage(sourcePath: video.path, onDone: next),
+        );
+        await back(t);
+        expect(find.byType(VideoEditorPage), findsNothing);
+        expect(find.text('before'), findsOneWidget);
+        expect(closed(), isNull);
+        expect(handed, isEmpty);
+        await close(t);
+      });
+
+      testWidgets('the X, nothing changed', (t) async {
+        final closed = await open(
+          t,
+          VideoEditorPage(sourcePath: video.path, onDone: next),
+        );
+        await t.tap(find.byTooltip('Cancel'));
+        await settle(t);
+        expect(find.byType(VideoEditorPage), findsNothing);
+        expect(closed(), isFalse);
+        await close(t);
+      });
+
+      testWidgets('the phone\'s back button after an edit: asked, then '
+          'closed', (t) async {
+        final closed = await open(
+          t,
+          VideoEditorPage(sourcePath: video.path, onDone: next),
+        );
+        await addText(t, 'hello');
+        await back(t);
+        expect(find.text('OK'), findsOneWidget);
+        await t.tap(find.text('OK'));
+        await settle(t);
+        expect(find.byType(VideoEditorPage), findsNothing);
+        expect(closed(), isFalse);
+        await close(t);
+      });
+
+      testWidgets('the X after an edit: asked, then closed', (t) async {
+        final closed = await open(
+          t,
+          VideoEditorPage(sourcePath: video.path, onDone: next),
+        );
+        await addText(t, 'hello');
+        await t.tap(find.byTooltip('Cancel'));
+        await settle(t);
+        expect(find.text('OK'), findsOneWidget);
+        await t.tap(find.text('OK'));
+        await settle(t);
+        expect(find.byType(VideoEditorPage), findsNothing);
+        expect(closed(), isFalse);
+        await close(t);
+      });
+    });
+
     testWidgets('Done with nothing changed: the original file — not cut, '
         'not remade', (t) async {
       final closed = await open(

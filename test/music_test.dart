@@ -331,10 +331,10 @@ void main() {
     testWidgets('a song is mixed in at its volume, the video remade at its '
         'own quality, and the post told which song', (t) async {
       await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
-      expect(find.text('Add music'), findsOneWidget);
+      expect(find.text('Music'), findsOneWidget);
       await addSong(t);
       expect(find.byKey(const ValueKey('editor_music')), findsOneWidget);
-      expect(find.text('Alpha · Some Artist'), findsOneWidget);
+      expect(find.text('Alpha'), findsOneWidget, reason: 'the song is named');
 
       await done(t);
       final made = engine.renders.single;
@@ -353,6 +353,86 @@ void main() {
         reason: 'checked that the sound came through',
       );
       await close(t);
+    });
+
+    testWidgets('Music is first in the bottom row, with the editor\'s own '
+        'tools', (t) async {
+      await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+      final music = t.getCenter(find.byKey(const ValueKey('editor_add_music')));
+      final screen = t.view.physicalSize / t.view.devicePixelRatio;
+      expect(
+        music.dy,
+        greaterThan(screen.height * 0.75),
+        reason: 'at the bottom',
+      );
+      for (final tool in [
+        'open-crop-rotate-editor-btn',
+        'open-filter-editor-btn',
+        'open-text-editor-btn',
+      ]) {
+        final other = t.getCenter(find.byKey(ValueKey(tool)));
+        expect(other.dy, music.dy, reason: '$tool is in the same row');
+        expect(other.dx, greaterThan(music.dx), reason: 'Music comes first');
+      }
+      await close(t);
+    });
+
+    testWidgets('a long song name is cut short in the row', (t) async {
+      library.all = [
+        song('a', title: 'A song with a very long name that goes on and on'),
+      ];
+      await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+      await addSong(t);
+      final label = find.descendant(
+        of: find.byKey(const ValueKey('editor_music')),
+        matching: find.byType(Text),
+      );
+      expect(t.getSize(label).width, lessThanOrEqualTo(72));
+      expect(t.takeException(), isNull, reason: 'nothing overflowed');
+      await close(t);
+    });
+
+    group('going back', () {
+      Future<void> back(WidgetTester t) async {
+        await t.binding.handlePopRoute();
+        await settle(t);
+      }
+
+      testWidgets('from the picker: back in the editor, no song', (t) async {
+        await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+        await t.tap(find.byKey(const ValueKey('editor_add_music')));
+        await settle(t);
+        expect(find.byType(MusicPickerPage), findsOneWidget);
+        await back(t);
+        expect(find.byType(MusicPickerPage), findsNothing);
+        expect(find.byType(VideoEditorPage), findsOneWidget);
+        expect(find.byKey(const ValueKey('editor_add_music')), findsOneWidget);
+        await close(t);
+      });
+
+      testWidgets('from the editor with a song: closed, and the song '
+          'stopped', (t) async {
+        await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+        await addSong(t);
+        await back(t);
+        if (find.text('OK').evaluate().isNotEmpty) {
+          await t.tap(find.text('OK'));
+          await settle(t);
+        }
+        expect(find.byType(VideoEditorPage), findsNothing);
+        expect(FakeMusicPlayer.made.last.calls.last, 'dispose');
+        await close(t);
+      });
+
+      testWidgets('from the Filter tool: back in the editor', (t) async {
+        await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+        await t.tap(find.text('Filter'));
+        await settle(t);
+        await back(t);
+        expect(find.byType(VideoEditorPage), findsOneWidget);
+        expect(find.text('Filter'), findsOneWidget);
+        await close(t);
+      });
     });
 
     testWidgets('the song plays under the video while editing', (t) async {
@@ -403,7 +483,7 @@ void main() {
       await settle(t, 4);
       await t.tap(find.byKey(const ValueKey('music_remove')));
       await settle(t, 4);
-      expect(find.text('Add music'), findsOneWidget);
+      expect(find.text('Music'), findsOneWidget);
       await done(t);
       expect(engine.renders, isEmpty, reason: 'nothing changed: not remade');
       expect(handed.single, video.path);
