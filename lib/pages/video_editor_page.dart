@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart' as mui;
 import 'package:pro_image_editor/pro_image_editor.dart';
 import 'package:pro_video_editor/pro_video_editor.dart' as pve;
 import 'package:video_player/video_player.dart';
@@ -135,11 +136,32 @@ class VideoEditorPageState extends State<VideoEditorPage> {
 
   @override
   void dispose() {
-    unawaited(_musicPlayer?.dispose());
+    // Leaving has frozen a phone, with nothing in the log to say where.
+    // Each part that lets go of the phone's video or sound hardware now
+    // says when it is done, so a step that never finishes is the last
+    // line without its "done".
+    debugPrint('[editor] closing: letting go of the video and the song');
+    final clock = Stopwatch()..start();
+    void letGo(String what, Future<void>? going) {
+      if (going == null) return;
+      going.then(
+        (_) => debugPrint(
+          '[editor] closing: $what let go after ${clock.elapsedMilliseconds}ms',
+        ),
+        onError: (Object e) =>
+            debugPrint('[editor] closing: $what could not let go: $e'),
+      );
+    }
+
+    letGo('the song player', _musicPlayer?.dispose());
     _player?.removeListener(_onTick);
-    unawaited(_player?.dispose());
+    letGo('the video player', _player?.dispose());
     // The editor below has already let go of it by now.
     _controller?.dispose();
+    debugPrint(
+      '[editor] closing: the editor let go after '
+      '${clock.elapsedMilliseconds}ms',
+    );
     super.dispose();
   }
 
@@ -421,39 +443,137 @@ class VideoEditorPageState extends State<VideoEditorPage> {
     );
   }
 
-  Widget _musicButton() {
-    final music = _music;
-    return Material(
-      color: Colors.black.withValues(alpha: 0.55),
-      shape: const StadiumBorder(),
-      child: InkWell(
-        key: ValueKey(music == null ? 'editor_add_music' : 'editor_music'),
-        customBorder: const StadiumBorder(),
-        onTap: music == null ? _chooseMusic : _musicOptions,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.music_note_rounded,
-                color: Colors.white,
-                size: 18,
+  /// The editor's bottom row: its own tools, drawn the way it draws them,
+  /// with Music first, so a song is added where everything else is done to
+  /// the video.
+  ReactiveWidget<Widget> _bottomBar(
+    ProImageEditorState editor,
+    Stream<void> rebuild,
+    Key key,
+  ) {
+    return ReactiveWidget(
+      stream: rebuild,
+      builder: (context) {
+        final c = editor.configs;
+        // Out of the way while a text or emoji on the video is being moved,
+        // as the editor's own row is.
+        if (editor.hasSelectedLayers &&
+            c.layerInteraction.hideToolbarOnInteraction) {
+          return const SizedBox.shrink();
+        }
+        final colour = c.mainEditor.style.bottomBarColor;
+        Widget button(
+          String key,
+          String label,
+          IconData icon,
+          VoidCallback onPressed, {
+          Color? iconColour,
+        }) => FlatIconTextButton(
+          key: ValueKey(key),
+          label: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 72),
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 10, color: colour),
+            ),
+          ),
+          icon: Icon(icon, size: 22, color: iconColour ?? colour),
+          onPressed: onPressed,
+        );
+        final music = _music;
+        final buttons = <Widget>[
+          if (music == null)
+            button(
+              'editor_add_music',
+              'Music',
+              Icons.music_note_rounded,
+              _chooseMusic,
+            )
+          else
+            button(
+              'editor_music',
+              music.track.title,
+              Icons.music_note_rounded,
+              _musicOptions,
+              iconColour: AppTheme.primary,
+            ),
+          for (final tool in VideoEditorPage.tools)
+            switch (tool) {
+              SubEditorMode.cropRotate => button(
+                'open-crop-rotate-editor-btn',
+                c.i18n.cropRotateEditor.bottomNavigationBarText,
+                c.cropRotateEditor.icons.bottomNavBar,
+                editor.openCropRotateEditor,
               ),
-              const SizedBox(width: 6),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 220),
-                child: Text(
-                  music == null ? 'Add music' : music.track.credit.line,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white, fontSize: 13),
+              SubEditorMode.filter => button(
+                'open-filter-editor-btn',
+                c.i18n.filterEditor.bottomNavigationBarText,
+                c.filterEditor.icons.bottomNavBar,
+                editor.openFilterEditor,
+              ),
+              SubEditorMode.tune => button(
+                'open-tune-editor-btn',
+                c.i18n.tuneEditor.bottomNavigationBarText,
+                c.tuneEditor.icons.bottomNavBar,
+                () => editor.openTuneEditor(),
+              ),
+              SubEditorMode.text => button(
+                'open-text-editor-btn',
+                c.i18n.textEditor.bottomNavigationBarText,
+                c.textEditor.icons.bottomNavBar,
+                () => editor.openTextEditor(),
+              ),
+              SubEditorMode.emoji => button(
+                'open-emoji-editor-btn',
+                c.i18n.emojiEditor.bottomNavigationBarText,
+                c.emojiEditor.icons.bottomNavBar,
+                editor.openEmojiEditor,
+              ),
+              SubEditorMode.paint => button(
+                'open-paint-editor-btn',
+                c.i18n.paintEditor.bottomNavigationBarText,
+                c.paintEditor.icons.bottomNavBar,
+                editor.openPaintEditor,
+              ),
+              SubEditorMode.blur => button(
+                'open-blur-editor-btn',
+                c.i18n.blurEditor.bottomNavigationBarText,
+                c.blurEditor.icons.bottomNavBar,
+                editor.openBlurEditor,
+              ),
+              // Not offered here (see VideoEditorPage.tools).
+              SubEditorMode.sticker ||
+              SubEditorMode.audio ||
+              SubEditorMode.videoClips => const SizedBox.shrink(),
+            },
+        ];
+        return mui.Theme(
+          data: editorTheme,
+          child: mui.BottomAppBar(
+            key: key,
+            height: kBottomNavigationBarHeight,
+            color: c.mainEditor.style.bottomBarBackground,
+            padding: EdgeInsets.zero,
+            child: LayoutBuilder(
+              builder: (context, box) => SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minWidth: math.max(0, box.maxWidth - 24),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: buttons,
+                  ),
                 ),
               ),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -640,6 +760,9 @@ class VideoEditorPageState extends State<VideoEditorPage> {
   }
 
   Future<void> _close(EditorMode mode) async {
+    debugPrint(
+      '[editor] the editor closed (${_finished == null ? 'nothing saved' : 'saved'})',
+    );
     var out = _finished;
     _finished = null;
     if (_saveFailed) {
@@ -731,19 +854,7 @@ class VideoEditorPageState extends State<VideoEditorPage> {
       backgroundColor: Colors.black,
       // The editor moves its own things out of the keyboard's way.
       resizeToAvoidBottomInset: false,
-      body: Stack(
-        children: [
-          Positioned.fill(child: _editor(controller, player, facts)),
-          // The Music button, under the editor's top bar, the way the
-          // big apps put "Add sound".
-          Positioned(
-            top: MediaQuery.paddingOf(context).top + 64,
-            left: 0,
-            right: 0,
-            child: Center(child: _musicButton()),
-          ),
-        ],
-      ),
+      body: _editor(controller, player, facts),
     );
   }
 
@@ -756,7 +867,10 @@ class VideoEditorPageState extends State<VideoEditorPage> {
       controller,
       configs: ProImageEditorConfigs(
         theme: editorTheme,
-        mainEditor: const MainEditorConfigs(tools: VideoEditorPage.tools),
+        mainEditor: MainEditorConfigs(
+          tools: VideoEditorPage.tools,
+          widgets: MainEditorWidgets(bottomBar: _bottomBar),
+        ),
         // While Done saves: how far a remake has got, and a way to stop it.
         dialogConfigs: DialogConfigs(
           widgets: DialogWidgets(
@@ -790,6 +904,13 @@ class VideoEditorPageState extends State<VideoEditorPage> {
       callbacks: ProImageEditorCallbacks(
         onCompleteWithParameters: _save,
         onCloseEditor: _close,
+        mainEditorCallbacks: MainEditorCallbacks(
+          onPopInvoked: (didPop, _) => debugPrint(
+            didPop
+                ? '[editor] leaving the editor'
+                : '[editor] back pressed with changes: asking before leaving',
+          ),
+        ),
         videoEditorCallbacks: VideoEditorCallbacks(
           onPlay: () async {
             await player.play();
