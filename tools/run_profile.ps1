@@ -10,7 +10,7 @@
 #   tools\run_profile.bat -NoLogcat             skip the phone-side recording
 #
 # The phone's own log is captured as well, ALWAYS, and folded into the same
-# file at the end — so there is one file to read and one file to send.
+# file at the end - so there is one file to read and one file to send.
 #
 # Anything else you pass is handed straight to "flutter run", so
 # "tools\run_profile.bat -d R58M12345" still works.
@@ -38,7 +38,7 @@ param(
     # WHY IT IS ON BY DEFAULT. "flutter run" only prints for as long as it
     # stays attached to the app it launched. A run arrived with 297 lines in
     # it, ending in the middle of the first video's decoder starting,
-    # followed by "Application finished." — the app stopped being followed
+    # followed by "Application finished." - the app stopped being followed
     # about two seconds in, and everything done after that was on a phone
     # nothing was listening to. The whole session was lost, and nobody knew
     # until the file was opened.
@@ -105,15 +105,65 @@ if (Test-Path -LiteralPath (Join-Path $projectRoot 'firebase_push.json')) {
 $deviceLog = "$LogFile.device.txt"
 $logcatProc = $null
 $wantLogcat = -not $NoLogcat
+
+# Where adb is. If flutter can reach the phone, adb is on this computer:
+# flutter uses it. It is just often not on PATH, and looking only there
+# turned the phone-side recording off on a computer that had adb all along.
+# So look where flutter looks: the Android SDK folder flutter writes into
+# android\local.properties when it builds, then the usual settings and the
+# folder Android Studio installs to.
+function Get-AdbCandidates {
+    $sdks = @()
+    $props = Join-Path $projectRoot 'android\local.properties'
+    if (Test-Path -LiteralPath $props) {
+        foreach ($line in Get-Content -LiteralPath $props) {
+            if ($line -match '^\s*sdk\.dir\s*=\s*(.+?)\s*$') {
+                # The file escapes ':' and '\' with a backslash:
+                # sdk.dir=C\:\\Users\\me\\AppData\\Local\\Android\\Sdk
+                $sdks += ($matches[1] -replace '\\(.)', '$1')
+            }
+        }
+    }
+    $sdks += @($env:ANDROID_HOME, $env:ANDROID_SDK_ROOT)
+    if ($env:LOCALAPPDATA) {
+        $sdks += [System.IO.Path]::Combine($env:LOCALAPPDATA, 'Android', 'Sdk')
+    }
+    foreach ($sdk in $sdks) {
+        # Quotes typed into a Windows setting stay part of its value.
+        if ($sdk) { $sdk = $sdk.Trim().Trim('"') }
+        if ($sdk) {
+            # Path.Combine, not Join-Path: Join-Path throws when the folder
+            # is on a drive this computer does not have, which a copied or
+            # stale local.properties can easily name.
+            [System.IO.Path]::Combine($sdk, 'platform-tools', 'adb.exe')
+            [System.IO.Path]::Combine($sdk, 'platform-tools', 'adb')
+        }
+    }
+}
+
+function Find-Adb {
+    $onPath = Get-Command adb -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+    foreach ($candidate in Get-AdbCandidates) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+    return $null
+}
+
 if ($wantLogcat) {
-    if (-not (Get-Command adb -ErrorAction SilentlyContinue)) {
-        Write-Host "adb was not found on your PATH, so the phone-side recording is off." -ForegroundColor Yellow
-        Write-Host "It ships with Android Studio, in platform-tools."
+    $adb = Find-Adb
+    if (-not $adb) {
+        Write-Host "adb was not found, so the phone-side recording is off. Looked on PATH and in:" -ForegroundColor Yellow
+        foreach ($candidate in Get-AdbCandidates) {
+            Write-Host "  $candidate"
+        }
+        Write-Host "It ships with Android Studio, in the SDK's platform-tools folder."
     } else {
+        Write-Host "Using adb at $adb" -ForegroundColor Cyan
         # -c clears whatever the phone was already holding, so the file
         # starts at this run rather than at some earlier one.
-        & adb logcat -c 2>&1 | Out-Null
-        $logcatProc = Start-Process -FilePath 'adb' `
+        & $adb logcat -c 2>&1 | Out-Null
+        $logcatProc = Start-Process -FilePath $adb `
             -ArgumentList @('logcat', '-v', 'time') `
             -RedirectStandardOutput $deviceLog `
             -NoNewWindow -PassThru
@@ -178,8 +228,8 @@ try {
     # trusted, which is worse than two files. By here the flutter stream
     # has finished, so this is the one safe moment to join them.
     #
-    # The device copy is left in place as well. If this append fails — disk
-    # full, file locked by an editor — the phone's log still exists on its
+    # The device copy is left in place as well. If this append fails - disk
+    # full, file locked by an editor - the phone's log still exists on its
     # own rather than being lost inside a half-written merge.
     if ($wantLogcat -and (Test-Path -LiteralPath $deviceLog)) {
         try {
@@ -197,7 +247,7 @@ try {
             #
             # Tee-Object above wrote this file as UTF-16, and Add-Content on
             # Windows PowerShell 5.1 defaults to ASCII. Mixing the two in
-            # one file produces a garbled log — which the header comment at
+            # one file produces a garbled log - which the header comment at
             # the top of this script already warns about, and which this
             # append walked straight into on the first attempt.
             #
@@ -245,7 +295,8 @@ try {
         # with no numbers in it gets sent off as though it had some.
         Write-Host "NO PLAYBACK STATS IN THIS LOG." -ForegroundColor Yellow
         Write-Host "  The app never got far enough to print one. If you did"
-        Write-Host "  watch videos, the log stopped following the app - re-run"
-        Write-Host "  with -Logcat, which keeps recording regardless."
+        Write-Host "  watch videos, the log stopped following the app. The phone's"
+        Write-Host "  own log, folded in above when adb was found, keeps"
+        Write-Host "  recording regardless."
     }
 }
