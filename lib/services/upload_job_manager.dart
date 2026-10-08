@@ -947,7 +947,18 @@ class UploadJobManager {
   /// For tests: find the jobs file again, in whatever folder the phone's
   /// documents are in now — each test has a folder of its own.
   @visibleForTesting
-  void debugForgetJobsFile() => _persistFile = null;
+  void debugForgetJobsFile() {
+    _persistFile = null;
+    debugResetSaving();
+  }
+
+  /// For tests: start the queue of saves afresh. A save left over from the
+  /// last test can never finish — that test's clock has stopped — and
+  /// without this every save after it, and every post waiting on one,
+  /// would wait for it for ever. Done before every test
+  /// (test/flutter_test_config.dart).
+  @visibleForTesting
+  void debugResetSaving() => _saving = Future<void>.value();
 
   Future<File?> _jobsFile() async {
     if (_persistFile != null) return _persistFile;
@@ -960,7 +971,31 @@ class UploadJobManager {
     }
   }
 
-  Future<void> _persistJobs() async {
+  /// The save in progress, so the next one waits for it.
+  Future<void> _saving = Future<void>.value();
+
+  /// For tests: done when every save asked for so far has landed.
+  @visibleForTesting
+  Future<void> get debugSaved => _saving;
+
+  /// For tests: save the list now, as any change to a post does.
+  @visibleForTesting
+  Future<void> debugSave() => _persistJobs();
+
+  /// Saves the list, after any save already going, so the last state of the
+  /// list is the one on disk.
+  ///
+  /// Most callers do not wait for this, so saves used to overlap. Two
+  /// writes to one file at once can mix: a shorter list written over a
+  /// longer one leaves the end of the longer one behind, the file no
+  /// longer reads, and every unsent post is gone at the next start.
+  Future<void> _persistJobs() {
+    final next = _saving.then((_) => _writeJobs());
+    _saving = next;
+    return next;
+  }
+
+  Future<void> _writeJobs() async {
     final f = await _jobsFile();
     if (f == null) return;
     try {
@@ -969,8 +1004,18 @@ class UploadJobManager {
               j.state.value.stage != UploadJobStage.done && j._hasRetryInfo)
           .map((j) => j._descriptor())
           .toList();
-      await f.writeAsString(json.encode(descriptors), flush: true);
-    } catch (_) {}
+      // Written whole to a file of its own, then put in place in one step:
+      // the app being killed mid-write leaves the last good list, not half
+      // of a new one.
+      final part = File('${f.path}.part');
+      await part.writeAsString(json.encode(descriptors), flush: true);
+      await part.rename(f.path);
+    } catch (e) {
+      debugPrint(
+        '[upload] could not save the unsent posts, so they may not come '
+        'back after the app closes: $e',
+      );
+    }
   }
 
   Future<void> _removePersisted(String jobId) => _persistJobs();
@@ -1047,11 +1092,19 @@ class UploadJobManager {
           metadata: {'count': restored},
         );
       }
-    } catch (_) {
+    } catch (e) {
       // Corrupt persistence file — wipe it rather than fail every boot.
+      // Said out loud: from the outside this looks exactly like having no
+      // unsent posts.
+      debugPrint(
+        '[upload] the saved unsent posts could not be read, so none come '
+        'back: $e',
+      );
       try {
         await f.delete();
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[upload] could not remove the unreadable list: $e');
+      }
     }
   }
 
@@ -1191,6 +1244,7 @@ class UploadJob {
     required UploadJobStage stage,
     ChallengeSubmissionMeta? postedAs,
     double progress = 0,
+    String? creatorId,
   }) {
     final job = UploadJob._(
       id: 'debug_${sourcePath.hashCode}_${stage.name}_${_debugJobs++}',
@@ -1199,6 +1253,7 @@ class UploadJob {
       title: '',
     );
     job._challengeMeta = postedAs;
+    job._creatorId = creatorId;
     job.state.value = UploadJobState(stage: stage, progress: progress);
     return job;
   }

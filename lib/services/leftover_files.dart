@@ -19,6 +19,14 @@ import 'package:myapp/services/upload_job_manager.dart';
 ///   devf_upload_…/     the folder an upload works in, left behind after
 ///   file_picker/…      the picker's copy of a video chosen from the gallery
 ///
+/// and since the editors and the Music button:
+///
+///   devf_edit_…mp4     a video the editor remade, a full copy of it
+///   devf_cut_…mp4      a video the editor only cut shorter
+///   edited_photo_…jpg  a photo the editor changed
+///   post_photo_…jpg    a photo from the gallery, made ready to post
+///   devf_music/…       the songs downloaded to put under a video
+///
 /// So every post left two or three full copies of its video on the phone.
 /// The phone clears this folder itself when it runs low on space, which is
 /// the only reason nobody noticed. Until then it just grows.
@@ -46,18 +54,62 @@ class LeftoverFiles {
   /// (camera_android_camerax, SystemServicesManager.getTempFilePath).
   static final RegExp _cameraRecording = RegExp(r'^REC\d+\.mp4$');
 
+  /// Where the Music button keeps the songs it downloads.
+  static const musicFolder = 'devf_music';
+
+  /// Folders of separate things, each judged on its own. See [_units].
+  static const _lookInside = {'file_picker', musicFolder};
+
   /// Whether a thing called [name], sitting directly in the temporary
   /// folder, is a leftover of ours.
   ///
-  /// `file_picker` is not on this list on purpose. It is a folder of
-  /// separate picks, each in its own sub-folder, and one of them can belong
-  /// to a post that is still waiting — so it is looked inside, not
-  /// judged whole. See [_units].
+  /// `file_picker` and [musicFolder] are not on this list on purpose. Each
+  /// is a folder of separate things, and one pick can belong to a post that
+  /// is still waiting — so they are looked inside, not judged whole. See
+  /// [_units].
   static bool isLeftover(String name, {required bool isFolder}) {
     if (isFolder) return name.startsWith('devf_upload_');
     return name.startsWith('devf_record_') ||
         name.startsWith('devf_trim_') ||
+        name.startsWith('devf_edit_') ||
+        name.startsWith('devf_cut_') ||
+        name.startsWith('edited_photo_') ||
+        name.startsWith('post_photo_') ||
         _cameraRecording.hasMatch(name);
+  }
+
+  /// Delete [paths] — copies an editor made that were not posted — unless
+  /// a post that has not finished still needs one. Returns the bytes freed.
+  ///
+  /// The editors call this as they close, rather than leaving a full copy
+  /// of a remade video to wait for the next start of the app. Only names
+  /// [isLeftover] knows are touched, so a caller that passes the original
+  /// video or photo by mistake still cannot delete it.
+  Future<int> forget(Iterable<String> paths) async {
+    final needed = UploadJobManager.instance.filesStillNeeded;
+    var freed = 0;
+    for (final path in paths) {
+      final name = path.split(Platform.pathSeparator).last;
+      if (needed.contains(path) || !isLeftover(name, isFolder: false)) {
+        continue;
+      }
+      final f = File(path);
+      try {
+        if (!f.existsSync()) continue;
+        final size = f.lengthSync();
+        f.deleteSync();
+        freed += size;
+      } on FileSystemException catch (e) {
+        debugPrint('Free up space: could not delete $path: $e');
+      }
+    }
+    if (freed > 0) {
+      debugPrint(
+        'Free up space: an editor\'s unposted copies freed '
+        '${(freed / (1024 * 1024)).toStringAsFixed(1)} MB',
+      );
+    }
+    return freed;
   }
 
   /// How much the leftovers take up, and how much of that has to stay.
@@ -156,7 +208,7 @@ class LeftoverFiles {
     for (final e in top) {
       final name = e.uri.pathSegments.where((s) => s.isNotEmpty).last;
       final isFolder = e is Directory;
-      if (isFolder && name == 'file_picker') {
+      if (isFolder && _lookInside.contains(name)) {
         try {
           for (final pick in e.listSync()) {
             units.add(_Unit(pick, keep: holdsNeeded(pick)));

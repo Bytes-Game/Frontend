@@ -15,6 +15,7 @@ import 'package:myapp/models/music_track.dart';
 import 'package:myapp/pages/music_picker_page.dart';
 import 'package:myapp/pages/video_trim_page.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/leftover_files.dart';
 import 'package:myapp/services/music_library.dart';
 import 'package:myapp/services/video_edit_engine.dart';
 import 'package:myapp/services/video_edit_plan.dart';
@@ -123,6 +124,19 @@ class VideoEditorPageState extends State<VideoEditorPage> {
   /// a version without the edit after the sound was lost).
   MusicTrack? _finishedMusic;
 
+  /// Every video this editor made (cuts and remakes, each a full copy),
+  /// and the one that was posted. The rest are deleted as it closes,
+  /// rather than waiting for the app's next start (see
+  /// [LeftoverFiles.forget]).
+  final Set<String> _made = {};
+  String? _posted;
+
+  /// [path], if it is a copy this editor made rather than the original.
+  String? _keep(String? path) {
+    if (path != null && path != widget.sourcePath) _made.add(path);
+    return path;
+  }
+
   /// For tests: the editor's own controller, which holds the trim bar and
   /// the sound button.
   @visibleForTesting
@@ -154,6 +168,7 @@ class VideoEditorPageState extends State<VideoEditorPage> {
     }
 
     letGo('the song player', _musicPlayer?.dispose());
+    unawaited(LeftoverFiles.instance.forget(_made.difference({_posted})));
     _player?.removeListener(_onTick);
     letGo('the video player', _player?.dispose());
     // The editor below has already let go of it by now.
@@ -638,7 +653,7 @@ class VideoEditorPageState extends State<VideoEditorPage> {
         case VideoSaveWay.original:
           _finished = widget.sourcePath;
         case VideoSaveWay.cut:
-          _finished = await _cut(plan, facts);
+          _finished = _keep(await _cut(plan, facts));
         case VideoSaveWay.remake:
           final out = await _engine.render(
             pve.VideoRenderData(
@@ -690,7 +705,7 @@ class VideoEditorPageState extends State<VideoEditorPage> {
               bitrate: plan.bitrate,
             ),
           );
-          _finished = out;
+          _finished = _keep(out);
           _finishedMusic = music?.track;
           // It should have sound if the original did and it was left on,
           // or if a song was added.
@@ -785,20 +800,23 @@ class VideoEditorPageState extends State<VideoEditorPage> {
       final plan = _plan;
       final facts = _facts;
       out = plan != null && plan.isTrimmed && facts != null
-          ? await _cut(
-              VideoSavePlan(
-                way: VideoSaveWay.cut,
-                start: plan.start,
-                end: plan.end,
+          ? _keep(
+              await _cut(
+                VideoSavePlan(
+                  way: VideoSaveWay.cut,
+                  start: plan.start,
+                  end: plan.end,
+                ),
+                facts,
               ),
-              facts,
-            )
+            )!
           : widget.sourcePath;
       // Without the edit, so without the song too.
       _finishedMusic = null;
       if (!mounted) return;
     }
     final posted = await widget.onDone(context, out, _finishedMusic);
+    if (posted) _posted = out;
     if (posted && mounted) Navigator.of(context).pop(true);
   }
 

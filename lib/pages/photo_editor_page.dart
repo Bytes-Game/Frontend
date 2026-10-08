@@ -9,6 +9,7 @@ import 'package:pro_image_editor/pro_image_editor.dart';
 import 'package:myapp/config/editor_setup.dart';
 import 'package:myapp/models/music_track.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/leftover_files.dart';
 
 /// The photo editor: crop and rotate, filters, brightness and colour, text,
 /// emoji, drawing and blur — then on to posting.
@@ -28,6 +29,7 @@ import 'package:myapp/services/event_tracker.dart';
 /// posting lands here again, with the edits still there.
 class PhotoEditorPage extends StatefulWidget {
   final String sourcePath;
+
   /// The next step, with the photo. (A photo has no song: [MusicTrack] is
   /// always null here; the type is the one the video editor shares.)
   final Future<bool> Function(
@@ -66,6 +68,17 @@ class _PhotoEditorPageState extends State<PhotoEditorPage> {
   /// Saving failed: the editor stays open rather than closing as cancelled.
   bool _saveFailed = false;
 
+  /// Every photo this editor wrote, and the one that was posted. The rest
+  /// are deleted as it closes (see [LeftoverFiles.forget]).
+  final Set<String> _made = {};
+  String? _posted;
+
+  @override
+  void dispose() {
+    unawaited(LeftoverFiles.instance.forget(_made.difference({_posted})));
+    super.dispose();
+  }
+
   late final ProImageEditorConfigs _configs = ProImageEditorConfigs(
     theme: editorTheme,
     mainEditor: const MainEditorConfigs(tools: PhotoEditorPage.tools),
@@ -79,7 +92,9 @@ class _PhotoEditorPageState extends State<PhotoEditorPage> {
   Future<void> _complete(Uint8List bytes) async {
     try {
       if (bytes.isEmpty) throw StateError('the editor made an empty photo');
-      _finished = await keepEditedPhoto(widget.sourcePath, bytes);
+      final kept = await keepEditedPhoto(widget.sourcePath, bytes);
+      if (kept != widget.sourcePath) _made.add(kept);
+      _finished = kept;
     } catch (e) {
       debugPrint('[editor] saving the photo failed: $e');
       EventTracker.instance.trackError(
@@ -113,6 +128,7 @@ class _PhotoEditorPageState extends State<PhotoEditorPage> {
       return;
     }
     final posted = await widget.onDone(context, finished, null);
+    if (posted) _posted = finished;
     if (posted && mounted) Navigator.of(context).pop(true);
   }
 

@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'package:myapp/models/music_track.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/leftover_files.dart';
 
 /// One page of the picker's list.
 class MusicSearchResult {
@@ -57,6 +58,15 @@ class ServerMusicLibrary implements MusicLibrary {
   /// The most a song may weigh. A three-minute MP3 is about 5 MB.
   static const maxBytes = 40 * 1024 * 1024;
 
+  /// The folder the songs folder goes in: the app's temporary one. A seam
+  /// for tests.
+  @visibleForTesting
+  static Future<Directory> Function() folder = getTemporaryDirectory;
+
+  /// What fetches a song. A seam for tests.
+  @visibleForTesting
+  static http.Client Function() client = http.Client.new;
+
   @override
   Future<MusicSearchResult> search(String query, {int page = 1}) async {
     final j = await ApiService.searchMusic(query, page: page);
@@ -77,27 +87,64 @@ class ServerMusicLibrary implements MusicLibrary {
   Future<MusicTrack> pick(MusicTrack track) async =>
       MusicTrack.fromJson(await ApiService.pickMusic(track.sourceId));
 
+  /// Written to the phone a piece at a time as it arrives, rather than
+  /// held whole in memory first: a song can be 40 MB, and holding that much
+  /// at once can make a phone stutter. Kept in [LeftoverFiles.musicFolder],
+  /// which the app empties as it starts and "Free up space" empties too.
   @override
   Future<String> download(MusicTrack track) async {
-    final dir = Directory('${(await getTemporaryDirectory()).path}/music');
+    final dir = Directory(
+      '${(await folder()).path}/${LeftoverFiles.musicFolder}',
+    );
     await dir.create(recursive: true);
     final safe = track.sourceId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
     final file = File('${dir.path}/$safe.mp3');
-    // Picked before, on this phone: the same file again.
+    // Picked before, since the app started: the same file again.
     if (await file.exists() && await file.length() > 0) return file.path;
-    final res = await http
-        .get(Uri.parse(track.audioUrl))
-        .timeout(const Duration(seconds: 60));
-    if (res.statusCode != 200) {
-      throw HttpException('the song answered ${res.statusCode}');
-    }
-    if (res.bodyBytes.isEmpty || res.bodyBytes.length > maxBytes) {
-      throw HttpException('the song is ${res.bodyBytes.length} bytes');
-    }
     final part = File('${file.path}.part');
-    await part.writeAsBytes(res.bodyBytes, flush: true);
-    await part.rename(file.path);
-    return file.path;
+    final http.Client c = client();
+    IOSink? sink;
+    try {
+      final res = await c
+          .send(http.Request('GET', Uri.parse(track.audioUrl)))
+          .timeout(const Duration(seconds: 60));
+      if (res.statusCode != 200) {
+        throw HttpException('the song answered ${res.statusCode}');
+      }
+      final said = res.contentLength;
+      if (said != null && said > maxBytes) {
+        throw HttpException('the song is $said bytes');
+      }
+      sink = part.openWrite();
+      var got = 0;
+      // Gives up when nothing arrives for a minute, not after a minute in
+      // all: a slow connection still gets a long song.
+      await for (final piece in res.stream.timeout(
+        const Duration(seconds: 60),
+      )) {
+        got += piece.length;
+        if (got > maxBytes) {
+          throw HttpException('the song is over $maxBytes bytes');
+        }
+        sink.add(piece);
+      }
+      await sink.close();
+      sink = null;
+      if (got == 0) throw const HttpException('the song is empty');
+      await part.rename(file.path);
+      return file.path;
+    } catch (e) {
+      // Nothing half-written is left behind to be mistaken for a song.
+      try {
+        await sink?.close();
+        if (await part.exists()) await part.delete();
+      } catch (cleanup) {
+        debugPrint('[music] could not remove a half-downloaded song: $cleanup');
+      }
+      rethrow;
+    } finally {
+      c.close();
+    }
   }
 }
 

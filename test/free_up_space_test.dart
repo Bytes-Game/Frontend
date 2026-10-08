@@ -291,6 +291,70 @@ void main() {
       expect(recording.existsSync(), isFalse);
     });
 
+    test('finds what the editors and the Music button leave behind',
+        () async {
+      final ours = [
+        put(tempDir, 'devf_edit_1759000000000.mp4', 10),
+        put(tempDir, 'devf_cut_1759000000000.mp4', 20),
+        put(tempDir, 'edited_photo_1759000000000.jpg', 30),
+        put(tempDir, 'post_photo_1759000000000.jpg', 40),
+        put(tempDir, 'devf_music/12345.mp3', 50),
+        put(tempDir, 'devf_music/67890.mp3', 60),
+      ];
+      final scan = await LeftoverFiles.instance.scan();
+      expect(scan.bytes, 1500 + 10 + 20 + 30 + 40 + 50 + 60);
+      await LeftoverFiles.instance.clear();
+      for (final f in ours) {
+        expect(f.existsSync(), isFalse, reason: '${f.path} is a leftover');
+      }
+      for (final f in notOurs) {
+        expect(f.existsSync(), isTrue, reason: '${f.path} is not ours');
+      }
+    });
+
+    test('an edited video a post is still waiting on is kept', () async {
+      final edited = put(tempDir, 'devf_edit_1.mp4', 10);
+      UploadJobManager.instance.activeJobs.value = [
+        UploadJob.debug(sourcePath: edited.path, stage: UploadJobStage.failed),
+      ];
+      await LeftoverFiles.instance.clear();
+      expect(edited.existsSync(), isTrue);
+    });
+
+    group('an editor tidying up as it closes', () {
+      test('deletes its copies, but not one a post still needs', () async {
+        final unposted = put(tempDir, 'devf_edit_1.mp4', 10);
+        final cut = put(tempDir, 'devf_cut_2.mp4', 20);
+        final waiting = put(tempDir, 'devf_edit_3.mp4', 30);
+        UploadJobManager.instance.activeJobs.value = [
+          UploadJob.debug(
+            sourcePath: waiting.path,
+            stage: UploadJobStage.uploading,
+          ),
+        ];
+        final freed = await LeftoverFiles.instance.forget([
+          unposted.path,
+          cut.path,
+          waiting.path,
+        ]);
+        expect(freed, 30);
+        expect(unposted.existsSync(), isFalse);
+        expect(cut.existsSync(), isFalse);
+        expect(waiting.existsSync(), isTrue);
+      });
+
+      test('never deletes something that is not an editor copy', () async {
+        // The phone's own video, as the editor was given it.
+        final original = put(tempDir, 'VID_20261008_101500.mp4', 10);
+        final freed = await LeftoverFiles.instance.forget([
+          original.path,
+          '${tempDir.path}/devf_edit_gone.mp4',
+        ]);
+        expect(freed, 0);
+        expect(original.existsSync(), isTrue);
+      });
+    });
+
     test("a finished post's copies are cleared", () async {
       UploadJobManager.instance.activeJobs.value = [
         UploadJob.debug(sourcePath: trimmed.path, stage: UploadJobStage.done),

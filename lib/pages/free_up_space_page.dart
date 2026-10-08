@@ -120,9 +120,10 @@ class _FreeUpSpacePageState extends State<FreeUpSpacePage>
             _row(
               key: const Key('free_up_space_leftovers'),
               icon: Icons.video_file_outlined,
-              title: 'Leftover recordings',
+              title: 'Leftover copies',
               subtitle:
-                  'Extra copies left behind after recording or posting.'
+                  'Extra copies left behind after recording, editing or '
+                  'posting, and songs downloaded for your videos.'
                   '${kept > 0 ? ' ${formatBytes(kept)} is kept for a post '
                             'that has not finished.' : ''}',
               bytes: left?.freeable,

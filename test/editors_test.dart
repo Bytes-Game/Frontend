@@ -331,6 +331,33 @@ void main() {
       await close(t);
     });
 
+    testWidgets('an edited photo that was not posted is deleted as the '
+        'editor closes; the original stays', (t) async {
+      await open(t, PhotoEditorPage(sourcePath: photo.path, onDone: next));
+      await addText(t, 'hello');
+      postAnswers = [false];
+      await done(t);
+      final edited = File(handed.single);
+      expect(edited.existsSync(), isTrue, reason: 'there while it is used');
+      await t.tap(find.byTooltip('Cancel'));
+      await settle(t);
+      await t.tap(find.text('OK'));
+      await settle(t);
+      expect(find.byType(PhotoEditorPage), findsNothing);
+      expect(edited.existsSync(), isFalse, reason: 'nothing needs it now');
+      expect(photo.existsSync(), isTrue, reason: 'never the original');
+      await close(t);
+    });
+
+    testWidgets('a posted photo is kept for its upload', (t) async {
+      await open(t, PhotoEditorPage(sourcePath: photo.path, onDone: next));
+      await addText(t, 'hello');
+      await done(t);
+      expect(find.byType(PhotoEditorPage), findsNothing, reason: 'posted');
+      await close(t);
+      expect(File(handed.single).existsSync(), isTrue);
+    });
+
     testWidgets('saving failed: it says so, and the editor stays open', (
       t,
     ) async {
@@ -569,6 +596,37 @@ void main() {
       );
       expect(find.byKey(const ValueKey('edit_lost_sound')), findsNothing);
       await close(t);
+    });
+
+    testWidgets('remakes that were not posted are deleted as the editor '
+        'closes; the original stays', (t) async {
+      await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+      await addText(t, 'hello');
+      postAnswers = [false, false];
+      await done(t);
+      await done(t);
+      final made = [for (final p in handed) File(p)];
+      expect(made, hasLength(2), reason: 'saved twice, two copies');
+      expect(made.every((f) => f.existsSync()), isTrue);
+      await t.tap(find.byTooltip('Cancel'));
+      await settle(t);
+      await t.tap(find.text('OK'));
+      await settle(t);
+      expect(find.byType(VideoEditorPage), findsNothing);
+      for (final f in made) {
+        expect(f.existsSync(), isFalse, reason: '${f.path} is not needed');
+      }
+      expect(video.existsSync(), isTrue, reason: 'never the original');
+      await close(t);
+    });
+
+    testWidgets('a posted remake is kept for its upload', (t) async {
+      await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+      state(t).controller!.setMuteState(true);
+      await done(t);
+      expect(find.byType(VideoEditorPage), findsNothing, reason: 'posted');
+      await close(t);
+      expect(File(handed.single).existsSync(), isTrue);
     });
 
     testWidgets('a 4K video is remade no bigger than 1080p, at no more than '

@@ -295,6 +295,98 @@ void main() {
     });
   });
 
+  group('downloading a song', () {
+    late List<String> asked;
+    late Stream<List<int>> Function() body;
+    int? said;
+    var status = 200;
+    final realFolder = ServerMusicLibrary.folder;
+    final realClient = ServerMusicLibrary.client;
+
+    setUp(() {
+      asked = [];
+      body = () => Stream.value(List.filled(3000, 7));
+      said = null;
+      status = 200;
+      ServerMusicLibrary.folder = () async => dir;
+      ServerMusicLibrary.client = () => MockClient.streaming((req, _) async {
+        asked.add(req.url.toString());
+        return http.StreamedResponse(body(), status, contentLength: said);
+      });
+    });
+
+    tearDown(() {
+      ServerMusicLibrary.folder = realFolder;
+      ServerMusicLibrary.client = realClient;
+    });
+
+    List<String> songsFolder() => [
+      for (final f in Directory('${dir.path}/devf_music').listSync())
+        f.uri.pathSegments.last,
+    ];
+
+    test('it goes in the folder the app tidies, whole, and is used again '
+        'rather than fetched twice', () async {
+      final track = song('a');
+      final path = await ServerMusicLibrary().download(track);
+      expect(path, '${dir.path}/devf_music/a.mp3');
+      expect(File(path).lengthSync(), 3000);
+      expect(await ServerMusicLibrary().download(track), path);
+      expect(asked, [track.audioUrl], reason: 'fetched once');
+    });
+
+    test('one that keeps coming past 40 MB is stopped, and nothing is '
+        'left', () async {
+      var sent = 0;
+      body = () async* {
+        while (true) {
+          sent += 1024 * 1024;
+          yield List.filled(1024 * 1024, 1);
+        }
+      };
+      await expectLater(
+        ServerMusicLibrary().download(song('big')),
+        throwsA(isA<HttpException>()),
+      );
+      expect(
+        sent,
+        lessThanOrEqualTo(ServerMusicLibrary.maxBytes + 2 * 1024 * 1024),
+        reason: 'it stopped reading, not read it all and then refused',
+      );
+      expect(songsFolder(), isEmpty, reason: 'no half song left behind');
+    });
+
+    test('one that says it is over 40 MB is not fetched at all', () async {
+      said = ServerMusicLibrary.maxBytes + 1;
+      var read = false;
+      body = () async* {
+        read = true;
+        yield [1];
+      };
+      await expectLater(
+        ServerMusicLibrary().download(song('big')),
+        throwsA(isA<HttpException>()),
+      );
+      expect(read, isFalse);
+      expect(songsFolder(), isEmpty);
+    });
+
+    test('a refusal or an empty answer leaves nothing', () async {
+      status = 404;
+      await expectLater(
+        ServerMusicLibrary().download(song('gone')),
+        throwsA(isA<HttpException>()),
+      );
+      status = 200;
+      body = () => const Stream.empty();
+      await expectLater(
+        ServerMusicLibrary().download(song('empty')),
+        throwsA(isA<HttpException>()),
+      );
+      expect(songsFolder(), isEmpty);
+    });
+  });
+
   group('the video editor\'s Music button', () {
     late File video;
     final handed = <String>[];
@@ -323,9 +415,22 @@ void main() {
       expect(find.byType(MusicPickerPage), findsNothing);
     }
 
+    /// Taps Done and waits until the save has an outcome — the video handed
+    /// on, or the lost-sound question asked — as in editors_test.dart.
     Future<void> done(WidgetTester t) async {
+      final before = handed.length;
       await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
-      await settle(t, 14);
+      for (var i = 0; i < 300; i++) {
+        if (handed.length > before ||
+            find
+                .byKey(const ValueKey('edit_lost_sound'))
+                .evaluate()
+                .isNotEmpty) {
+          break;
+        }
+        await settle(t, 1);
+      }
+      await settle(t, 6);
     }
 
     testWidgets('a song is mixed in at its volume, the video remade at its '
@@ -667,7 +772,12 @@ void main() {
       await t.tap(find.byKey(const ValueKey('music_use_a')));
       await settle(t);
       await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
-      await settle(t, 14);
+      // Until the details page is up: saving the edit takes real time.
+      for (var i = 0; i < 300; i++) {
+        if (find.byType(ChallengeMetadataPage).evaluate().isNotEmpty) break;
+        await settle(t, 1);
+      }
+      await settle(t, 4);
 
       final details = t.widget<ChallengeMetadataPage>(
         find.byType(ChallengeMetadataPage),
@@ -678,12 +788,18 @@ void main() {
 
       await t.enterText(find.byType(TextFormField).at(1), 'to this song');
       await t.tap(find.text('Post Challenge'));
-      await settle(t, 20);
-      final posts = [
+      List<Map<String, dynamic>> sent() => [
         for (final (m, p, body) in asked)
           if (m == 'POST' && p == '/api/v1/challenges')
             json.decode(body) as Map<String, dynamic>,
       ];
+      // Until it is posted: the upload goes through several steps, each
+      // taking real time, and a busy machine takes longer over them.
+      for (var i = 0; i < 300 && sent().isEmpty; i++) {
+        await settle(t, 1);
+      }
+      await settle(t, 4);
+      final posts = sent();
       expect(posts, hasLength(1), reason: asked.map((a) => a.$2).join(', '));
       expect(posts.single['musicTrackId'], library.idFor(song('a')));
       for (final j in [...UploadJobManager.instance.activeJobs.value]) {
