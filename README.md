@@ -25,7 +25,8 @@ genuinely different backend:
 
 ## Running it
 
-You need the Flutter SDK (Dart SDK 3.11 or newer).
+You need Flutter 3.47 or newer (`flutter upgrade`). On 3.44 a Flutter bug
+breaks taps while a page is closing, so `pubspec.yaml` asks for 3.47.
 
 ```bash
 flutter pub get
@@ -37,6 +38,37 @@ tier which sleeps after about 15 minutes of inactivity, so the first request
 after a quiet period takes 30–60 seconds while the server wakes up. The app
 expects this — a login that times out says "could not reach the server", not
 "wrong password".
+
+### Building it to share
+
+```bash
+flutter build appbundle             # for the Play Store
+flutter build apk --split-per-abi   # to send the app file directly
+```
+
+Build it one of these two ways. A single app file holds the code for every
+kind of phone, and a phone only ever uses one kind, so everyone would
+download what their phone throws away. Measured on this app (release
+builds, October 2026):
+
+| app file | size | for |
+|---|---|---|
+| `app-arm64-v8a-release.apk` | 42.2 MB | almost every phone in use |
+| `app-armeabi-v7a-release.apk` | 34.3 MB | older 32-bit phones |
+| `app-x86_64-release.apk` | 47.9 MB | emulators, some Chromebooks |
+| `app-release.apk`, not split, built for 64-bit phones only | 67.6 MB | 24 MB of it is for other phones |
+
+A plain `flutter build apk` puts every kind of phone's whole app in one
+file, so it is bigger still. The Play Store does the split by itself from
+the app bundle.
+
+Where a 64-bit phone's 42 MB goes: video calls (WebRTC) 12.3 MB, the app's
+own code 12.2 MB, Flutter itself 11.7 MB, Android code 3.1 MB, crash
+reporting 1.2 MB, pictures and the rest about 1.7 MB. The photo and video
+editors and the Music button are 3.7 MB of that.
+
+To see it again: `flutter build apk --release --analyze-size
+--target-platform android-arm64`.
 
 ### Pointing at a local backend
 

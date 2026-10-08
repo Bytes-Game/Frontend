@@ -107,7 +107,9 @@ class FakeVideoEngine implements VideoEditEngine {
   }
 
   String _file(String kind) {
-    final f = File('${dir.path}/${kind}_${_n++}.mp4')
+    // Named as the phone's engine names them (devf_cut_…, devf_edit_…):
+    // the app's clean-up knows its own copies by these names.
+    final f = File('${dir.path}/devf_${kind}_${_n++}.mp4')
       ..writeAsBytesSync(List.filled(1024, 3));
     _made.add(f.path);
     return f.path;

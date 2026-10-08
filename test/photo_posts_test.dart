@@ -347,6 +347,23 @@ Future<void> frames(WidgetTester t, [int n = 8]) async {
 /// Lets real file reading and the upload finish. Reading a file goes back
 /// and forth between the real world and the test's clock, so it takes
 /// turns.
+/// Lets the list of unsent posts finish saving. The save goes through the
+/// phone's folders, which only answer while the test's clock moves, so the
+/// clock is moved in small steps until it has landed.
+Future<void> letItSave(WidgetTester t) async {
+  var saved = false;
+  unawaited(UploadJobManager.instance.debugSaved.then((_) => saved = true));
+  // Up to about 10 seconds of the machine's own time: a busy machine is
+  // slow to write even a small file. A save that never lands still fails.
+  for (var i = 0; i < 2000 && !saved; i++) {
+    await t.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 5)),
+    );
+    await t.pump();
+  }
+  expect(saved, isTrue, reason: 'the unsent posts were saved');
+}
+
 Future<void> letItUpload(WidgetTester t) async {
   for (var i = 0; i < 12; i++) {
     await t.runAsync(
@@ -868,6 +885,8 @@ void main() {
       await letItUpload(t);
       expect(first.state.value.stage, UploadJobStage.failed);
 
+      // Its save has landed: the app closing now loses nothing.
+      await letItSave(t);
       jobs.dismiss(first.id);
       await t.runAsync(jobs.restorePersisted);
       final restored = jobs.activeJobs.value.single;
@@ -915,7 +934,9 @@ void main() {
       await letItUpload(t);
       expect(first.state.value.stage, UploadJobStage.failed);
 
-      // The app is closed and opened again: the job comes back from disk.
+      // The app is closed and opened again, once its save has landed: the
+      // job comes back from disk.
+      await letItSave(t);
       jobs.dismiss(first.id);
       await t.runAsync(jobs.restorePersisted);
       final restored = jobs.activeJobs.value.single;
