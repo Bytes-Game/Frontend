@@ -10,7 +10,10 @@
 #   tools\run_profile.bat -NoLogcat             skip the phone-side recording
 #
 # The phone's own log is captured as well, ALWAYS, and folded into the same
-# file at the end - so there is one file to read and one file to send.
+# file at the end - so there is one file to read and one file to send. The
+# phone repeats itself a lot, so the folded copy keeps every line the app
+# printed and counts the phone's repeats instead of copying them (see
+# phone_log.ps1); the phone's full log stays next to it, uncut.
 #
 # Anything else you pass is handed straight to "flutter run", so
 # "tools\run_profile.bat -d R58M12345" still works.
@@ -75,6 +78,10 @@ $previousOutputEncoding = [Console]::OutputEncoding
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $projectRoot
 
+# Shrinking the phone's log, and reporting what was saved. Shared with
+# shrink_phone_log.ps1.
+. (Join-Path $PSScriptRoot 'phone_log.ps1')
+
 if (-not (Get-Command flutter -ErrorAction SilentlyContinue)) {
     Write-Host "flutter was not found on your PATH." -ForegroundColor Red
     Write-Host "Open a new terminal, or reinstall Flutter and tick 'Add to PATH'."
@@ -89,6 +96,23 @@ if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
     Write-Host "$logDir does not exist. Writing to $fallback instead." -ForegroundColor Yellow
     $LogFile = $fallback
 }
+# A full path: the file is written by .NET, which would read a short path
+# from the folder PowerShell started in rather than this one.
+$LogFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($LogFile)
+
+# Logs used to be written in UTF-16. Adding UTF-8 to the end of one of
+# those garbles everything after the join, so an old one is moved aside.
+if ($Append -and (Test-Path -LiteralPath $LogFile -PathType Leaf)) {
+    $head = New-Object byte[] 2
+    $stream = [System.IO.File]::OpenRead($LogFile)
+    $read = $stream.Read($head, 0, 2)
+    $stream.Dispose()
+    if ($read -eq 2 -and $head[0] -eq 0xFF -and $head[1] -eq 0xFE) {
+        $older = "$LogFile.old.txt"
+        Move-Item -LiteralPath $LogFile -Destination $older -Force
+        Write-Host "The old log is in the old format, so it was moved to $older." -ForegroundColor Yellow
+    }
+}
 
 $flutterArgs = @('run', "--$Mode") + $Extra
 
@@ -97,6 +121,33 @@ $flutterArgs = @('run', "--$Mode") + $Extra
 # firebase_push.json next to pubspec.yaml and are passed in when it is there.
 if (Test-Path -LiteralPath (Join-Path $projectRoot 'firebase_push.json')) {
     $flutterArgs += '--dart-define-from-file=firebase_push.json'
+}
+
+# One writer, in UTF-8, for everything the run prints.
+#
+# This used to be Tee-Object, which on Windows PowerShell 5.1 writes UTF-16:
+# two bytes for every letter. With the phone's log folded in, a run came to
+# a couple of hundred megabytes - too big to open comfortably and far too
+# big to attach, so it was reported as "logs not saved". UTF-8 is half the
+# size, opens anywhere, and is what adb writes the phone's log in.
+#
+# AutoFlush, so every line is on disk as it arrives: a run stopped with
+# Ctrl+C, or a window closed, still leaves everything up to that point.
+function Open-LogWriter([string]$Path, [bool]$Add) {
+    $writer = New-Object System.IO.StreamWriter($Path, $Add, (New-Object System.Text.UTF8Encoding($true)))
+    $writer.AutoFlush = $true
+    return $writer
+}
+try {
+    $log = Open-LogWriter $LogFile ([bool]$Append)
+} catch {
+    # Most often: the old log is open in another program that holds on to
+    # it. Better a log somewhere else than no log.
+    $fallback = Join-Path $projectRoot 'logs.txt'
+    Write-Host "Could not write to $LogFile ($($_.Exception.Message))." -ForegroundColor Yellow
+    Write-Host "Writing to $fallback instead." -ForegroundColor Yellow
+    $LogFile = $fallback
+    $log = Open-LogWriter $LogFile ([bool]$Append)
 }
 
 # Start the phone-side recording before the app launches, so nothing from
@@ -171,20 +222,16 @@ if ($wantLogcat) {
     }
 }
 
-# The header goes through Tee-Object as well, rather than Out-File, so the
-# whole file is written by one cmdlet in one encoding. Windows PowerShell
-# defaults Out-File to UTF-8 only when told to, and Tee-Object to UTF-16;
-# mixing the two in one file produces a garbled log.
-$teeStart = @{ FilePath = $LogFile }
-if ($Append) { $teeStart['Append'] = $true }
-
-@(
+foreach ($line in @(
     '',
     '=============================================================',
     "flutter $($flutterArgs -join ' ')",
     "started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
     '============================================================='
-) | Tee-Object @teeStart
+)) {
+    $log.WriteLine($line)
+    Write-Host $line
+}
 
 Write-Host "Logging to $LogFile" -ForegroundColor Cyan
 
@@ -192,8 +239,8 @@ try {
     # 2>&1 folds the error stream in so warnings are captured too. Native
     # commands surface those as ErrorRecord objects, which the file writer
     # would expand into several lines of PowerShell diagnostics, so flatten
-    # every item to its own text first. Tee-Object then writes to the file
-    # and passes the line through to the screen.
+    # every item to its own text first, then write it to the file and pass
+    # it on to the screen.
     #
     # Read the message off the exception rather than calling ToString() on
     # the record: a blank line on stderr produces a record with an empty
@@ -203,14 +250,16 @@ try {
     & flutter @flutterArgs 2>&1 |
         ForEach-Object {
             if ($_ -is [System.Management.Automation.ErrorRecord]) {
-                $_.Exception.Message
+                $line = $_.Exception.Message
             } else {
-                "$_"
+                $line = "$_"
             }
-        } |
-        Tee-Object -FilePath $LogFile -Append
+            $log.WriteLine($line)
+            $line
+        }
 } finally {
     [Console]::OutputEncoding = $previousOutputEncoding
+    $log.Dispose()
 
     if ($logcatProc -and -not $logcatProc.HasExited) {
         Stop-Process -Id $logcatProc.Id -Force -ErrorAction SilentlyContinue
@@ -228,47 +277,39 @@ try {
     # trusted, which is worse than two files. By here the flutter stream
     # has finished, so this is the one safe moment to join them.
     #
-    # The device copy is left in place as well. If this append fails - disk
-    # full, file locked by an editor - the phone's log still exists on its
-    # own rather than being lost inside a half-written merge.
+    # Shrunk on the way in: every line the app printed and every crash or
+    # not-responding line is kept, and the phone's repeats are counted
+    # instead of copied (phone_log.ps1 has the details). Copying all of it
+    # once made a file nobody could open or send.
+    #
+    # The device copy is left in place, uncut. If this fails - disk full,
+    # file locked by an editor - the phone's log still exists on its own
+    # rather than being lost inside a half-written merge.
+    $found = $null
     if ($wantLogcat -and (Test-Path -LiteralPath $deviceLog)) {
+        Write-Host ""
+        Write-Host "Folding the phone's log in..." -ForegroundColor Cyan
         try {
-            $deviceLines = (Get-Content -LiteralPath $deviceLog | Measure-Object -Line).Lines
-            @(
-                '',
-                '=============================================================',
-                "PHONE LOG (adb logcat) - $deviceLines lines",
-                'Everything below is from the phone itself, so it covers any',
-                'stretch where flutter run stopped following the app.',
-                '============================================================='
-            ) | Add-Content -LiteralPath $LogFile -Encoding Unicode
-
-            # -Encoding Unicode, NOT the default.
-            #
-            # Tee-Object above wrote this file as UTF-16, and Add-Content on
-            # Windows PowerShell 5.1 defaults to ASCII. Mixing the two in
-            # one file produces a garbled log - which the header comment at
-            # the top of this script already warns about, and which this
-            # append walked straight into on the first attempt.
-            #
-            # -ReadCount batches the lines instead of sending them through
-            # the pipeline one at a time. A phone log is hundreds of
-            # thousands of lines, and one-at-a-time takes minutes.
-            Get-Content -LiteralPath $deviceLog -ReadCount 2000 |
-                ForEach-Object { Add-Content -LiteralPath $LogFile -Value $_ -Encoding Unicode }
-            Write-Host "Phone log ($deviceLines lines) folded into $LogFile" -ForegroundColor Cyan
+            $found = Add-PhoneLog -PhoneLog $deviceLog -Into $LogFile -Append $true -ProjectRoot $projectRoot
+            Write-Host "Phone log ($(Format-Count $found.Lines) lines) folded into $LogFile" -ForegroundColor Cyan
             Write-Host "  (also kept on its own at $deviceLog)"
         } catch {
             # Say so loudly. A silent failure here means sending a log that
             # is missing exactly the part that was added to stop logs being
             # missing.
-            Write-Host "COULD NOT FOLD THE PHONE LOG IN: $_" -ForegroundColor Yellow
+            Write-Host "COULD NOT FOLD THE PHONE LOG IN: $($_.Exception.Message)" -ForegroundColor Yellow
             Write-Host "  Send BOTH files: $LogFile and $deviceLog"
+            Write-Host "  The phone's one is big: zip it first (right-click, Send to > Compressed (zipped) folder)."
         }
     }
 
+    # What is really on disk, read back - not a message printed whatever
+    # happened. "Full log saved" used to be said about a file nobody could
+    # open.
     Write-Host ""
-    Write-Host "Full log saved to $LogFile" -ForegroundColor Cyan
+    Show-SavedFile $LogFile
+    if ($found) { Show-PhoneLogFindings $found $deviceLog }
+    Write-Host ""
 
     # The playback measurement lives on one line near the end of the run.
     # Pull it back out so it does not have to be hunted for in the file.

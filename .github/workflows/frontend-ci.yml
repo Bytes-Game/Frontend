@@ -3,18 +3,24 @@ name: frontend-ci
 # Flutter analyze + test on every push touching the app. Note: devb is a
 # bare gitlink in this repo (backend source lives in the gobackend repo,
 # which has its own CI) — nothing here may depend on devb contents.
+#
+# tools/** too: test/phone_log_tools_test.dart runs the scripts in there
+# (with the PowerShell 7 every runner has), so a change to one of them
+# alone has to run the tests.
 
 on:
   push:
     paths:
       - 'lib/**'
       - 'test/**'
+      - 'tools/**'
       - 'pubspec.yaml'
       - '.github/workflows/frontend-ci.yml'
   pull_request:
     paths:
       - 'lib/**'
       - 'test/**'
+      - 'tools/**'
       - 'pubspec.yaml'
   workflow_dispatch: {}
 

@@ -19,17 +19,27 @@
 // So it is on by default, and folded into the main log at the end, because
 // being asked for two files is its own way of losing one.
 //
-// These are source checks. The script is PowerShell on Windows and cannot
-// be run from here, but every property below is one that silently produces
-// a BROKEN OR MISSING LOG rather than an error — which is the class of
-// fault this whole file exists to stop.
+// These are source checks: they cover how Windows PowerShell 5.1 behaves,
+// which cannot run here. test/phone_log_tools_test.dart RUNS the scripts
+// with PowerShell 7. Every property below is one that silently produces a
+// BROKEN OR MISSING LOG rather than an error — which is the class of fault
+// this whole file exists to stop.
 
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
+/// The lines that are commands, not comments. A check that can be satisfied
+/// by the comment explaining a trap checks nothing.
+List<String> _commands(String src) => src
+    .split('\n')
+    .map((l) => l.trim())
+    .where((l) => l.isNotEmpty && !l.startsWith('#'))
+    .toList();
+
 void main() {
   final src = File('tools/run_profile.ps1').readAsStringSync();
+  final shared = File('tools/phone_log.ps1').readAsStringSync();
 
   group('the phone is recorded without being asked', () {
     test('the switch turns it OFF, it does not turn it on', () {
@@ -62,43 +72,39 @@ void main() {
               'last lines of the run are cut off');
     });
 
-    test('it writes in the SAME encoding the rest of the file uses', () {
-      // THE ONE THAT BIT ON THE FIRST ATTEMPT. Tee-Object writes UTF-16 on
-      // Windows PowerShell 5.1 and Add-Content defaults to ASCII. Mixing
-      // them in one file produces a garbled log — a warning that is
-      // already written at the top of this very script.
-      // Real commands only. A first version of this matched the COMMENT
-      // that explains the trap, and failed on correct code — a check that
-      // cries wolf gets deleted, and then the trap is unguarded.
-      final commands = src
-          .split('\n')
-          .map((l) => l.trim())
-          .where((l) => !l.startsWith('#'))
-          .where((l) => l.contains('Add-Content'));
-      expect(commands, isNotEmpty);
-      for (final line in commands) {
-        expect(line, contains('-Encoding Unicode'),
-            reason: 'an Add-Content without an encoding writes ASCII into '
-                'a UTF-16 file: \$line');
+    test('the whole file is written in UTF-8, by one writer', () {
+      // On Windows PowerShell 5.1, Tee-Object writes UTF-16 (two bytes a
+      // letter) and Add-Content writes ASCII. The first doubled the size
+      // of a log that was already too big to send; mixing the two garbled
+      // it. Any of these cmdlets touching the log brings one of those back.
+      const cmdlets = ['Tee-Object', 'Add-Content', 'Out-File', 'Set-Content'];
+      for (final line in [..._commands(src), ..._commands(shared)]) {
+        for (final cmdlet in cmdlets) {
+          expect(line, isNot(contains(cmdlet)),
+              reason: '$cmdlet writes UTF-16 or ASCII on 5.1: $line');
+        }
       }
+      expect(
+          _commands(src).where((l) =>
+              l.contains('System.IO.StreamWriter') &&
+              l.contains('UTF8Encoding')),
+          isNotEmpty);
     });
 
-    test('and does not send the lines through one at a time', () {
-      // A phone log is hundreds of thousands of lines. One at a time
-      // through the pipeline takes minutes, which reads as a hung script.
-      // Real command, not the comment that explains it — the same way the
-      // encoding check above had to be tightened. A source test that can
-      // be satisfied by its own documentation checks nothing.
-      final reading = src
-          .split('\n')
-          .map((l) => l.trim())
-          .where((l) => !l.startsWith('#'))
-          .where((l) => l.contains('Get-Content') && l.contains(r'$deviceLog'))
-          .toList();
-      expect(reading, isNotEmpty);
-      expect(reading.any((l) => l.contains('-ReadCount')), isTrue,
-          reason: 'the phone log is piped a line at a time, which on a '
-              'file this size reads as a hung script: \$reading');
+    test('and does not send the phone log through PowerShell line by line',
+        () {
+      // A phone log is hundreds of thousands of lines - 817,837 in one run.
+      // PowerShell 5.1 takes minutes over that, which reads as a hung
+      // script. The C# in phone_log.ps1 does the reading.
+      final piped = _commands(src)
+          .where((l) => l.contains('Get-Content') && l.contains(r'$deviceLog'));
+      expect(piped, isEmpty, reason: '$piped');
+      expect(
+          _commands(src).where((l) =>
+              l.contains('Add-PhoneLog') &&
+              l.contains(r'-PhoneLog $deviceLog')),
+          hasLength(1),
+          reason: 'the fold is the shared one, which shrinks the log');
     });
 
     test('the separate copy is kept, not deleted', () {
