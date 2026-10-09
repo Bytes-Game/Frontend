@@ -31,6 +31,7 @@ import 'package:myapp/services/device_gallery.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/video_edit_engine.dart';
 
+import 'fake_camera.dart';
 import 'fake_gallery.dart';
 import 'fake_video_engine.dart';
 
@@ -79,100 +80,12 @@ class _Videos extends VideoPlayerPlatform {
       const SizedBox.shrink();
 }
 
-/// A camera that hands back real files, and records what it was asked.
-class _Camera extends CameraPlatform {
-  late Directory dir;
-  final List<String> asked = [];
-  final _initialized = StreamController<CameraInitializedEvent>.broadcast();
-
-  @override
-  Future<List<CameraDescription>> availableCameras() async => const [
-    CameraDescription(
-      name: 'back',
-      lensDirection: CameraLensDirection.back,
-      sensorOrientation: 90,
-    ),
-  ];
-
-  @override
-  Future<int> createCameraWithSettings(
-    CameraDescription cameraDescription,
-    MediaSettings? mediaSettings,
-  ) async => 1;
-
-  @override
-  Future<void> initializeCamera(
-    int cameraId, {
-    ImageFormatGroup imageFormatGroup = ImageFormatGroup.unknown,
-  }) async {
-    scheduleMicrotask(
-      () => _initialized.add(
-        const CameraInitializedEvent(
-          1,
-          720,
-          1280,
-          ExposureMode.auto,
-          false,
-          FocusMode.auto,
-          false,
-        ),
-      ),
-    );
-  }
-
-  @override
-  Stream<CameraInitializedEvent> onCameraInitialized(int cameraId) =>
-      _initialized.stream;
-
-  // Open, and silent: the controller waits on the first error, and a
-  // stream that ends at once is itself an error.
-  final _errors = StreamController<CameraErrorEvent>.broadcast();
-
-  @override
-  Stream<CameraErrorEvent> onCameraError(int cameraId) => _errors.stream;
-
-  @override
-  Stream<DeviceOrientationChangedEvent> onDeviceOrientationChanged() =>
-      const Stream.empty();
-
-  @override
-  Future<void> setFlashMode(int cameraId, FlashMode mode) async {}
-
-  @override
-  Future<XFile> takePicture(int cameraId) async {
-    asked.add('photo');
-    final f = File('${dir.path}/camera_shot.jpg')..writeAsBytesSync(tinyJpeg);
-    return XFile(f.path);
-  }
-
-  @override
-  Future<void> prepareForVideoRecording() async {}
-
-  @override
-  Future<void> startVideoCapturing(VideoCaptureOptions options) async =>
-      asked.add('record');
-
-  @override
-  Future<XFile> stopVideoRecording(int cameraId) async {
-    asked.add('stop');
-    final f = File('${dir.path}/camera_clip.mp4')
-      ..writeAsBytesSync(List.filled(2048, 1));
-    return XFile(f.path);
-  }
-
-  @override
-  Widget buildPreview(int cameraId) => const ColoredBox(color: Colors.grey);
-
-  @override
-  Future<void> dispose(int cameraId) async {}
-}
-
 const _permissions = MethodChannel('flutter.baseflow.com/permissions/methods');
 const _pathProvider = MethodChannel('plugins.flutter.io/path_provider');
 
 void main() {
   final videos = _Videos();
-  final camera = _Camera();
+  final camera = FakeCamera();
   late FakeGallery gallery;
   late Directory dir;
 
@@ -366,6 +279,7 @@ void main() {
       expect(gallery.filesAsked, ['p1']);
       final editor = t.widget<PhotoEditorPage>(find.byType(PhotoEditorPage));
       expect(editor.sourcePath, gallery.files['p1']!.path);
+      expect(editor.inGallery, isTrue, reason: 'no second copy of it');
       expect(find.byType(VideoEditorPage), findsNothing);
       expect(find.byType(ChallengeMetadataPage), findsNothing);
 
@@ -394,6 +308,7 @@ void main() {
       expect(gallery.filesAsked, ['v1']);
       final editor = t.widget<VideoEditorPage>(find.byType(VideoEditorPage));
       expect(editor.sourcePath, gallery.files['v1']!.path);
+      expect(editor.inGallery, isTrue, reason: 'no second copy of it');
       expect(
         find.byType(VideoTrimPage),
         findsNothing,
@@ -479,6 +394,7 @@ void main() {
       await letFilesMove(t);
       final editor = t.widget<VideoEditorPage>(find.byType(VideoEditorPage));
       expect(editor.sourcePath, gallery.files['v1']!.path);
+      expect(editor.inGallery, isTrue, reason: 'no second copy of it');
       await close(t);
     });
 
@@ -537,7 +453,11 @@ void main() {
       await t.tap(find.byKey(const ValueKey('camera_shutter')));
       await letFilesMove(t);
       expect(camera.asked, ['photo']);
-      expect(find.byType(PhotoEditorPage), findsOneWidget);
+      expect(
+        t.widget<PhotoEditorPage>(find.byType(PhotoEditorPage)).inGallery,
+        isFalse,
+        reason: 'taken just now: a copy goes to the gallery when posted',
+      );
       await editorDone(t);
       final details = t.widget<ChallengeMetadataPage>(
         find.byType(ChallengeMetadataPage),
@@ -564,6 +484,11 @@ void main() {
       expect(camera.asked, ['record', 'stop']);
       final editor = t.widget<VideoEditorPage>(find.byType(VideoEditorPage));
       expect(editor.sourcePath, endsWith('.mp4'));
+      expect(
+        editor.inGallery,
+        isFalse,
+        reason: 'recorded just now: a copy goes to the gallery when posted',
+      );
       expect(find.byType(VideoTrimPage), findsNothing);
       await close(t);
     });

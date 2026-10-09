@@ -24,7 +24,9 @@ import 'package:myapp/models/music_track.dart';
 import 'package:myapp/pages/photo_editor_page.dart';
 import 'package:myapp/pages/video_editor_page.dart';
 import 'package:myapp/pages/video_trim_page.dart';
+import 'package:myapp/services/device_gallery.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/save_to_phone.dart';
 import 'package:myapp/services/video_edit_engine.dart';
 
 import 'fake_gallery.dart';
@@ -83,13 +85,23 @@ void main() {
 
   setUpAll(() => VideoPlayerPlatform.instance = _Videos());
 
+  late FakeGallery gallery;
+  final realSettings = SaveToPhone.directory;
+
   setUp(() {
     dir = Directory.systemTemp.createTempSync('editors');
     engine = FakeVideoEngine(dir);
     VideoEditEngine.instance = engine;
+    gallery = FakeGallery();
+    DeviceGallery.instance = gallery;
+    SaveToPhone.directory = () async => dir;
+    SaveToPhone.instance.debugForget();
   });
 
   tearDown(() {
+    DeviceGallery.instance = PhoneGallery();
+    SaveToPhone.directory = realSettings;
+    SaveToPhone.instance.debugForget();
     VideoEditEngine.instance = PhoneVideoEditEngine();
     if (dir.existsSync()) dir.deleteSync(recursive: true);
   });
@@ -358,6 +370,61 @@ void main() {
       expect(File(handed.single).existsSync(), isTrue);
     });
 
+    group('a copy in the phone\'s gallery', () {
+      testWidgets('an edited photo, once posted, is kept there', (t) async {
+        await open(t, PhotoEditorPage(sourcePath: photo.path, onDone: next));
+        await addText(t, 'hello');
+        await done(t);
+        await close(t);
+        expect(gallery.kept, [(path: handed.single, isVideo: false)]);
+      });
+
+      testWidgets('one from the gallery posted unchanged is not copied '
+          'again', (t) async {
+        await open(t, PhotoEditorPage(sourcePath: photo.path, onDone: next));
+        await done(t);
+        await close(t);
+        expect(handed, [photo.path], reason: 'posted');
+        expect(gallery.kept, isEmpty, reason: 'it is in the gallery already');
+      });
+
+      testWidgets('one the camera just took is kept, even unchanged', (
+        t,
+      ) async {
+        await open(
+          t,
+          PhotoEditorPage(
+            sourcePath: photo.path,
+            onDone: next,
+            inGallery: false,
+          ),
+        );
+        await done(t);
+        await close(t);
+        expect(gallery.kept, [(path: photo.path, isVideo: false)]);
+      });
+
+      testWidgets('not when it was not posted', (t) async {
+        await open(t, PhotoEditorPage(sourcePath: photo.path, onDone: next));
+        await addText(t, 'hello');
+        postAnswers = [false];
+        await done(t);
+        await close(t);
+        expect(handed, hasLength(1), reason: 'handed on, then come back');
+        expect(gallery.kept, isEmpty);
+      });
+
+      testWidgets('not when it is switched off in Settings', (t) async {
+        await t.runAsync(() => SaveToPhone.instance.setOn(false));
+        await open(t, PhotoEditorPage(sourcePath: photo.path, onDone: next));
+        await addText(t, 'hello');
+        await done(t);
+        await close(t);
+        expect(handed, hasLength(1), reason: 'posted');
+        expect(gallery.kept, isEmpty);
+      });
+    });
+
     testWidgets('saving failed: it says so, and the editor stays open', (
       t,
     ) async {
@@ -618,6 +685,39 @@ void main() {
       }
       expect(video.existsSync(), isTrue, reason: 'never the original');
       await close(t);
+    });
+
+    group('a copy in the phone\'s gallery', () {
+      testWidgets('a remake, once posted, is kept there as a video', (t) async {
+        await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+        state(t).controller!.setMuteState(true);
+        await done(t);
+        await close(t);
+        expect(gallery.kept, [(path: handed.single, isVideo: true)]);
+      });
+
+      testWidgets('one from the gallery posted unchanged is not copied '
+          'again', (t) async {
+        await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+        await done(t);
+        await close(t);
+        expect(handed, [video.path]);
+        expect(gallery.kept, isEmpty);
+      });
+
+      testWidgets('one just recorded is kept, even unchanged', (t) async {
+        await open(
+          t,
+          VideoEditorPage(
+            sourcePath: video.path,
+            onDone: next,
+            inGallery: false,
+          ),
+        );
+        await done(t);
+        await close(t);
+        expect(gallery.kept, [(path: video.path, isVideo: true)]);
+      });
     });
 
     testWidgets('a posted remake is kept for its upload', (t) async {

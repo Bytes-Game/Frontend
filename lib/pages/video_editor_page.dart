@@ -17,6 +17,7 @@ import 'package:myapp/pages/video_trim_page.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/leftover_files.dart';
 import 'package:myapp/services/music_library.dart';
+import 'package:myapp/services/save_to_phone.dart';
 import 'package:myapp/services/video_edit_engine.dart';
 import 'package:myapp/services/video_edit_plan.dart';
 
@@ -40,6 +41,12 @@ import 'package:myapp/services/video_edit_plan.dart';
 class VideoEditorPage extends StatefulWidget {
   final String sourcePath;
 
+  /// Whether [sourcePath] is in the phone's gallery already. False for a
+  /// photo or video the app's camera just made. A post that is not in the
+  /// gallery yet (made here, or changed here) gets a copy kept there; see
+  /// SaveToPhone.
+  final bool inGallery;
+
   /// The next step — the posting page, or sending an answer — with the
   /// video and the free song in it, if it has one (the post credits it).
   /// True when the video was posted; this page then closes. Coming back
@@ -59,6 +66,7 @@ class VideoEditorPage extends StatefulWidget {
     required this.sourcePath,
     required this.onDone,
     this.maxLength = AppConstants.maxVideoDuration,
+    this.inGallery = true,
   });
 
   /// The editor's tools, in the order they are shown. The trim bar and the
@@ -269,7 +277,16 @@ class VideoEditorPageState extends State<VideoEditorPage> {
       return;
     }
     final posted = await widget.onDone(context, trimmed, null);
+    if (posted) _keepOnPhone(trimmed);
     if (mounted) nav.pop(posted);
+  }
+
+  /// A copy of what was posted in the phone's gallery, unless it is the
+  /// gallery's own video untouched (see SaveToPhone).
+  void _keepOnPhone(String posted) {
+    if (posted != widget.sourcePath || !widget.inGallery) {
+      unawaited(SaveToPhone.instance.keep(posted, isVideo: true));
+    }
   }
 
   Widget _playerView(VideoPlayerController player) {
@@ -816,7 +833,10 @@ class VideoEditorPageState extends State<VideoEditorPage> {
       if (!mounted) return;
     }
     final posted = await widget.onDone(context, out, _finishedMusic);
-    if (posted) _posted = out;
+    if (posted) {
+      _posted = out;
+      _keepOnPhone(out);
+    }
     if (posted && mounted) Navigator.of(context).pop(true);
   }
 

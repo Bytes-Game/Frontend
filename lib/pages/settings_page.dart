@@ -13,6 +13,7 @@ import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
+import 'package:myapp/services/save_to_phone.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/settings_kit.dart';
 
@@ -46,6 +47,22 @@ class _SettingsPageState extends State<SettingsPage>
     with PageTracker<SettingsPage> {
   @override
   String get pageName => 'settings_page';
+
+  /// "Save your posts to your phone": on until switched off.
+  bool _savePosts = true;
+
+  @override
+  void initState() {
+    super.initState();
+    SaveToPhone.instance.isOn().then((on) {
+      if (mounted) setState(() => _savePosts = on);
+    });
+  }
+
+  Future<void> _setSavePosts(bool on) async {
+    setState(() => _savePosts = on);
+    await SaveToPhone.instance.setOn(on);
+  }
 
   void _open(Widget page) {
     Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
@@ -216,6 +233,20 @@ class _SettingsPageState extends State<SettingsPage>
                 title: 'Appearance',
                 value: _themeLabel(user?.settings ?? const {}),
                 onTap: () => _open(const AppearancePage()),
+              ),
+              SettingsTile(
+                key: const ValueKey('settings_save_posts'),
+                icon: Icons.download_rounded,
+                color: AppTheme.primary,
+                title: 'Save your posts to your phone',
+                subtitle: 'A copy of what you make or edit here goes to '
+                    'your gallery',
+                trailing: Switch.adaptive(
+                  key: const ValueKey('settings_save_posts_switch'),
+                  value: _savePosts,
+                  onChanged: _setSavePosts,
+                ),
+                onTap: () => _setSavePosts(!_savePosts),
               ),
               SettingsTile(
                 key: const ValueKey('settings_space'),

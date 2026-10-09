@@ -60,6 +60,8 @@ class CreateFlow {
       context,
       made,
       photo: RecordVideoPage.isPhotoPath(made),
+      // Made just now: not in the gallery, so a copy is kept there.
+      inGallery: false,
     );
   }
 
@@ -69,10 +71,14 @@ class CreateFlow {
   ///
   /// The editor stays underneath the details page, so coming back from the
   /// details lands on the editor with the edits still there.
+  ///
+  /// [inGallery] is whether [path] is in the phone's gallery already; see
+  /// SaveToPhone.
   static Future<bool> continueWith(
     BuildContext context,
     String path, {
     required bool photo,
+    bool inGallery = true,
   }) async {
     EventTracker.instance.track(
       eventType: 'create_challenge_source_selected',
@@ -104,8 +110,16 @@ class CreateFlow {
     final posted = await nav.push<bool>(
       MaterialPageRoute(
         builder: (_) => photo
-            ? PhotoEditorPage(sourcePath: path, onDone: details)
-            : VideoEditorPage(sourcePath: path, onDone: details),
+            ? PhotoEditorPage(
+                sourcePath: path,
+                onDone: details,
+                inGallery: inGallery,
+              )
+            : VideoEditorPage(
+                sourcePath: path,
+                onDone: details,
+                inGallery: inGallery,
+              ),
       ),
     );
     return posted == true;

@@ -43,6 +43,9 @@ class FakeGallery implements DeviceGallery {
   /// What the phone's own picker returns.
   PickedMedia? phonePick;
 
+  /// What [keepInGallery] was handed: copies of posts kept in the gallery.
+  final List<({String path, bool isVideo})> kept = [];
+
   int accessAsked = 0;
   int choseMore = 0;
   int settingsOpened = 0;
@@ -75,6 +78,12 @@ class FakeGallery implements DeviceGallery {
   Future<File?> fileFor(GalleryItem item) async {
     filesAsked.add(item.id);
     return files[item.id];
+  }
+
+  @override
+  Future<bool> keepInGallery(String path, {required bool isVideo}) async {
+    kept.add((path: path, isVideo: isVideo));
+    return true;
   }
 
   @override

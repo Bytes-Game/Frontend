@@ -10,6 +10,7 @@ import 'package:myapp/config/editor_setup.dart';
 import 'package:myapp/models/music_track.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/leftover_files.dart';
+import 'package:myapp/services/save_to_phone.dart';
 
 /// The photo editor: crop and rotate, filters, brightness and colour, text,
 /// emoji, drawing and blur — then on to posting.
@@ -30,6 +31,12 @@ import 'package:myapp/services/leftover_files.dart';
 class PhotoEditorPage extends StatefulWidget {
   final String sourcePath;
 
+  /// Whether [sourcePath] is in the phone's gallery already. False for a
+  /// photo or video the app's camera just made. A post that is not in the
+  /// gallery yet (made here, or changed here) gets a copy kept there; see
+  /// SaveToPhone.
+  final bool inGallery;
+
   /// The next step, with the photo. (A photo has no song: [MusicTrack] is
   /// always null here; the type is the one the video editor shares.)
   final Future<bool> Function(
@@ -43,6 +50,7 @@ class PhotoEditorPage extends StatefulWidget {
     super.key,
     required this.sourcePath,
     required this.onDone,
+    this.inGallery = true,
   });
 
   /// The editor's tools, in the order they are shown.
@@ -128,7 +136,12 @@ class _PhotoEditorPageState extends State<PhotoEditorPage> {
       return;
     }
     final posted = await widget.onDone(context, finished, null);
-    if (posted) _posted = finished;
+    if (posted) {
+      _posted = finished;
+      if (finished != widget.sourcePath || !widget.inGallery) {
+        unawaited(SaveToPhone.instance.keep(finished, isVideo: false));
+      }
+    }
     if (posted && mounted) Navigator.of(context).pop(true);
   }
 
