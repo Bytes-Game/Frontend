@@ -5,6 +5,7 @@
 // request that was sent — not only what is gone.
 
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -21,6 +22,7 @@ import 'package:myapp/pages/privacy_page.dart';
 import 'package:myapp/widgets/settings_kit.dart';
 import 'package:myapp/pages/profile_page.dart';
 import 'package:myapp/pages/settings_page.dart';
+import 'package:myapp/services/save_to_phone.dart';
 import 'package:myapp/pages/static_content_pages.dart';
 import 'package:myapp/pages/two_factor_setup_page.dart';
 import 'package:myapp/pages/watch_history_page.dart';
@@ -180,6 +182,63 @@ void main() {
       expect(find.text('Privacy'), findsOneWidget);
       expect(find.text('Public'), findsOneWidget, reason: 'privacy summed up');
       expect(find.text('Dark'), findsOneWidget, reason: 'theme summed up');
+    });
+
+    group('Save your posts to your phone', () {
+      late Directory dir;
+      final realDirectory = SaveToPhone.directory;
+      setUp(() {
+        dir = Directory.systemTemp.createTempSync('save_posts');
+        SaveToPhone.directory = () async => dir;
+        SaveToPhone.instance.debugForget();
+      });
+      tearDown(() {
+        SaveToPhone.directory = realDirectory;
+        SaveToPhone.instance.debugForget();
+        dir.deleteSync(recursive: true);
+      });
+
+      /// Until the choice has been written down as [word].
+      Future<void> saved(WidgetTester t, String word) async {
+        final f = File('${dir.path}/save_posts_to_phone');
+        for (var i = 0; i < 200; i++) {
+          if (f.existsSync() && f.readAsStringSync() == word) return;
+          await t.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 5)),
+          );
+          await t.pump();
+        }
+        fail('"$word" was never written down');
+      }
+
+      bool switchOn(WidgetTester t) => t
+          .widget<Switch>(
+            find.byKey(const ValueKey('settings_save_posts_switch')),
+          )
+          .value;
+
+      testWidgets('on at first; a tap turns it off, and it stays off when '
+          'the app starts again', (t) async {
+        await pump(t, page());
+        await t.runAsync(() => Future<void>.delayed(Duration.zero));
+        await t.pump();
+        await t.ensureVisible(find.byKey(const ValueKey('settings_save_posts')));
+        expect(switchOn(t), isTrue);
+
+        await t.tap(find.byKey(const ValueKey('settings_save_posts')));
+        await saved(t, 'off');
+        expect(switchOn(t), isFalse);
+
+        // A fresh start of the app reads it back.
+        SaveToPhone.instance.debugForget();
+        expect(await t.runAsync(SaveToPhone.instance.isOn), isFalse);
+
+        await t.tap(find.byKey(const ValueKey('settings_save_posts_switch')));
+        await saved(t, 'on');
+        expect(switchOn(t), isTrue);
+        SaveToPhone.instance.debugForget();
+        expect(await t.runAsync(SaveToPhone.instance.isOn), isTrue);
+      });
     });
 
     testWidgets('log out asks first', (t) async {

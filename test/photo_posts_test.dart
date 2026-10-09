@@ -17,6 +17,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:camera_platform_interface/camera_platform_interface.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -51,6 +52,7 @@ import 'package:myapp/widgets/match_warning.dart';
 import 'package:myapp/widgets/photo_face.dart';
 import 'package:myapp/widgets/smart_reels_feed.dart';
 
+import 'fake_camera.dart';
 import 'fake_gallery.dart';
 import 'fake_music.dart';
 import 'fake_video_engine.dart';
@@ -727,6 +729,43 @@ void main() {
       await close(t);
     });
 
+    testWidgets('Record: the clip goes to the video editor as not in the '
+        'gallery yet, so a copy is kept there once it goes', (t) async {
+      final camera = FakeCamera()..dir = dir;
+      final realCamera = CameraPlatform.instance;
+      CameraPlatform.instance = camera;
+      addTearDown(() => CameraPlatform.instance = realCamera);
+      const permissions = MethodChannel(
+        'flutter.baseflow.com/permissions/methods',
+      );
+      const docs = MethodChannel('plugins.flutter.io/path_provider');
+      final m = t.binding.defaultBinaryMessenger;
+      m.setMockMethodCallHandler(
+        permissions,
+        (call) async => {for (final p in call.arguments as List) p: 1},
+      );
+      m.setMockMethodCallHandler(docs, (call) async => dir.path);
+      addTearDown(() {
+        m.setMockMethodCallHandler(permissions, null);
+        m.setMockMethodCallHandler(docs, null);
+      });
+      serving = videoShort();
+      await openFeed(t);
+      await t.tap(find.text('Accept challenge'));
+      await frames(t, 6);
+      await t.tap(find.text('Record'));
+      await frames(t, 10);
+      await t.tap(find.byKey(const ValueKey('camera_shutter')));
+      await frames(t, 4);
+      await t.tap(find.byKey(const ValueKey('camera_shutter')));
+      await letItUpload(t);
+      expect(camera.asked, ['record', 'stop']);
+      final editor = t.widget<VideoEditorPage>(find.byType(VideoEditorPage));
+      expect(editor.sourcePath, contains('devf_record_'));
+      expect(editor.inGallery, isFalse, reason: 'recorded just now');
+      await close(t);
+    });
+
     testWidgets('Accept on a photo challenge goes straight to a photo, and '
         'the answer goes up as a photo', (t) async {
       serving = photoShort();
@@ -741,6 +780,7 @@ void main() {
       // The photo editor first, as for a new challenge.
       final editor = t.widget<PhotoEditorPage>(find.byType(PhotoEditorPage));
       expect(editor.sourcePath, photos.next!.path);
+      expect(editor.inGallery, isFalse, reason: 'taken just now');
       await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
       await letItUpload(t);
       // The last check, worded for a photo.

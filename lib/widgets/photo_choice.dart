@@ -11,8 +11,12 @@ import 'package:myapp/services/chat_media.dart';
 /// The picture comes from the same picker a chat photo does (it is shrunk
 /// to a few hundred KB there, see DevicePhotoSource), so a test can stand
 /// in for the phone's camera the same way. Null when the person backed out
-/// at either step.
-Future<File?> choosePhoto(BuildContext context, {String title = ''}) async {
+/// at either step. [camera] says it was taken just now, so it is not in the
+/// phone's gallery yet.
+Future<({File file, bool camera})?> choosePhoto(
+  BuildContext context, {
+  String title = '',
+}) async {
   final camera = await showModalBottomSheet<bool>(
     context: context,
     showDragHandle: true,
@@ -51,5 +55,6 @@ Future<File?> choosePhoto(BuildContext context, {String title = ''}) async {
     ),
   );
   if (camera == null || !context.mounted) return null;
-  return ChatMedia.instance.photos.pick(camera: camera);
+  final file = await ChatMedia.instance.photos.pick(camera: camera);
+  return file == null ? null : (file: file, camera: camera);
 }

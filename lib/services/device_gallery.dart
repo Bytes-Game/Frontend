@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:photo_manager/photo_manager.dart';
 
+import 'package:myapp/config/constants.dart';
 import 'package:myapp/pages/record_video_page.dart';
 
 /// The phone's own photos and videos, for the page the + button opens.
@@ -91,6 +92,11 @@ abstract class DeviceGallery {
   /// gallery: it needs no permission. Photos and videos both; a photo comes
   /// back shrunk the same way as [fileFor]'s. Null when they backed out.
   Future<PickedMedia?> pickWithPhone();
+
+  /// Puts a copy of [path] in the phone's gallery, in an album named after
+  /// the app, the way Instagram and TikTok keep a copy of a post. Says
+  /// whether it got there; never throws.
+  Future<bool> keepInGallery(String path, {required bool isVideo});
 
   static const int maxPhotoSide = 1600;
 }
@@ -235,6 +241,35 @@ class PhoneGallery implements DeviceGallery {
     } catch (e) {
       debugPrint('[gallery] the phone\'s picker did not open: $e');
       return null;
+    }
+  }
+
+  @override
+  Future<bool> keepInGallery(String path, {required bool isVideo}) async {
+    final dot = path.lastIndexOf('.');
+    final ending = dot > path.lastIndexOf('/') ? path.substring(dot) : '';
+    final album = AppConstants.appName;
+    final title =
+        '${album.replaceAll(' ', '')}_${DateTime.now().millisecondsSinceEpoch}'
+        '$ending';
+    try {
+      if (isVideo) {
+        await PhotoManager.editor.saveVideo(
+          File(path),
+          title: title,
+          relativePath: 'Movies/$album',
+        );
+      } else {
+        await PhotoManager.editor.saveImageWithPath(
+          path,
+          title: title,
+          relativePath: 'Pictures/$album',
+        );
+      }
+      return true;
+    } catch (e) {
+      debugPrint('[gallery] could not put a copy of the post in the gallery: $e');
+      return false;
     }
   }
 

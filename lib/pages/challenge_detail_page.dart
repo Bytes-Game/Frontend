@@ -446,7 +446,8 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
       MaterialPageRoute(builder: (_) => const RecordVideoPage()),
     );
     if (!mounted || recorded == null || recorded.isEmpty) return;
-    await _continueWithSource(recorded);
+    // Made just now: not in the gallery, so a copy is kept there.
+    await _continueWithSource(recorded, inGallery: false);
   }
 
   Future<void> _onPickFile() async {
@@ -490,13 +491,14 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
       pageName: 'challenge_detail_page',
       params: {'challengeId': _challenge!.id},
     );
-    final file = await choosePhoto(context, title: 'Answer with a photo');
-    if (!mounted || file == null || _challenge == null) return;
+    final chosen = await choosePhoto(context, title: 'Answer with a photo');
+    if (!mounted || chosen == null || _challenge == null) return;
     // The photo editor first, as for a new challenge.
     await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (_) => PhotoEditorPage(
-          sourcePath: file.path,
+          sourcePath: chosen.file.path,
+          inGallery: !chosen.camera,
           onDone: (from, edited, _) => _sendAnswer(from, edited, photo: true),
         ),
       ),
@@ -506,7 +508,10 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
   /// The video editor (with its trim bar), then the answer goes. The
   /// hand-off page dispatches the upload and pops at once; [_uploadSub]
   /// (subscribed in initState) refreshes this page once the answer is live.
-  Future<void> _continueWithSource(String sourcePath) async {
+  Future<void> _continueWithSource(
+    String sourcePath, {
+    bool inGallery = true,
+  }) async {
     if (_challenge == null) return;
     EventTracker.instance.track(
       eventType: 'accept_challenge_source_selected',
@@ -517,6 +522,7 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
       MaterialPageRoute(
         builder: (_) => VideoEditorPage(
           sourcePath: sourcePath,
+          inGallery: inGallery,
           onDone: (from, edited, music) =>
               _sendAnswer(from, edited, photo: false, music: music),
         ),
