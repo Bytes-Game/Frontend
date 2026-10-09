@@ -39,6 +39,24 @@ after a quiet period takes 30–60 seconds while the server wakes up. The app
 expects this — a login that times out says "could not reach the server", not
 "wrong password".
 
+### Recording a run, to send with a bug
+
+```
+tools\run_profile.bat
+```
+
+This runs the app and saves everything to `F:\logs.txt`: what `flutter run`
+prints, then the phone's own log. The phone repeats itself a lot, so its
+repeats are counted instead of copied, and every line the app printed is
+kept. Attach that one file. The phone's full log stays next to it, uncut, in
+`F:\logs.txt.device.txt`.
+
+At the end it says how big the saved file really is, what the phone said went
+wrong (a crash, the app not responding), and the video editor's last steps.
+
+Already have a phone log too big to open or attach? `tools\shrink_phone_log.bat`
+turns `F:\logs.txt.device.txt` into `F:\logs.small.txt`.
+
 ### Building it to share
 
 ```bash
@@ -126,6 +144,11 @@ flutter test
 
 `--no-fatal-infos` matches CI. There are a number of pre-existing info-level
 lints that predate the pipeline; warnings and errors still fail the build.
+
+`test/phone_log_tools_test.dart` runs the scripts in `tools/` with PowerShell 7
+(`pwsh`), which CI has. Without it those tests skip on your computer (set
+`PWSH` to point at one); on CI they fail instead, so they cannot quietly stop
+running.
 
 ---
 
