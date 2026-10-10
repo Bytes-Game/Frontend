@@ -46,6 +46,15 @@ class ChallengeModel {
   final String visibility; // "arena" or "friends"
   final List<String> visibleTo;
   final String status; // "open", "active", "completed"
+
+  /// Whether anybody may answer it with their own video. Off makes it a
+  /// normal post: no "Accept challenge", and its words are a caption, not
+  /// a question. Every post is open unless its owner said otherwise (the
+  /// server sends "closedToBattles" only for those).
+  ///
+  /// Not final: the owner can change it from the battle page, which
+  /// updates the post it is showing in place.
+  bool openToBattles;
   final int likes;
   final int views;
   /// Live count of comments on this challenge. Populated by the backend's
@@ -128,6 +137,7 @@ class ChallengeModel {
   required this.visibility,
   this.visibleTo = const [],
   required this.status,
+  this.openToBattles = true,
   required this.likes,
   required this.views,
   this.commentCount = 0,
@@ -162,8 +172,17 @@ class ChallengeModel {
   });
 
   /// Full challenge title from the two-part description.
-  String get title => '$prefix $subject';
-  
+  String get title => '$prefix $subject'.trim();
+
+  /// The title as people read it. A challenge is a question ("Who is
+  /// better at pranks?"); a normal post has no opener, and its caption is
+  /// not one.
+  String get question {
+    final t = title;
+    if (t.isEmpty || prefix.trim().isEmpty || t.endsWith('?')) return t;
+    return '$t?';
+  }
+
   factory ChallengeModel.fromJson(Map<String, dynamic> json) {
     return ChallengeModel(
       id: json['id'] ??'',
@@ -192,6 +211,7 @@ class ChallengeModel {
               .toList() ??
           [],
       status: json['status'] ?? 'open',
+      openToBattles: json['closedToBattles'] != true,
       likes: json['likes'] ?? 0,
       views: json['views'] ?? 0,
       commentCount: json['commentCount'] ?? 0,

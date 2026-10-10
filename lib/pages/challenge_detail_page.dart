@@ -25,6 +25,7 @@ import 'package:myapp/widgets/feed_action_bar.dart'
 import 'package:myapp/widgets/league_badge.dart' show leagueWash;
 import 'package:myapp/widgets/people_list_sheet.dart';
 import 'package:myapp/widgets/match_warning.dart';
+import 'package:myapp/widgets/open_to_battles.dart';
 import 'package:myapp/widgets/photo_choice.dart';
 import 'package:myapp/widgets/report_video.dart';
 import 'package:myapp/widgets/video_grid_tile.dart' show openVideoPlaylist;
@@ -202,10 +203,9 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     }
   }
 
-  static String _question(ChallengeModel c) {
-    final t = c.title.trim();
-    return t.endsWith('?') ? t : '$t?';
-  }
+  /// The post's words as people read them: a challenge's question, or a
+  /// normal post's caption, which is not one. See ChallengeModel.question.
+  static String _question(ChallengeModel c) => c.question;
 
   static String _compact(int n) {
     if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
@@ -329,7 +329,8 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
   List<(String, String)> _reportable(ChallengeModel c, String? me) {
     if (me == null || me.isEmpty || c.status == 'removed') return const [];
     return [
-      if (c.creatorId != me) ('', "${c.creatorUsername}'s"),
+      // A normal post's own video has no challenge to match.
+      if (c.creatorId != me && c.openToBattles) ('', "${c.creatorUsername}'s"),
       for (final r in _responses)
         if (r.responderId != me) (r.id, "${r.responderUsername}'s"),
     ];
@@ -615,7 +616,13 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
         scrolledUnderElevation: 0,
         centerTitle: true,
         title: Text(
-          c == null ? '' : (isBattle ? 'Battle' : 'Challenge'),
+          c == null
+              ? ''
+              : isBattle
+              ? 'Battle'
+              : c.openToBattles
+              ? 'Challenge'
+              : 'Post',
           style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
         ),
         actions: [
@@ -753,7 +760,26 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                             ? null
                             : (list) => showPeople(context, c.id, list),
                       ),
-                      if (c.status == 'open' && !isOwner) ...[
+                      // Your own post: open it to battles, or make it a
+                      // normal post nobody can answer.
+                      if (isOwner) ...[
+                        const SizedBox(height: 12),
+                        Material(
+                          color: _surface,
+                          borderRadius: BorderRadius.circular(16),
+                          clipBehavior: Clip.antiAlias,
+                          child: OpenToBattlesTile(
+                            challengeId: c.id,
+                            open: c.openToBattles,
+                            onChanged: (open) {
+                              if (mounted) {
+                                setState(() => c.openToBattles = open);
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                      if (c.status == 'open' && !isOwner && c.openToBattles) ...[
                         const SizedBox(height: 16),
                         Builder(
                           builder: (btn) => SizedBox(
@@ -925,7 +951,10 @@ class _Versus extends StatelessWidget {
                     )
                   : _EmptySeat(
                       opponent: challenge.creatorUsername,
-                      canTake: !isOwner && challenge.status == 'open',
+                      canTake: !isOwner &&
+                          challenge.status == 'open' &&
+                          challenge.openToBattles,
+                      closed: !challenge.openToBattles,
                       onTake: onAccept,
                     ),
             ),
@@ -1141,11 +1170,16 @@ class _VideoCard extends StatelessWidget {
 class _EmptySeat extends StatelessWidget {
   final String opponent;
   final bool canTake;
+
+  /// A normal post: nobody can answer it, so the seat says so instead of
+  /// waiting for a challenger who cannot come.
+  final bool closed;
   final ValueChanged<Offset> onTake;
 
   const _EmptySeat({
     required this.opponent,
     required this.canTake,
+    this.closed = false,
     required this.onTake,
   });
 
@@ -1187,14 +1221,23 @@ class _EmptySeat extends StatelessWidget {
                         : _raised,
                   ),
                   child: Icon(
-                    canTake ? Icons.add_rounded : Icons.hourglass_top_rounded,
+                    canTake
+                        ? Icons.add_rounded
+                        : closed
+                        ? Icons.do_not_disturb_on_outlined
+                        : Icons.hourglass_top_rounded,
                     color: canTake ? AppTheme.primary : _muted,
                     size: 28,
                   ),
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  canTake ? 'Your move' : 'Waiting for a challenger',
+                  canTake
+                      ? 'Your move'
+                      : closed
+                      ? 'Not open to battles'
+                      : 'Waiting for a challenger',
+                  key: const ValueKey('empty_seat_title'),
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: Colors.white,
@@ -1206,6 +1249,8 @@ class _EmptySeat extends StatelessWidget {
                 Text(
                   canTake
                       ? 'Accept to take on $opponent'
+                      : closed
+                      ? 'A normal post. Nobody can answer it'
                       : 'Anyone can accept it',
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: _muted, fontSize: 12.5),
@@ -1271,7 +1316,12 @@ class _Chip extends StatelessWidget {
   final String label;
   final Color? color;
 
-  const _Chip({required this.icon, required this.label, this.color});
+  const _Chip({
+    super.key,
+    required this.icon,
+    required this.label,
+    this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1350,6 +1400,14 @@ class _StatusChip extends StatelessWidget {
         icon: Icons.block_rounded,
         label: 'Removed',
         color: Color(0xFFFF453A),
+      );
+    }
+    if (challenge.status == 'open' && !challenge.openToBattles) {
+      return const _Chip(
+        key: ValueKey('status_post'),
+        icon: Icons.do_not_disturb_on_outlined,
+        label: 'Not open to battles',
+        color: _muted,
       );
     }
     if (challenge.status == 'open') {

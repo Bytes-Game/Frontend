@@ -28,6 +28,7 @@ import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/chat_media_widgets.dart' show ChatPhotoViewer;
 import 'package:myapp/widgets/battle_record_panel.dart';
 import 'package:myapp/widgets/battles_tab.dart';
+import 'package:myapp/widgets/open_to_battles.dart';
 import 'package:myapp/widgets/profile_arena_header.dart';
 import 'package:myapp/widgets/scroll_reveal.dart';
 import 'package:myapp/widgets/video_grid_tile.dart';
@@ -256,6 +257,51 @@ class _ProfilePageState extends State<ProfilePage>
   /// tile. Confirms → cascade-deletes via backend → removes the
   /// challenge from the in-memory grid + bumps the global feed-refresh
   /// counter so home reels also drops it.
+  /// Your own post, held down: whether anybody may answer it, and delete.
+  Future<void> _postOptions(ChallengeModel c) async {
+    EventTracker.instance.trackTap(
+      target: 'profile_post_options',
+      pageName: pageName,
+      params: {'challengeId': c.id},
+    );
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            OpenToBattlesTile(
+              challengeId: c.id,
+              open: c.openToBattles,
+              onChanged: (open) {
+                if (!mounted) return;
+                setState(() => c.openToBattles = open);
+                ProfileCache.instance
+                    .replaceShorts(widget.user.id, _myChallenges);
+              },
+            ),
+            ListTile(
+              key: const ValueKey('post_delete'),
+              leading: const Icon(
+                Icons.delete_outline_rounded,
+                color: Colors.red,
+              ),
+              title: const Text(
+                'Delete post',
+                style: TextStyle(color: Colors.red),
+              ),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                _confirmDeletePost(c);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _confirmDeletePost(ChallengeModel c) async {
     final dp = Provider.of<DataProvider>(context, listen: false);
     final uid = dp.user?.id;
@@ -716,8 +762,9 @@ class _ProfilePageState extends State<ProfilePage>
             key: ValueKey('short_tile_${c.id}'),
             video: c,
             onTap: () => _play(_myChallenges, at, 'shorts'),
-            // Long-press is destructive for own posts only.
-            onLongPress: isOwn ? () => _confirmDeletePost(c) : null,
+            // Your own post, held down: open it to battles or not, or
+            // delete it.
+            onLongPress: isOwn ? () => _postOptions(c) : null,
           );
         },
       ),

@@ -25,6 +25,11 @@ import 'package:myapp/widgets/tags_input.dart';
 const maxPrefix = 50;
 const maxSubject = 30;
 
+/// Longest a normal post's caption may be. Longer than a challenge's
+/// subject, which only finishes a question; the server holds it to the
+/// same (maxCaptionChars in battles_open.go).
+const maxCaption = 80;
+
 /// Final step of the create-challenge flow.
 ///
 /// At the top, a preview card: the clip playing beside the challenge's
@@ -99,6 +104,15 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
     'Which photo is better',
   ];
   final _subjectCtl = TextEditingController();
+
+  /// A normal post's words, when it is not open to battles.
+  final _captionCtl = TextEditingController();
+
+  /// Whether anybody may answer it with their own video. On by default:
+  /// that is what the app is for. Off makes it a normal post — no opener,
+  /// no battle length, just a caption — and the owner can change it later
+  /// from the post's page.
+  bool _openToBattles = true;
 
   String _visibility = 'arena';
 
@@ -203,6 +217,7 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
     }
     _prefixCtl.dispose();
     _subjectCtl.dispose();
+    _captionCtl.dispose();
     super.dispose();
   }
 
@@ -285,12 +300,17 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
         'visibility': _visibility,
         'category': _category ?? '',
         'tagCount': _tags.length,
+        'openToBattles': _openToBattles,
       },
     );
 
+    final open = _openToBattles;
     final meta = ChallengeSubmissionMeta(
-      prefix: _prefixCtl.text.trim(),
-      subject: _subjectCtl.text.trim(),
+      // A normal post has no opener; its caption goes where a challenge's
+      // subject does (battles_open.go on the server).
+      prefix: open ? _prefixCtl.text.trim() : '',
+      subject: open ? _subjectCtl.text.trim() : _captionCtl.text.trim(),
+      openToBattles: open,
       visibility: _visibility,
       // Non-null by here: the form will not validate without a pick. The
       // fallback is what the server already means by "nobody said", so if
@@ -308,7 +328,7 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
       // creator's subject tags ever were.
       tags: _tags,
       emotionTags: const [],
-      battleDays: int.parse(_battleDays),
+      battleDays: open ? int.parse(_battleDays) : 0,
       visibleTo: _visibility == 'friends'
           ? [for (final u in _friends) u.id]
           : const [],
@@ -354,7 +374,11 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
       appBar: AppBar(
         elevation: 0,
         centerTitle: false,
-        title: Text(widget.photo ? 'New photo challenge' : 'New challenge'),
+        title: Text(
+          _openToBattles
+              ? (widget.photo ? 'New photo challenge' : 'New challenge')
+              : (widget.photo ? 'New photo post' : 'New post'),
+        ),
       ),
       body: Form(
         key: _formKey,
@@ -364,72 +388,91 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
             // What people will see, built live as you type. Drag it to
             // tilt it.
             _posterCard(),
-            const SizedBox(height: 22),
+            const SizedBox(height: 16),
+            _battlesSwitch(),
 
-            _section('Challenge'),
-            SuggestField<String>(
-              controller: _prefixCtl,
-              label: 'Prefix',
-              hint: widget.photo ? photoOpenings.first : 'Who is better at',
-              validator: (v) => _limitedText(v, maxPrefix),
-              maxLength: maxPrefix,
-              suggestions: _prefixSuggestions,
-              displayString: (s) => s,
-              buildRow: (s) => Text(s),
-              onQuery: _refreshPrefixSuggestions,
-            ),
-            // The common openings, one tap each.
-            if (_prefixSuggestions.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              SizedBox(
-                height: 34,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: _prefixSuggestions.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 8),
-                  itemBuilder: (_, i) {
-                    final p = _prefixSuggestions[i];
-                    final chosen = _prefixCtl.text.trim() == p;
-                    return Pressable(
-                      onTap: () => setState(
-                        () => _prefixCtl.text = p.characters
-                            .take(maxPrefix)
-                            .toString(),
-                      ),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: chosen ? kAccent : quietFill(context),
-                          borderRadius:
-                              BorderRadius.circular(AppTheme.radiusFull),
-                        ),
-                        child: Text(
-                          p,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                            color: chosen ? Colors.white : cs.onSurface,
-                          ),
-                        ),
-                      ),
-                    );
-                  },
+            if (!_openToBattles) ...[
+              _section('Caption'),
+              TextFormField(
+                key: const ValueKey('post_caption'),
+                controller: _captionCtl,
+                maxLength: maxCaption,
+                minLines: 1,
+                maxLines: 3,
+                textCapitalization: TextCapitalization.sentences,
+                validator: (v) => _limitedText(v, maxCaption),
+                decoration: const InputDecoration(
+                  labelText: 'Caption',
+                  hintText: 'Say something about it',
                 ),
               ),
             ],
-            const SizedBox(height: 12),
-            SuggestField<Map<String, dynamic>>(
-              controller: _subjectCtl,
-              label: 'Subject',
-              hint: widget.photo ? 'in red' : 'pranks',
-              validator: (v) => _limitedText(v, maxSubject),
-              maxLength: maxSubject,
-              suggestions: _subjectSuggestions,
-              displayString: (m) => (m['subject'] as String?) ?? '',
-              buildRow: _subjectOptionTile,
-              onQuery: _refreshSubjectSuggestions,
-            ),
+            if (_openToBattles) ...[
+              _section('Challenge'),
+              SuggestField<String>(
+                controller: _prefixCtl,
+                label: 'Prefix',
+                hint: widget.photo ? photoOpenings.first : 'Who is better at',
+                validator: (v) => _limitedText(v, maxPrefix),
+                maxLength: maxPrefix,
+                suggestions: _prefixSuggestions,
+                displayString: (s) => s,
+                buildRow: (s) => Text(s),
+                onQuery: _refreshPrefixSuggestions,
+              ),
+              // The common openings, one tap each.
+              if (_prefixSuggestions.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  height: 34,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: _prefixSuggestions.length,
+                    separatorBuilder: (_, _) => const SizedBox(width: 8),
+                    itemBuilder: (_, i) {
+                      final p = _prefixSuggestions[i];
+                      final chosen = _prefixCtl.text.trim() == p;
+                      return Pressable(
+                        onTap: () => setState(
+                          () => _prefixCtl.text = p.characters
+                              .take(maxPrefix)
+                              .toString(),
+                        ),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: chosen ? kAccent : quietFill(context),
+                            borderRadius:
+                                BorderRadius.circular(AppTheme.radiusFull),
+                          ),
+                          child: Text(
+                            p,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: chosen ? Colors.white : cs.onSurface,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              SuggestField<Map<String, dynamic>>(
+                controller: _subjectCtl,
+                label: 'Subject',
+                hint: widget.photo ? 'in red' : 'pranks',
+                validator: (v) => _limitedText(v, maxSubject),
+                maxLength: maxSubject,
+                suggestions: _subjectSuggestions,
+                displayString: (m) => (m['subject'] as String?) ?? '',
+                buildRow: _subjectOptionTile,
+                onQuery: _refreshSubjectSuggestions,
+              ),
+            ],
 
             _section('Who can see it'),
             _choiceRow(
@@ -445,13 +488,15 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
               _friendsScope(cs),
             ],
 
-            _section('Battle length'),
-            _daysRow(),
-            const SizedBox(height: 8),
-            Text(
-              'Voting starts when someone accepts.',
-              style: TextStyle(fontSize: 12.5, color: quietText(context)),
-            ),
+            if (_openToBattles) ...[
+              _section('Battle length'),
+              _daysRow(),
+              const SizedBox(height: 8),
+              Text(
+                'Voting starts when someone accepts.',
+                style: TextStyle(fontSize: 12.5, color: quietText(context)),
+              ),
+            ],
 
             _section('Category (optional)'),
             _categoryDropdown(cs),
@@ -478,12 +523,15 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              MatchWarning(
-                text: widget.photo
-                    ? matchWarningPhotoChallenge
-                    : matchWarningChallenge,
-              ),
-              const SizedBox(height: 8),
+              // A normal post has no challenge to match.
+              if (_openToBattles) ...[
+                MatchWarning(
+                  text: widget.photo
+                      ? matchWarningPhotoChallenge
+                      : matchWarningChallenge,
+                ),
+                const SizedBox(height: 8),
+              ],
               SizedBox(
             height: 52,
             child: FilledButton(
@@ -504,9 +552,9 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
                         color: Colors.white,
                       ),
                     )
-                  : const Text(
-                      'Post Challenge',
-                      style: TextStyle(
+                  : Text(
+                      _openToBattles ? 'Post Challenge' : 'Post',
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                       ),
@@ -566,17 +614,21 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
             const SizedBox(width: 14),
             Expanded(
               child: AnimatedBuilder(
-                animation: Listenable.merge([_prefixCtl, _subjectCtl]),
+                animation:
+                    Listenable.merge([_prefixCtl, _subjectCtl, _captionCtl]),
                 builder: (context, _) {
+                  final open = _openToBattles;
                   final prefix = _prefixCtl.text.trim();
-                  final subject = _subjectCtl.text.trim();
+                  final subject = open
+                      ? _subjectCtl.text.trim()
+                      : _captionCtl.text.trim();
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const SizedBox(height: 4),
-                      const Text(
-                        'YOUR CHALLENGE',
-                        style: TextStyle(
+                      Text(
+                        open ? 'YOUR CHALLENGE' : 'YOUR POST',
+                        style: const TextStyle(
                           color: Colors.white54,
                           fontSize: 11,
                           fontWeight: FontWeight.w600,
@@ -584,20 +636,26 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
                         ),
                       ),
                       const SizedBox(height: 8),
-                      Text(
-                        prefix.isEmpty ? 'Who is better at' : prefix,
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 16,
-                          height: 1.2,
+                      // A normal post is not a question: no opener.
+                      if (open)
+                        Text(
+                          prefix.isEmpty ? 'Who is better at' : prefix,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 16,
+                            height: 1.2,
+                          ),
                         ),
-                      ),
                       const SizedBox(height: 2),
                       AnimatedSwitcher(
                         duration: const Duration(milliseconds: 160),
                         child: Text(
-                          subject.isEmpty ? 'your subject?' : '$subject?',
-                          key: ValueKey(subject.isEmpty),
+                          !open
+                              ? (subject.isEmpty ? 'Your caption' : subject)
+                              : subject.isEmpty
+                              ? 'your subject?'
+                              : '$subject?',
+                          key: ValueKey('${open}_${subject.isEmpty}'),
                           maxLines: 3,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -627,10 +685,16 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
                                 : '${_friends.length} '
                                       '${_friends.length == 1 ? 'friend' : 'friends'}',
                           ),
-                          _posterChip(
-                            Icons.timer_outlined,
-                            '$_battleDays-day battle',
-                          ),
+                          if (_openToBattles)
+                            _posterChip(
+                              Icons.timer_outlined,
+                              '$_battleDays-day battle',
+                            )
+                          else
+                            _posterChip(
+                              Icons.do_not_disturb_on_outlined,
+                              'Not open to battles',
+                            ),
                           // The song from the editor, credited on the post.
                           if (widget.music != null)
                             KeyedSubtree(
@@ -649,6 +713,61 @@ class _ChallengeMetadataPageState extends State<ChallengeMetadataPage>
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// "Open to battles": on, anybody can answer with their own video and
+  /// the two battle for votes; off, it is a normal post. Can be changed
+  /// later from the post's page.
+  Widget _battlesSwitch() {
+    final cs = Theme.of(context).colorScheme;
+    final open = _openToBattles;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+      decoration: BoxDecoration(
+        color: quietFill(context),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            open ? Icons.bolt_rounded : Icons.do_not_disturb_on_outlined,
+            color: open ? kAccent : quietText(context),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Open to battles',
+                  style: TextStyle(
+                    fontSize: 15.5,
+                    fontWeight: FontWeight.w600,
+                    color: cs.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  open
+                      ? 'Anyone can answer with their own video, and you '
+                          'battle for votes.'
+                      : 'A normal post. People can watch, like and comment, '
+                          'but nobody can answer it.',
+                  key: const ValueKey('open_to_battles_note'),
+                  style: TextStyle(fontSize: 12.5, color: quietText(context)),
+                ),
+              ],
+            ),
+          ),
+          Switch.adaptive(
+            key: const ValueKey('open_to_battles'),
+            value: open,
+            activeTrackColor: kAccent,
+            onChanged: (v) => setState(() => _openToBattles = v),
+          ),
+        ],
       ),
     );
   }

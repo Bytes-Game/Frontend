@@ -33,6 +33,7 @@ import 'package:myapp/config/editor_setup.dart';
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/create_page.dart';
+import 'package:myapp/pages/challenge_metadata_page.dart' show maxSubject;
 import 'package:myapp/pages/photo_editor_page.dart';
 import 'package:myapp/pages/search_page.dart';
 import 'package:myapp/pages/video_editor_page.dart';
@@ -685,6 +686,8 @@ void main() {
       expect(posted.single['videoUrl'], 'https://cdn/u/1/up1/photo.jpg');
       expect(posted.single['prefix'], 'Who looks better');
       expect(posted.single['subject'], 'in red');
+      expect(posted.single['openToBattles'], isTrue,
+          reason: 'open to battles unless switched off');
       expect(posted.single['durationMs'], 0);
       expect(posted.single['videoVariants'], isEmpty);
       expect(platform.opened, isEmpty);
@@ -692,6 +695,101 @@ void main() {
       expect(find.byType(CreatePage), findsNothing);
       expect(find.text('go'), findsOneWidget);
       await close(t);
+    });
+
+    testWidgets('switched off, it is a normal post: a caption and no '
+        'question, no battle length, and nobody can answer it', (t) async {
+      await startFromCreatePage(t);
+      // On to begin with, saying what that means.
+      final sw = find.byKey(const ValueKey('open_to_battles'));
+      expect(t.widget<Switch>(sw).value, isTrue);
+      expect(find.text('Battle length'.toUpperCase()), findsOneWidget);
+      expect(find.text('YOUR CHALLENGE'), findsOneWidget);
+
+      await t.tap(sw);
+      await t.pump();
+      expect(t.widget<Switch>(sw).value, isFalse);
+      expect(find.text('New photo post'), findsOneWidget);
+      expect(find.text('YOUR POST'), findsOneWidget);
+      expect(find.textContaining('nobody can answer it'), findsOneWidget);
+      // No opener, no subject, no battle length, nothing to match.
+      expect(find.text('Prefix'), findsNothing);
+      expect(find.text('Subject'), findsNothing);
+      expect(find.text('Battle length'.toUpperCase()), findsNothing);
+      expect(find.text(matchWarningPhotoChallenge), findsNothing);
+      expect(find.text('Not open to battles'), findsOneWidget,
+          reason: 'the preview card says so');
+
+      // A caption is needed, and can run longer than a subject.
+      await t.tap(find.text('Post'));
+      await t.pump();
+      expect(find.text('Required'), findsOneWidget);
+      final caption = 'Sunset on the roof with my sister, best evening';
+      expect(caption.length, greaterThan(maxSubject));
+      await t.enterText(find.byKey(const ValueKey('post_caption')), caption);
+      await t.pump();
+      // The preview shows it as it will be read: not a question.
+      expect(find.text(caption), findsWidgets);
+      expect(find.text('$caption?'), findsNothing);
+
+      await t.tap(find.text('Post'));
+      await letItUpload(t);
+      final posted = sentTo('POST', '/api/v1/challenges');
+      expect(posted, hasLength(1));
+      expect(posted.single['openToBattles'], isFalse);
+      expect(posted.single['prefix'], '');
+      expect(posted.single['subject'], caption);
+      expect(posted.single.containsKey('battleDays'), isFalse,
+          reason: 'a normal post has no battle to set a length for');
+      await close(t);
+    });
+
+    testWidgets('a normal post that failed is still a normal post after the '
+        'app closes and it is retried', (t) async {
+      // Where the app keeps unfinished posts.
+      const temp = MethodChannel('plugins.flutter.io/path_provider');
+      t.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        temp,
+        (call) async => dir.path,
+      );
+      addTearDown(() =>
+          t.binding.defaultBinaryMessenger.setMockMethodCallHandler(temp, null));
+      final jobs = UploadJobManager.instance..debugForgetJobsFile();
+      for (final j in [...jobs.activeJobs.value]) {
+        jobs.dismiss(j.id);
+      }
+      createFailsOnce = true;
+      final first = jobs.submitChallenge(
+        creatorId: '1',
+        sourcePath: photos.next!.path,
+        photo: true,
+        meta: const ChallengeSubmissionMeta(
+          prefix: '',
+          subject: 'Sunday lunch',
+          visibility: 'arena',
+          category: '',
+          emotionTags: [],
+          openToBattles: false,
+        ),
+      );
+      await letItUpload(t);
+      expect(first.state.value.stage, UploadJobStage.failed);
+      await letItSave(t);
+      jobs.dismiss(first.id);
+      await t.runAsync(jobs.restorePersisted);
+      final restored = jobs.activeJobs.value.single;
+      expect(restored.postedAs?.openToBattles, isFalse);
+
+      jobs.retry(restored);
+      await letItUpload(t);
+      final posts = sentTo('POST', '/api/v1/challenges');
+      expect(posts, hasLength(2));
+      expect(posts.first['openToBattles'], isFalse);
+      expect(posts.last['openToBattles'], isFalse);
+      for (final j in [...jobs.activeJobs.value]) {
+        jobs.dismiss(j.id);
+      }
+      await t.pump(const Duration(seconds: 5));
     });
 
     testWidgets('a photo challenge that failed to post is still a photo '

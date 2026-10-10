@@ -25,6 +25,13 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 
+/// When set, the open challenge is a normal post instead: not open to
+/// battles, with a caption and no opener.
+bool closedPost = false;
+
+/// The owner's "Open to battles" switch: what each flip asked for.
+late List<bool> battlesSent;
+
 Map<String, dynamic> challengeJson({required bool open, bool liked = false}) =>
     {
       'id': open ? '2' : '1',
@@ -46,6 +53,11 @@ Map<String, dynamic> challengeJson({required bool open, bool liked = false}) =>
       'shareCount': 40,
       'isLiked': liked,
       'createdAt': '2026-09-20T10:00:00Z',
+      if (open && closedPost) ...{
+        'closedToBattles': true,
+        'prefix': '',
+        'subject': 'Pasta night with friends',
+      },
     };
 
 /// Likes the page asked the server for.
@@ -71,10 +83,16 @@ void fakeServer({required bool open, bool liked = false}) {
   votesSent = [];
   peopleAsked = [];
   aboutAsked = [];
+  battlesSent = [];
   voteGate = null;
   ApiService.useClient(
     MockClient((req) async {
       final p = req.url.path;
+      if (req.method == 'PATCH' && p.endsWith('/battles')) {
+        final open = (json.decode(req.body) as Map)['open'] == true;
+        battlesSent.add(open);
+        return http.Response(json.encode({'openToBattles': open}), 200);
+      }
       if (p.endsWith('/about')) {
         aboutAsked.add(req.url.toString());
         return http.Response(
@@ -288,6 +306,58 @@ void main() {
     await t.tap(find.byKey(const ValueKey('empty_seat')));
     await settle(t);
     expect(find.text('Record'), findsOneWidget);
+  });
+
+  group('a normal post, not open to battles', () {
+    setUp(() => closedPost = true);
+    tearDown(() => closedPost = false);
+
+    testWidgets('somebody else sees no Accept and no open seat, and it is '
+        'called a post', (t) async {
+      await openPage(t, open: true);
+      expect(find.text('Pasta night with friends'), findsOneWidget);
+      expect(find.text('Pasta night with friends?'), findsNothing);
+      expect(find.byKey(const ValueKey('accept_button')), findsNothing);
+      expect(find.text('Your move'), findsNothing);
+      expect(
+        t.widget<Text>(find.byKey(const ValueKey('empty_seat_title'))).data,
+        'Not open to battles',
+      );
+      expect(find.byKey(const ValueKey('status_post')), findsOneWidget);
+      expect(find.text('Open'), findsNothing);
+      expect(find.widgetWithText(AppBar, 'Post'), findsOneWidget);
+      // Nothing to report it for — it has no challenge to match — so for
+      // somebody who does not own it there is no menu at all.
+      expect(find.byKey(const ValueKey('detail_more')), findsNothing);
+    });
+
+    testWidgets('the owner opens it to battles from its page, and then it '
+        'waits for a challenger', (t) async {
+      await openPage(t, open: true, me: '9');
+      final sw = find.byKey(const ValueKey('battles_switch_2'));
+      expect(sw, findsOneWidget);
+      expect(t.widget<SwitchListTile>(sw).value, isFalse);
+      expect(find.text('Not open to battles'), findsWidgets);
+
+      await t.tap(sw);
+      await settle(t);
+      expect(battlesSent, [true]);
+      expect(t.widget<SwitchListTile>(sw).value, isTrue);
+      expect(find.byKey(const ValueKey('status_post')), findsNothing);
+      expect(find.text('Open'), findsOneWidget);
+      expect(find.text('Waiting for a challenger'), findsOneWidget);
+      expect(find.widgetWithText(AppBar, 'Challenge'), findsOneWidget);
+    });
+  });
+
+  testWidgets('somebody else sees the owner\'s switch nowhere', (t) async {
+    await openPage(t, open: true);
+    expect(find.byKey(const ValueKey('battles_switch_2')), findsNothing);
+    // And an open challenge still offers to take it on, and to report it.
+    expect(find.byKey(const ValueKey('accept_button')), findsOneWidget);
+    await t.tap(find.byKey(const ValueKey('detail_more')));
+    await settle(t);
+    expect(find.byKey(const ValueKey('report_')), findsOneWidget);
   });
 
   testWidgets('your own open challenge waits; nothing to accept', (t) async {

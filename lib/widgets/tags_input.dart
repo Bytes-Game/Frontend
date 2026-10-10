@@ -11,6 +11,10 @@ import 'package:flutter/services.dart';
 /// list. Pressing Enter on a non-empty input also appends, so users
 /// can type free-form tags the autocomplete didn't suggest.
 ///
+/// The suggestions show while the tag box is in use: tapping it brings
+/// them up, and a tap anywhere else puts them away, so they never sit
+/// over the rest of the form.
+///
 /// Why a single widget instead of two (suggest + chip-bar):
 ///   * Keeps the dirty/clean state in one place — easier to wire to
 ///     the parent form's validator.
@@ -63,12 +67,39 @@ class _TagsInputState extends State<TagsInput> {
   final FocusNode _focus = FocusNode();
   Timer? _debounce;
 
+  /// Whether the suggestions are showing: from a tap on the box until a
+  /// tap somewhere else.
+  bool _open = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _focus.addListener(_onFocus);
+  }
+
   @override
   void dispose() {
     _debounce?.cancel();
+    _focus.removeListener(_onFocus);
     _input.dispose();
     _focus.dispose();
     super.dispose();
+  }
+
+  void _onFocus() {
+    if (!_focus.hasFocus || _open) return;
+    setState(() => _open = true);
+    // Popular tags straight away, before anything is typed.
+    widget.onQuery(_input.text);
+  }
+
+  /// A tap outside the box and its suggestions: put them away and let go
+  /// of the box. A tap on the box focuses it again, which brings them back
+  /// (_onFocus).
+  void _close() {
+    if (!_open && !_focus.hasFocus) return;
+    setState(() => _open = false);
+    _focus.unfocus();
   }
 
   void _onChanged(String value) {
@@ -119,104 +150,113 @@ class _TagsInputState extends State<TagsInput> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final atMax = widget.selectedTags.length >= widget.maxTags;
-    final suggestionsToShow = widget.suggestions
-        .where((s) => !widget.selectedTags.contains(_normalize(s)))
-        .take(12)
-        .toList();
+    final suggestionsToShow = !_open
+        ? const <String>[]
+        : widget.suggestions
+              .where((s) => !widget.selectedTags.contains(_normalize(s)))
+              .take(12)
+              .toList();
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Selected chips row.
-        if (widget.selectedTags.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (final tag in widget.selectedTags)
-                  InputChip(
-                    label: Text(tag),
-                    onDeleted: () => _removeTag(tag),
-                    backgroundColor: cs.primary,
-                    labelStyle: TextStyle(
-                      color: cs.onPrimary,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    deleteIconColor: cs.onPrimary,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-
-        // Input row.
-        TextField(
-          controller: _input,
-          focusNode: _focus,
-          enabled: !atMax,
-          onChanged: _onChanged,
-          onSubmitted: _addTag,
-          inputFormatters: [
-            LengthLimitingTextInputFormatter(widget.maxTagLength),
-          ],
-          style: TextStyle(color: cs.onSurface),
-          decoration: InputDecoration(
-            hintText: atMax
-                ? 'Max ${widget.maxTags} tags'
-                : 'Add a tag and tap Enter, or pick below',
-            hintStyle: TextStyle(color: cs.onSurface.withValues(alpha: 0.45)),
-            filled: true,
-            fillColor: cs.surfaceContainerHighest,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide.none,
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: cs.primary, width: 1.5),
-            ),
-            suffixIcon: _input.text.trim().isEmpty
-                ? null
-                : IconButton(
-                    icon: const Icon(Icons.add_circle, size: 22),
-                    tooltip: 'Add',
-                    onPressed: () => _addTag(_input.text),
-                  ),
-          ),
-        ),
-
-        // Suggestion chips row.
-        if (suggestionsToShow.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 10),
-            child: Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (final s in suggestionsToShow)
-                  ActionChip(
-                    label: Text(s),
-                    onPressed: atMax ? null : () => _addTag(s),
-                    backgroundColor: cs.surfaceContainerHighest,
-                    labelStyle: TextStyle(
-                      color: cs.onSurface,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      side: BorderSide(
-                        color: cs.outlineVariant.withValues(alpha: 0.5),
+    return TapRegion(
+      onTapOutside: (_) => _close(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Selected chips row.
+          if (widget.selectedTags.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final tag in widget.selectedTags)
+                    InputChip(
+                      label: Text(tag),
+                      onDeleted: () => _removeTag(tag),
+                      backgroundColor: cs.primary,
+                      labelStyle: TextStyle(
+                        color: cs.onPrimary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      deleteIconColor: cs.onPrimary,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
+            ),
+
+          // Input row.
+          TextField(
+            key: const ValueKey('tags_field'),
+            controller: _input,
+            focusNode: _focus,
+            // Outside taps are handled for the box and its suggestions
+            // together (the TapRegion above).
+            onTapOutside: (_) {},
+            enabled: !atMax,
+            onChanged: _onChanged,
+            onSubmitted: _addTag,
+            inputFormatters: [
+              LengthLimitingTextInputFormatter(widget.maxTagLength),
+            ],
+            style: TextStyle(color: cs.onSurface),
+            decoration: InputDecoration(
+              hintText: atMax
+                  ? 'Max ${widget.maxTags} tags'
+                  : 'Add a tag and tap Enter, or pick below',
+              hintStyle: TextStyle(color: cs.onSurface.withValues(alpha: 0.45)),
+              filled: true,
+              fillColor: cs.surfaceContainerHighest,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: cs.primary, width: 1.5),
+              ),
+              suffixIcon: _input.text.trim().isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.add_circle, size: 22),
+                      tooltip: 'Add',
+                      onPressed: () => _addTag(_input.text),
+                    ),
             ),
           ),
-      ],
+
+          // Suggestion chips row.
+          if (suggestionsToShow.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final s in suggestionsToShow)
+                    ActionChip(
+                      label: Text(s),
+                      onPressed: atMax ? null : () => _addTag(s),
+                      backgroundColor: cs.surfaceContainerHighest,
+                      labelStyle: TextStyle(
+                        color: cs.onSurface,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        side: BorderSide(
+                          color: cs.outlineVariant.withValues(alpha: 0.5),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

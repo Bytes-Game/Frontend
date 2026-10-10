@@ -33,6 +33,7 @@ import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/widgets/music_credit.dart';
 import 'package:myapp/widgets/report_video.dart';
+import 'package:myapp/widgets/open_to_battles.dart';
 import 'package:myapp/widgets/follow_flow.dart';
 import 'package:myapp/widgets/feed_action_bar.dart'
     show
@@ -2608,6 +2609,8 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
         ..shareCount = c.shareCount
         ..saveCount = c.saveCount
         ..isSaved = c.isSaved
+        // Its owner may have opened it to battles there, or closed it.
+        ..openToBattles = c.openToBattles
         ..views = c.views;
       // The answer's likes, if it is still the answer this reel shows.
       if (c.topResponseId.isNotEmpty &&
@@ -3162,6 +3165,14 @@ class _ReelItem implements _FeedEntry {
   final String thumbnailUrl;
   final String caption;
 
+  /// Whether the caption is a question: a challenge has an opener ("Who is
+  /// better at …"), a normal post has only a caption, which is not one.
+  final bool asksQuestion;
+
+  /// Whether anybody may answer it. Off: a normal post, with no "Accept
+  /// challenge". The owner can change it from the post's page.
+  bool openToBattles = true;
+
   /// The free song under each side's video, with its credit; null for
   /// none.
   final MusicCredit? music;
@@ -3256,9 +3267,11 @@ class _ReelItem implements _FeedEntry {
   /// can count them for the side that was actually watched.
   final BattleFaceClock faces = BattleFaceClock();
 
-  /// The caption as shown: a challenge is a question, so it ends in "?".
+  /// The caption as shown: a challenge is a question, so it ends in "?". A
+  /// normal post's caption is not one.
   String get fullCaption => caption.isEmpty ||
           type != 'challenge' ||
+          !asksQuestion ||
           caption.endsWith('?')
       ? caption
       : '$caption?';
@@ -3319,6 +3332,7 @@ class _ReelItem implements _FeedEntry {
     this.fallbackVideoUrl = '',
     required this.thumbnailUrl,
     required this.caption,
+    this.asksQuestion = true,
     this.music,
     this.opponentMusic,
     this.creatorId = '',
@@ -3460,6 +3474,7 @@ class _ReelItem implements _FeedEntry {
         photoUrl: photo,
         opponentPhotoUrl: opponentPhoto,
         caption: title,
+        asksQuestion: '${c['prefix'] ?? ''}'.trim().isNotEmpty,
         music: MusicCredit.fromJson(c['music']),
         opponentMusic: MusicCredit.fromJson(c['topResponseMusic']),
         creatorId: (c['creatorId'] as String?) ?? '',
@@ -3492,6 +3507,7 @@ class _ReelItem implements _FeedEntry {
         // means fresh, which is the usual case.
         isRepeat: c['repeat'] as bool? ?? false,
       )
+        ..openToBattles = c['closedToBattles'] != true
         ..isSaved = c['isSaved'] == true
         ..hasVoted = c['hasVoted'] == true
         ..votedFor = c['votedFor']?.toString() ?? ''
@@ -3550,6 +3566,7 @@ class _ReelItem implements _FeedEntry {
           : (mp4Url.isNotEmpty ? c.hlsManifestUrl : ''),
       thumbnailUrl: c.thumbnailUrl ?? '',
       caption: c.title,
+      asksQuestion: c.prefix.trim().isNotEmpty,
       music: c.music,
       opponentMusic: c.topResponseMusic,
       creatorId: c.creatorId,
@@ -3572,6 +3589,7 @@ class _ReelItem implements _FeedEntry {
       comments: c.commentCount,
       isLiked: c.isLiked,
     )
+      ..openToBattles = c.openToBattles
       ..isSaved = c.isSaved
       ..hasVoted = c.hasVoted
       ..votedFor = c.votedFor
@@ -3592,6 +3610,7 @@ class _ReelItem implements _FeedEntry {
     photoUrl: c.videoUrl,
     opponentPhotoUrl: c.topResponseVideoUrl,
     caption: c.title,
+    asksQuestion: c.prefix.trim().isNotEmpty,
     creatorId: c.creatorId,
     creatorUsername: c.creatorUsername,
     creatorLeague: c.creatorLeague,
@@ -3606,6 +3625,7 @@ class _ReelItem implements _FeedEntry {
     comments: c.commentCount,
     isLiked: c.isLiked,
   )
+    ..openToBattles = c.openToBattles
     ..isSaved = c.isSaved
     ..hasVoted = c.hasVoted
     ..votedFor = c.votedFor
@@ -3962,6 +3982,9 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   bool get _canReport {
     if (widget.onReport == null) return false;
     final onAnswer = widget.item.isBattle && _showingOpponent;
+    // A normal post's own video has no challenge to match, so there is
+    // nothing to report it for; an answer in its battle still can be.
+    if (!onAnswer && !widget.item.openToBattles) return false;
     return !(onAnswer ? widget.answerIsMine : widget.isOwner);
   }
 
@@ -4375,6 +4398,17 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // Your own post: open it to battles, or make it a normal post.
+            if (widget.isOwner &&
+                widget.item.type == 'challenge' &&
+                widget.item.id.isNotEmpty)
+              OpenToBattlesTile(
+                challengeId: widget.item.id,
+                open: widget.item.openToBattles,
+                onChanged: (open) {
+                  if (mounted) setState(() => widget.item.openToBattles = open);
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.visibility_off_outlined),
               title: const Text('Not interested'),
@@ -5122,7 +5156,11 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                 _CreatorLine(
                   username: item.creatorUsername,
                   league: item.creatorLeague,
-                  tag: isChallenge ? 'Open challenge' : null,
+                  // A normal post is not a challenge, and does not say it
+                  // is one.
+                  tag: isChallenge && item.openToBattles
+                      ? 'Open challenge'
+                      : null,
                 ),
                 const SizedBox(height: 8),
               ],
@@ -5176,7 +5214,9 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                 const SizedBox(height: 10),
                 // A battle shows its score — the thing you want to know
                 // about it — and opens the battle page from there. A short
-                // offers to take it on. Your own short opens its page.
+                // offers to take it on. Your own short opens its page,
+                // where you can open it to battles or close it. Somebody
+                // else's normal post offers nothing: nobody can answer it.
                 if (item.isBattle)
                   _ScorePill(
                     standings: _score,
@@ -5184,11 +5224,13 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                   )
                 else if (widget.isOwner)
                   _GlassPill(
-                    icon: Icons.bolt_rounded,
-                    label: 'View challenge',
+                    icon: item.openToBattles
+                        ? Icons.bolt_rounded
+                        : Icons.do_not_disturb_on_outlined,
+                    label: item.openToBattles ? 'View challenge' : 'View post',
                     onTap: widget.onOpenDetail,
                   )
-                else
+                else if (item.openToBattles)
                   Builder(
                     builder: (pill) => _GlassPill(
                       icon: Icons.bolt_rounded,

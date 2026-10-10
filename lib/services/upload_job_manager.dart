@@ -390,6 +390,7 @@ class UploadJobManager {
         tags: meta.tags,
         battleDays: meta.battleDays,
         visibleTo: meta.visibleTo,
+        openToBattles: meta.openToBattles,
         mediaType: job.isPhoto ? 'photo' : 'video',
         musicTrackId: meta.musicTrackId,
       );
@@ -464,6 +465,7 @@ class UploadJobManager {
           tags: meta.tags,
           battleDays: meta.battleDays,
           visibleTo: meta.visibleTo,
+          openToBattles: meta.openToBattles,
           mediaType: 'photo',
         ),
       );
@@ -578,6 +580,7 @@ class UploadJobManager {
         tags: meta.tags,
         battleDays: meta.battleDays,
         visibleTo: meta.visibleTo,
+        openToBattles: meta.openToBattles,
         musicTrackId: meta.musicTrackId,
         // energyLevel removed from the create payload — the server
         // derives it from the metadata it already has. See
@@ -1073,6 +1076,7 @@ class UploadJobManager {
                 .map((e) => e.toString())
                 .toList(),
             musicTrackId: metaJson['musicTrackId'] as String? ?? '',
+            openToBattles: metaJson['openToBattles'] as bool? ?? true,
           );
         }
         if (!job._hasRetryInfo) continue;
@@ -1299,6 +1303,9 @@ class UploadJob {
             'visibleTo': _challengeMeta!.visibleTo,
             if (_challengeMeta!.musicTrackId.isNotEmpty)
               'musicTrackId': _challengeMeta!.musicTrackId,
+            // Kept, so a post retried after the app closed is still a
+            // normal post if that is what was chosen.
+            if (!_challengeMeta!.openToBattles) 'openToBattles': false,
           },
       };
 }
@@ -1338,6 +1345,10 @@ class ChallengeSubmissionMeta {
   /// Empty for none.
   final String musicTrackId;
 
+  /// Whether anybody may answer it with their own video. Off makes it a
+  /// normal post, whose [subject] is its caption and [prefix] empty.
+  final bool openToBattles;
+
   const ChallengeSubmissionMeta({
     required this.prefix,
     required this.subject,
@@ -1348,6 +1359,7 @@ class ChallengeSubmissionMeta {
     this.battleDays = 0,
     this.visibleTo = const [],
     this.musicTrackId = '',
+    this.openToBattles = true,
   });
 }
 

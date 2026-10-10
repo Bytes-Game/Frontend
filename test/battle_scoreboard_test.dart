@@ -340,7 +340,8 @@ void main() {
     );
     final form = code('lib/pages/challenge_metadata_page.dart');
     expect(form, contains("_section('Battle length')"));
-    expect(form, contains('battleDays: int.parse(_battleDays)'));
+    // A challenge sends the length chosen; a normal post has no battle.
+    expect(form, contains('battleDays: open ? int.parse(_battleDays) : 0'));
     final jobs = code('lib/services/upload_job_manager.dart');
     expect(
       'battleDays: meta.battleDays'.allMatches(jobs).length,

@@ -24,6 +24,13 @@ import 'package:flutter/services.dart';
 ///     flight.
 ///   * On focus loss → hide the portal (parent's suggestion list
 ///     stays cached — re-focusing repaints it without a refetch).
+///   * On a tap anywhere outside the field and its list → the list
+///     closes and the field lets go, so it never sits over the fields
+///     below it. A tap on the field brings it back.
+///
+/// That last one is not what a phone does by itself: tapping elsewhere
+/// does not take the focus away from a text field, so the list used to
+/// stay open over the rest of the form until another field was tapped.
 class SuggestField<T> extends StatefulWidget {
   final TextEditingController controller;
   final String label;
@@ -152,6 +159,15 @@ class _SuggestFieldState<T> extends State<SuggestField<T>> {
     if (mounted) setState(() {});
   }
 
+  /// A tap outside the field and its list: close the list, let go of the
+  /// field (the keyboard goes too). A tap on the field focuses it again,
+  /// which brings the list back (_onFocusChanged).
+  void _dismiss() {
+    if (!_focus.hasFocus && !_portal.isShowing) return;
+    _portal.hide();
+    _focus.unfocus();
+  }
+
   void _onTap(T value) {
     final s = widget.displayString(value);
     final max = widget.maxLength;
@@ -200,29 +216,34 @@ class _SuggestFieldState<T> extends State<SuggestField<T>> {
         // fields with helper text — they're taller, and the
         // dropdown overlapped them.
         offset: Offset(0, _fieldHeight + 4),
-        child: Material(
-          elevation: 8,
-          borderRadius: BorderRadius.circular(12),
-          color: cs.surfaceContainerHigh,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 280),
-            child: ListView.builder(
-              padding: EdgeInsets.zero,
-              shrinkWrap: true,
-              itemCount: widget.suggestions.length,
-              itemBuilder: (_, i) {
-                final opt = widget.suggestions[i];
-                return InkWell(
-                  onTap: () => _onTap(opt),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
+        // Part of the field as far as "outside" goes: a tap on a
+        // suggestion picks it, it does not close the list first.
+        child: TapRegion(
+          groupId: _link,
+          child: Material(
+            elevation: 8,
+            borderRadius: BorderRadius.circular(12),
+            color: cs.surfaceContainerHigh,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 280),
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: widget.suggestions.length,
+                itemBuilder: (_, i) {
+                  final opt = widget.suggestions[i];
+                  return InkWell(
+                    onTap: () => _onTap(opt),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      child: widget.buildRow(opt),
                     ),
-                    child: widget.buildRow(opt),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
           ),
         ),
@@ -233,44 +254,51 @@ class _SuggestFieldState<T> extends State<SuggestField<T>> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return CompositedTransformTarget(
-      link: _link,
-      // OverlayPortal wraps the field. When .show() is called the
-      // overlayChildBuilder is mounted into the nearest Overlay; on
-      // every State.build it rebuilds, so async suggestion updates
-      // flow through automatically.
-      child: OverlayPortal(
-        controller: _portal,
-        overlayChildBuilder: _buildOverlay,
-        child: _MeasuredField(
-          onMeasured: (h) {
-            if ((h - _fieldHeight).abs() > 0.5) {
-              setState(() => _fieldHeight = h);
-            }
-          },
-          child: TextFormField(
-            controller: widget.controller,
-            focusNode: _focus,
-            validator: widget.validator,
-            maxLength: widget.maxLength,
-            maxLengthEnforcement: MaxLengthEnforcement.enforced,
-            style: TextStyle(color: cs.onSurface),
-            decoration: InputDecoration(
-              labelText: widget.label,
-              hintText: widget.hint,
-              labelStyle:
-                  TextStyle(color: cs.onSurface.withValues(alpha: 0.7)),
-              hintStyle:
-                  TextStyle(color: cs.onSurface.withValues(alpha: 0.45)),
-              filled: true,
-              fillColor: cs.surfaceContainerHighest,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide.none,
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: cs.primary, width: 1.5),
+    return TapRegion(
+      groupId: _link,
+      onTapOutside: (_) => _dismiss(),
+      child: CompositedTransformTarget(
+        link: _link,
+        // OverlayPortal wraps the field. When .show() is called the
+        // overlayChildBuilder is mounted into the nearest Overlay; on
+        // every State.build it rebuilds, so async suggestion updates
+        // flow through automatically.
+        child: OverlayPortal(
+          controller: _portal,
+          overlayChildBuilder: _buildOverlay,
+          child: _MeasuredField(
+            onMeasured: (h) {
+              if ((h - _fieldHeight).abs() > 0.5) {
+                setState(() => _fieldHeight = h);
+              }
+            },
+            child: TextFormField(
+              controller: widget.controller,
+              focusNode: _focus,
+              // Outside taps are handled for the field and its list together
+              // (the TapRegion above), not by the field alone.
+              onTapOutside: (_) {},
+              validator: widget.validator,
+              maxLength: widget.maxLength,
+              maxLengthEnforcement: MaxLengthEnforcement.enforced,
+              style: TextStyle(color: cs.onSurface),
+              decoration: InputDecoration(
+                labelText: widget.label,
+                hintText: widget.hint,
+                labelStyle:
+                    TextStyle(color: cs.onSurface.withValues(alpha: 0.7)),
+                hintStyle:
+                    TextStyle(color: cs.onSurface.withValues(alpha: 0.45)),
+                filled: true,
+                fillColor: cs.surfaceContainerHighest,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: cs.primary, width: 1.5),
+                ),
               ),
             ),
           ),

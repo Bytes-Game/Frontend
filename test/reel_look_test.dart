@@ -116,6 +116,9 @@ List<(String, String)> reportsSent = [];
 /// for the challenger's video.
 List<String> aboutAsked = [];
 
+/// The owner's "Open to battles" switch: what each flip asked for.
+List<bool> battlesSent = [];
+
 
 void fakeServer(Map<String, dynamic> first) {
   lastVote = null;
@@ -125,6 +128,7 @@ void fakeServer(Map<String, dynamic> first) {
   watchesSent = [];
   reportsSent = [];
   aboutAsked = [];
+  battlesSent = [];
   standingsAsked = 0;
   refuseComments = false;
   posted = [];
@@ -163,6 +167,14 @@ void fakeServer(Map<String, dynamic> first) {
           json.encode({'reported': true, 'message': 'Thanks for reporting.'}),
           200,
         );
+      }
+      if (req.method == 'PATCH' &&
+          req.url.path.endsWith('/challenges/${first['id']}/battles')) {
+        final open = (json.decode(req.body) as Map)['open'] == true;
+        battlesSent.add(open);
+        // The post read again says what it now is.
+        detailOverride = {...detailOverride, 'closedToBattles': !open};
+        return http.Response(json.encode({'openToBattles': open}), 200);
       }
       if (req.url.path.endsWith('/challenges/${first['id']}/about')) {
         aboutAsked.add(req.url.queryParameters['response'] ?? '');
@@ -1147,6 +1159,89 @@ void main() {
     expect(find.text('5.4K views'), findsOneWidget);
     expect(find.byTooltip('Vote'), findsNothing);
     expect(find.text('VS'), findsNothing);
+    await closeReel(t);
+  });
+
+  Map<String, dynamic> normalPost() => {
+    ...short(),
+    'prefix': '',
+    'subject': 'Pasta night with friends',
+    'closedToBattles': true,
+  };
+
+  testWidgets("somebody else's normal post: no Accept, not called a "
+      'challenge, and its caption is not a question', (t) async {
+    await openReel(t, normalPost());
+    expect(find.text('zara'), findsOneWidget);
+    expect(find.text('Pasta night with friends'), findsOneWidget);
+    expect(find.text('Pasta night with friends?'), findsNothing);
+    expect(find.text('Accept challenge'), findsNothing);
+    expect(find.text('Open challenge'), findsNothing);
+    expect(find.text('View post'), findsNothing);
+    // Nothing to report it for: it has no challenge to match.
+    expect(find.byKey(const ValueKey('reel_more')), findsNothing);
+    await closeReel(t);
+  });
+
+  testWidgets('somebody else\'s challenge can still be reported', (t) async {
+    await openReel(t, short());
+    expect(find.byKey(const ValueKey('reel_more')), findsOneWidget);
+    await closeReel(t);
+  });
+
+  testWidgets('switched on from its page, your post comes back to the reel '
+      'as a challenge', (t) async {
+    await openReel(t, normalPost(), meId: '8', meName: 'zara');
+    await t.tap(find.text('View post'));
+    for (var i = 0; i < 10; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    final sw = find.byKey(const ValueKey('battles_switch_2'));
+    expect(sw, findsOneWidget);
+    await t.tap(sw);
+    for (var i = 0; i < 6; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    expect(battlesSent, [true]);
+    // Back to the reel, which reads the post again.
+    await t.pageBack();
+    for (var i = 0; i < 10; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.text('View challenge'), findsOneWidget);
+    expect(find.text('View post'), findsNothing);
+    await closeReel(t);
+  });
+
+  testWidgets('your own normal post says so, and holding it down opens it '
+      'to battles', (t) async {
+    await openReel(t, normalPost(), meId: '8', meName: 'zara');
+    expect(find.text('View post'), findsOneWidget);
+    expect(find.text('View challenge'), findsNothing);
+
+    // Held down in the middle of the video.
+    await t.longPressAt(const Offset(200, 420));
+    for (var i = 0; i < 6; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    final sw = find.byKey(const ValueKey('battles_switch_2'));
+    expect(sw, findsOneWidget);
+    expect(t.widget<SwitchListTile>(sw).value, isFalse);
+    await t.tap(sw);
+    for (var i = 0; i < 4; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    expect(battlesSent, [true]);
+    expect(t.widget<SwitchListTile>(sw).value, isTrue);
+    expect(find.text('Open to battles. Anyone can answer it now.'),
+        findsOneWidget);
+    // Out of the menu: the reel shows it as a challenge now.
+    await t.tapAt(const Offset(200, 100));
+    for (var i = 0; i < 6; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.text('View challenge'), findsOneWidget);
+    expect(find.text('View post'), findsNothing);
     await closeReel(t);
   });
 

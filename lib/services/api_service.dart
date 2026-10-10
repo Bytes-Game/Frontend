@@ -845,6 +845,9 @@ class ApiService {
     // The free song mixed into the video, by its id in the music library
     // (MusicLibrary.pick). Empty for none. The post then credits it.
     String musicTrackId = '',
+    // Whether anybody may answer it. Off makes it a normal post: [subject]
+    // is then its caption and [prefix] may be empty (battles_open.go).
+    bool openToBattles = true,
   }) async {
     try {
       final res = await _authHttp.post(
@@ -872,6 +875,7 @@ class ApiService {
           if (battleDays > 0) 'battleDays': battleDays,
           if (mediaType == 'photo') 'mediaType': 'photo',
           if (musicTrackId.isNotEmpty) 'musicTrackId': musicTrackId,
+          'openToBattles': openToBattles,
         }),
       );
       if (res.statusCode == 200 || res.statusCode == 201) {
@@ -2204,6 +2208,31 @@ class ApiService {
       debugPrint('[avatars] ${names.length} photos answered ${res.statusCode}');
     } catch (e) {
       debugPrint('[avatars] ${names.length} photos could not be read: $e');
+    }
+    return null;
+  }
+
+  /// PATCH /api/v1/challenges/{id}/battles — the owner opens their post to
+  /// battles, or closes it. The server's answer, or null when it did not
+  /// change; the log says why.
+  static Future<bool?> setOpenToBattles(String challengeId, bool open) async {
+    try {
+      final res = await _authHttp
+          .patch(
+            Uri.parse('$_base/api/v1/challenges/$challengeId/battles'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'open': open}),
+          )
+          .timeout(const Duration(seconds: 20));
+      if (res.statusCode == 200) {
+        final body = json.decode(res.body) as Map<String, dynamic>;
+        return body['openToBattles'] == true;
+      }
+      debugPrint('[battles] opening $challengeId to battles ($open) '
+          'answered ${res.statusCode}: ${res.body.trim()}');
+    } catch (e) {
+      debugPrint('[battles] opening $challengeId to battles ($open) '
+          'failed: $e');
     }
     return null;
   }

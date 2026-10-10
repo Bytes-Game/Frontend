@@ -117,6 +117,11 @@ class MentionSuggestions extends StatefulWidget {
 }
 
 class _MentionSuggestionsState extends State<MentionSuggestions> {
+  /// What the text box held when a tap elsewhere put the list away. It
+  /// stays away until the text or the cursor moves — typing on, or a tap
+  /// back in the box — so it never covers the chat or the comments.
+  TextEditingValue? _putAwayAt;
+
   @override
   void initState() {
     super.initState();
@@ -144,7 +149,10 @@ class _MentionSuggestionsState extends State<MentionSuggestions> {
 
   @override
   Widget build(BuildContext context) {
-    final active = activeMention(widget.controller.value);
+    final value = widget.controller.value;
+    if (_putAwayAt != null && _putAwayAt != value) _putAwayAt = null;
+    if (_putAwayAt != null) return const SizedBox.shrink();
+    final active = activeMention(value);
     if (active == null) return const SizedBox.shrink();
     final dp = Provider.of<DataProvider>(context, listen: false);
     final people = mentionCandidates(dp, active.query, among: widget.people);
@@ -155,75 +163,80 @@ class _MentionSuggestionsState extends State<MentionSuggestions> {
         : (dark ? AppTheme.surfaceDark : AppTheme.surfaceLight);
     final text = dark ? Colors.white : Colors.black;
     final muted = dark ? AppTheme.textMutedDark : AppTheme.textMutedLight;
-    return Container(
-      key: const ValueKey('mention_suggestions'),
-      margin: const EdgeInsets.fromLTRB(8, 0, 8, 6),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-        border: Border.all(
-          color: (dark ? Colors.white : Colors.black).withValues(alpha: 0.08),
-        ),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x33000000),
-            blurRadius: 16,
-            offset: Offset(0, 6),
+    return TapRegion(
+      onTapOutside: (_) {
+        if (mounted) setState(() => _putAwayAt = widget.controller.value);
+      },
+      child: Container(
+        key: const ValueKey('mention_suggestions'),
+        margin: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+          border: Border.all(
+            color: (dark ? Colors.white : Colors.black).withValues(alpha: 0.08),
           ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Material(
-        color: Colors.transparent,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final u in people)
-              InkWell(
-                key: ValueKey('mention_pick_${u.username}'),
-                onTap: () => insertMention(widget.controller, u.username),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  child: Row(
-                    children: [
-                      ArenaAvatar(name: u.username, size: 32),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              u.username,
-                              style: TextStyle(
-                                color: text,
-                                fontSize: 14.5,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            if (u.fullName.isNotEmpty)
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x33000000),
+              blurRadius: 16,
+              offset: Offset(0, 6),
+            ),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Material(
+          color: Colors.transparent,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final u in people)
+                InkWell(
+                  key: ValueKey('mention_pick_${u.username}'),
+                  onTap: () => insertMention(widget.controller, u.username),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      children: [
+                        ArenaAvatar(name: u.username, size: 32),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
                               Text(
-                                u.fullName,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(color: muted, fontSize: 12.5),
+                                u.username,
+                                style: TextStyle(
+                                  color: text,
+                                  fontSize: 14.5,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
-                          ],
+                              if (u.fullName.isNotEmpty)
+                                Text(
+                                  u.fullName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(color: muted, fontSize: 12.5),
+                                ),
+                            ],
+                          ),
                         ),
-                      ),
-                      if (dp.following.contains(u.id))
-                        Text(
-                          'Following',
-                          style: TextStyle(color: muted, fontSize: 12),
-                        ),
-                    ],
+                        if (dp.following.contains(u.id))
+                          Text(
+                            'Following',
+                            style: TextStyle(color: muted, fontSize: 12),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
