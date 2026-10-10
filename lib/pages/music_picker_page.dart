@@ -8,11 +8,64 @@ import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/music_library.dart';
 
-/// A song chosen for a video: what it is, and the file on the phone.
+/// A song chosen for a video: what it is, and the file on the phone once
+/// it has downloaded.
+///
+/// The picker closes as soon as the server has kept the song, without
+/// waiting for the song itself. It plays straight from the internet while
+/// the whole file downloads behind the editor, and only Done waits for the
+/// file, if it is not there yet. Waiting for the download first held the
+/// person on the picker for 14 seconds on a slow connection.
+///
+/// The whole song is fetched, not only the part under the video, so that
+/// moving the song to another part later never has to wait.
 class PickedMusic {
   final MusicTrack track;
-  final String path;
-  const PickedMusic(this.track, this.path);
+  Future<String> _file;
+  String? _path;
+
+  PickedMusic(this.track, Future<String> file) : _file = file {
+    _follow(file);
+  }
+
+  void _follow(Future<String> file) {
+    final clock = Stopwatch()..start();
+    file.then(
+      (p) {
+        _path = p;
+        debugPrint(
+          '[music] the song ${track.id} is on the phone after '
+          '${clock.elapsedMilliseconds}ms',
+        );
+      },
+      onError: (Object e) => debugPrint(
+        '[music] the song ${track.id} did not download behind the editor: $e',
+      ),
+    );
+  }
+
+  /// The song on the phone, once it is there.
+  String? get path => _path;
+
+  /// What to play now: the file once it is here, the song's address on the
+  /// internet until then.
+  String get playable => _path ?? track.audioUrl;
+
+  /// The file, for saving. Waits for the download, and tries once more if
+  /// it failed.
+  Future<String> file() async {
+    final here = _path;
+    if (here != null) return here;
+    try {
+      return await _file;
+    } catch (e) {
+      debugPrint('[music] downloading the song again: $e');
+      final again = MusicLibrary.instance.download(track);
+      _file = again;
+      _follow(again);
+      return await again;
+    }
+  }
 }
 
 /// The video editor's Music button: search every free song, hear one, use
@@ -154,14 +207,15 @@ class _MusicPickerPageState extends State<MusicPickerPage> {
     unawaited(_player.stop());
     try {
       final kept = await MusicLibrary.instance.pick(t);
-      final path = await MusicLibrary.instance.download(kept);
+      // Not waited for: see PickedMusic.
+      final picked = PickedMusic(kept, MusicLibrary.instance.download(kept));
       EventTracker.instance.track(
         eventType: 'music_picked',
         contentId: kept.id,
         contentType: 'music',
         metadata: {'query': _query, 'licence': kept.licence},
       );
-      if (mounted) Navigator.of(context).pop(PickedMusic(kept, path));
+      if (mounted) Navigator.of(context).pop(picked);
     } on ApiRefused catch (e) {
       if (mounted) _toast(e.reason);
     } catch (e) {

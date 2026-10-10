@@ -508,6 +508,9 @@ void main() {
   // arrived, the way it always did. For a while it started before them;
   // two device logs after that show every video after the tap starving, and
   // the owner asked for it back as it was.
+  //
+  // But it waits only a moment. A server waking up took 27 seconds and then
+  // failed, and the tapped video sat on its picture the whole time.
   group('a video opened from Search', () {
     /// Opens [seed] the way Search does, with the server holding back the
     /// rest of the list until [rest] completes.
@@ -594,6 +597,40 @@ void main() {
       expect(platform.uriOf.values.where((u) => u == 'https://x/51.mp4'),
           hasLength(1),
           reason: 'one player for it, not a second one');
+      await done(t);
+    });
+
+    testWidgets('a slow server does not hold it back: it plays after 2 '
+        'seconds, and the list arriving later does not restart it',
+        (t) async {
+      final rest = Completer<void>();
+      await open(t, short('54'), rest);
+      expect(platform.sounding, isEmpty,
+          reason: 'inside the 2 seconds it still waits for the list');
+
+      await t.pump(const Duration(milliseconds: 900));
+      await settle(t);
+      expect(platform.sounding, {'https://x/54.mp4'},
+          reason: 'past 2 seconds it plays without the list');
+
+      platform.playedFor = const Duration(seconds: 3);
+      final rewoundBefore =
+          platform.rewound.where((u) => u == 'https://x/54.mp4').length;
+      rest.complete();
+      await settle(t);
+      expect(platform.sounding, {'https://x/54.mp4'});
+      expect(platform.rewound.where((u) => u == 'https://x/54.mp4'),
+          hasLength(rewoundBefore),
+          reason: 'the list arriving must not send it back to its start');
+      expect(platform.uriOf.values.where((u) => u == 'https://x/54.mp4'),
+          hasLength(1),
+          reason: 'one player for it, not a second one');
+
+      await t.drag(find.byType(PageView), const Offset(0, -700));
+      await settle(t);
+      expect(platform.sounding, {'https://x/59.mp4'},
+          reason: 'the late list is still there to swipe to');
+      platform.playedFor = Duration.zero;
       await done(t);
     });
 
