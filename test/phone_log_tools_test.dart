@@ -27,6 +27,7 @@ import 'package:flutter_test/flutter_test.dart';
 const _app = 27066;
 const _appAgain = 28100; // the app, after it was killed and opened again
 const _system = 1800;
+const _otherFlutterApp = 30339; // Google Pay, also built with Flutter
 const _surface = 4321;
 
 /// One line the way `adb logcat -v time` writes it.
@@ -40,9 +41,29 @@ String _line(int ms, String level, String tag, int pid, String msg) {
 /// A phone log with the shapes the real one has: one part of Android
 /// repeating itself thousands of times, the app's own decoder chatter, the
 /// app's messages (some not plain ASCII), an app not responding, the app
-/// dying and coming back, and lines in no logcat shape at all.
+/// dying and coming back, another Flutter app printing its own "flutter"
+/// lines, and lines in no logcat shape at all.
 List<String> _phoneLog() {
-  final out = <String>['--------- beginning of main'];
+  final out = <String>[
+    '--------- beginning of main',
+    _line(
+      0,
+      'I',
+      'ActivityManager',
+      _system,
+      'Start proc $_app:com.example.devf/u0a391 for next-top-activity',
+    ),
+    _line(
+      1,
+      'I',
+      'ActivityManager',
+      _system,
+      'Start proc $_otherFlutterApp:com.google.android.apps.nbu.paisa.user/'
+          'u0a332 for service',
+    ),
+    _line(2, 'I', 'flutter', _otherFlutterApp, 'Impeller opt-out deprecated.'),
+    _line(3, 'I', 'flutter', _otherFlutterApp, 'another app, not this one'),
+  ];
   var ms = 0;
   var flutter = 0;
   for (var i = 0; i < 3000; i++) {
@@ -136,6 +157,13 @@ List<String> _phoneLog() {
       'ActivityManager',
       _system,
       'Process com.example.devf (pid $_app) has died: fg  TOP',
+    ),
+    _line(
+      ms + 11900,
+      'I',
+      'ActivityManager',
+      _system,
+      'Start proc $_appAgain:com.example.devf/u0a391 for next-top-activity',
     ),
     _line(ms + 12000, 'I', 'flutter', _appAgain, '[reel] opened again'),
   ]);
@@ -409,8 +437,11 @@ void main() {
         expect(said, contains('Cache stats from this run:'));
         expect(
           said,
-          contains('it ran 2 times'),
-          reason: 'the app died and came back under a new process',
+          contains("The app's own: 44 - it ran 2 times"),
+          reason:
+              'the app died and came back under a new process - and the '
+              "other Flutter app's lines and process are not counted as "
+              "this app's",
         );
 
         // Inside their own parts of the report: with few kinds of line, the

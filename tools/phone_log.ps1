@@ -244,6 +244,27 @@ namespace BattleArena
             return n;
         }
 
+        // The process "Start proc 26220:com.example.devf/u0a391 ..." says
+        // was started for [appId] (or one of its own sub-processes,
+        // "com.example.devf:remote"), or -1.
+        static int StartedPid(string msg, string appId)
+        {
+            const string Start = "Start proc ";
+            if (!msg.StartsWith(Start, StringComparison.Ordinal)) return -1;
+            int colon = msg.IndexOf(':', Start.Length);
+            if (colon < 0) return -1;
+            int pid;
+            if (!int.TryParse(msg.Substring(Start.Length, colon - Start.Length),
+                NumberStyles.None, Inv, out pid)) return -1;
+            int end = colon + 1 + appId.Length;
+            if (end > msg.Length ||
+                string.CompareOrdinal(msg, colon + 1, appId, 0, appId.Length) != 0)
+                return -1;
+            if (end < msg.Length && msg[end] != '/' && msg[end] != ':' && msg[end] != ' ')
+                return -1;
+            return pid;
+        }
+
         static StreamReader Open(string path)
         {
             return new StreamReader(path, new UTF8Encoding(false), true);
@@ -252,21 +273,32 @@ namespace BattleArena
         // Reads the log back and says what is in it. Changes nothing.
         public static PhoneLogResult Scan(string path, string appId, int top)
         {
-            // Pass 1: which processes are the app's. The app's own messages
-            // carry the tag "flutter"; every process that printed one is
-            // the app (more than one means it was restarted).
-            var appPids = new Dictionary<int, bool>();
+            // Pass 1: which processes are the app's (more than one means it
+            // was restarted). By name: Android logs "Start proc 26220:
+            // com.example.devf/..." when it starts one, and the app's own
+            // system lines carry the last 15 letters of its name as their
+            // tag. Not by the tag "flutter" alone: every Flutter app prints
+            // that, and a run counted Google Pay as this app restarting.
+            // That is the fallback, for a log where the name never shows.
+            string appTag = appId == null ? "" :
+                appId.Length > 15 ? appId.Substring(appId.Length - 15) : appId;
+            var named = new Dictionary<int, bool>();
+            var flutterPids = new Dictionary<int, bool>();
             using (var r = Open(path))
             {
                 string line;
                 while ((line = r.ReadLine()) != null)
                 {
                     char lv; string tag; int pid; string msg; int ms;
-                    if (Parse(line, out lv, out tag, out pid, out msg, out ms) &&
-                        tag == "flutter")
-                        appPids[pid] = true;
+                    if (!Parse(line, out lv, out tag, out pid, out msg, out ms)) continue;
+                    if (tag == "flutter") flutterPids[pid] = true;
+                    if (appTag.Length == 0) continue;
+                    if (tag == appTag) named[pid] = true;
+                    int started = StartedPid(msg, appId);
+                    if (started >= 0) named[started] = true;
                 }
             }
+            var appPids = named.Count > 0 ? named : flutterPids;
 
             // Pass 2: what each line is.
             var res = new PhoneLogResult();
@@ -305,7 +337,9 @@ namespace BattleArena
                     }
                     res.PhoneLines++;
                     bool isApp = appPids.ContainsKey(pid);
-                    bool flutter = tag == "flutter";
+                    // This app's own messages: another Flutter app's are
+                    // just more of the phone.
+                    bool flutter = tag == "flutter" && isApp;
                     if (flutter)
                     {
                         res.AppLines++;

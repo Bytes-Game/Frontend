@@ -446,6 +446,37 @@ void main() {
       await close(t);
     });
 
+    testWidgets('Back inside a tool closes only that tool', (t) async {
+      // The same trap as the video editor's: a tool's Back reported as the
+      // editor closing.
+      final closed = await open(
+        t,
+        PhotoEditorPage(sourcePath: photo.path, onDone: next),
+      );
+      for (final tool in ['Crop/ Rotate', 'Filter', 'Tune']) {
+        await t.tap(find.text(tool));
+        await settle(t);
+        expect(
+          find.byTooltip('Back'),
+          findsOneWidget,
+          reason: '$tool is open, with its own Back',
+        );
+        await t.tap(find.byTooltip('Back'));
+        await settle(t);
+        expect(t.takeException(), isNull, reason: tool);
+        expect(find.byTooltip('Back'), findsNothing, reason: '$tool is closed');
+        expect(find.byType(PhotoEditorPage), findsOneWidget, reason: tool);
+        expect(
+          find.text(tool),
+          findsOneWidget,
+          reason: 'back in the editor, with its tools, after $tool',
+        );
+        expect(closed(), isNull, reason: 'the editor itself stays open');
+      }
+      expect(handed, isEmpty);
+      await close(t);
+    });
+
     testWidgets('Cancel goes back, and nothing is posted', (t) async {
       final closed = await open(
         t,
@@ -556,6 +587,46 @@ void main() {
         await settle(t);
         expect(find.byType(VideoEditorPage), findsNothing);
         expect(closed(), isFalse);
+        await close(t);
+      });
+
+      // A run froze here. The Back button inside a tool (crop, filter...)
+      // reports "the crop tool closed" to the same callback as the editor
+      // itself closing, and the page treated it as the whole editor
+      // closing: it popped the crop tool's screen with a yes/no where that
+      // screen answers with how the picture was turned. Flutter threw, the
+      // pop never finished, and every tap after did nothing. (Paint and
+      // Blur work in the editor's own screen, with no Back of their own.)
+      testWidgets('Back inside a tool closes only that tool', (t) async {
+        final closed = await open(
+          t,
+          VideoEditorPage(sourcePath: video.path, onDone: next),
+        );
+        for (final tool in ['Crop/ Rotate', 'Filter', 'Tune']) {
+          await t.tap(find.text(tool));
+          await settle(t);
+          expect(
+            find.byTooltip('Back'),
+            findsOneWidget,
+            reason: '$tool is open, with its own Back',
+          );
+          await t.tap(find.byTooltip('Back'));
+          await settle(t);
+          expect(t.takeException(), isNull, reason: tool);
+          expect(
+            find.byTooltip('Back'),
+            findsNothing,
+            reason: '$tool is closed',
+          );
+          expect(find.byType(VideoEditorPage), findsOneWidget, reason: tool);
+          expect(
+            find.text(tool),
+            findsOneWidget,
+            reason: 'back in the editor, with its tools, after $tool',
+          );
+          expect(closed(), isNull, reason: 'the editor itself stays open');
+        }
+        expect(handed, isEmpty);
         await close(t);
       });
 
