@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart' show debugPrint;
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:myapp/config/constants.dart';
@@ -28,6 +29,33 @@ import 'package:myapp/services/avatar_book.dart';
 ///      request (alt-svc discovery, conveniently done by the boot-time
 ///      prewarm) API calls ride QUIC: faster handshakes and
 ///      wifi<->cellular connection migration.
+/// An answer that came back but could not be read: the server replied in a
+/// shape this app does not expect. A request that failed has already said
+/// so ([_AuthHttp._say]); this is the other kind, which otherwise looks
+/// exactly like an empty answer — the way a profile refresh was thrown away
+/// on every app open, unseen, because its answer had no "id".
+///
+/// Said once per call site, then now and then, so a broken answer on a
+/// busy screen is one line rather than a flood.
+final Map<String, int> _unreadableSaid = {};
+void _unreadable(String what, Object e) {
+  // Already said by the request itself: a timeout, a dropped connection,
+  // the server refusing, or a status turned into an error to end the call.
+  if (e is TimeoutException ||
+      e is http.ClientException ||
+      e is ApiRefused ||
+      e is StateError) {
+    return;
+  }
+  final n = (_unreadableSaid[what] ?? 0) + 1;
+  _unreadableSaid[what] = n;
+  if (n == 1 || n == 10 || n % 50 == 0) {
+    debugPrint('[api] $what: the answer could not be read '
+        '(${e.runtimeType}: $e); the app is carrying on with nothing'
+        '${n > 1 ? ' (x$n)' : ''}');
+  }
+}
+
 class _AuthHttp {
   /// Ceiling on every API request. Render's free tier suspends the
   /// service after ~15min idle and its proxy HOLDS incoming requests
@@ -281,7 +309,8 @@ class ApiService {
         return body['available'] == true;
       }
       return false;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('isUsernameAvailable', e);
       return false;
     }
   }
@@ -310,7 +339,8 @@ class ApiService {
       // Any other status (5xx, proxy error, Render cold-start body) tells
       // us nothing about the token, only that the server is unwell.
       return TokenRefresh.unreachable;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('refreshSession', e);
       return TokenRefresh.unreachable;
     }
   }
@@ -324,7 +354,8 @@ class ApiService {
         body: json.encode({'categories': categories}),
       );
       return res.statusCode == 200;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('seedInterests', e);
       return false;
     }
   }
@@ -360,7 +391,8 @@ class ApiService {
       // 5xx, a proxy error, or a Render cold-start holding page: the server is
       // unwell and has told us nothing about the password.
       return const AuthResult.failed(AuthFailure.serverError);
-    } catch (_) {
+    } catch (e) {
+      _unreadable('_authenticate', e);
       // Timeout, DNS, connection refused, malformed body. Never evidence that
       // the credentials were wrong.
       return const AuthResult.failed(AuthFailure.unreachable);
@@ -381,7 +413,8 @@ class ApiService {
         return json.decode(res.body) as Map<String, dynamic>;
       }
       return {'items': [], 'page': page, 'hasMore': false};
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getRecommendedFeed', e);
       return {'items': [], 'page': page, 'hasMore': false};
     }
   }
@@ -398,7 +431,8 @@ class ApiService {
         return json.decode(res.body) as Map<String, dynamic>;
       }
       return {'items': [], 'page': page, 'hasMore': false};
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getFollowingFeed', e);
       return {'items': [], 'page': page, 'hasMore': false};
     }
   }
@@ -420,7 +454,8 @@ class ApiService {
         return data.map((j) => UserModel.fromJson(j)).toList();
       }
       return [];
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getAllUsers', e);
       return [];
     }
   }
@@ -439,7 +474,8 @@ class ApiService {
         return user;
       }
       return null;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getUserByUsername', e);
       return null;
     }
   }
@@ -455,7 +491,8 @@ class ApiService {
         return data.map((j) => UserModel.fromJson(j)).toList();
       }
       return [];
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getFollowers', e);
       return [];
     }
   }
@@ -471,7 +508,8 @@ class ApiService {
         return data.map((j) => UserModel.fromJson(j)).toList();
       }
       return [];
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getFollowing', e);
       return [];
     }
   }
@@ -488,7 +526,8 @@ class ApiService {
         return list.map((j)=> UserModel.fromJson(j)).toList();
       }
       return [];
-    } catch (_) {
+    } catch (e) {
+      _unreadable('searchUsers', e);
       return [];
     }
   }
@@ -568,7 +607,8 @@ class ApiService {
         }),
       );
       return res.statusCode == 200;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('unfollowUser', e);
       return false;
     }
   }
@@ -627,7 +667,8 @@ class ApiService {
         return results;
       }
       return [];
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getChallengesFeed', e);
       return [];
     }
   }
@@ -655,7 +696,8 @@ class ApiService {
         return json.decode(res.body) as Map<String, dynamic>;
       }
       return null;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('dislikeChallenge', e);
       return null;
     }
   }
@@ -673,7 +715,8 @@ class ApiService {
         return data.map((j) => ChallengeModel.fromJson(j)).toList();
       }
       return [];
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getArenaChallenges', e);
       return [];
       }
   }
@@ -711,7 +754,8 @@ class ApiService {
         return data.map((j) => ChallengeModel.fromJson(j)).toList();
       }
       return const [];
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getUserChallenges', e);
       return const [];
     }
   }
@@ -728,7 +772,8 @@ class ApiService {
         return data.map((j) => ChallengeModel.fromJson(j)).toList();
       }
       return [];
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getFriendsChallenges', e);
       return [];
     }
   }
@@ -799,7 +844,8 @@ class ApiService {
         return json.decode(res.body) as Map<String, dynamic>;
       }
       return null;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('presignMediaUpload', e);
       return null;
     }
   }
@@ -845,6 +891,9 @@ class ApiService {
     // The free song mixed into the video, by its id in the music library
     // (MusicLibrary.pick). Empty for none. The post then credits it.
     String musicTrackId = '',
+    // Whether anybody may answer it. Off makes it a normal post: [subject]
+    // is then its caption and [prefix] may be empty (battles_open.go).
+    bool openToBattles = true,
   }) async {
     try {
       final res = await _authHttp.post(
@@ -872,6 +921,7 @@ class ApiService {
           if (battleDays > 0) 'battleDays': battleDays,
           if (mediaType == 'photo') 'mediaType': 'photo',
           if (musicTrackId.isNotEmpty) 'musicTrackId': musicTrackId,
+          'openToBattles': openToBattles,
         }),
       );
       if (res.statusCode == 200 || res.statusCode == 201) {
@@ -880,7 +930,8 @@ class ApiService {
       throw _refusalOr(res, 'Could not save the challenge.');
     } on ApiRefused {
       rethrow;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('createChallenge', e);
       return null;
     }
   }
@@ -924,7 +975,8 @@ class ApiService {
         return (decoded['items'] as List?)?.cast<String>() ?? const [];
       }
       return const [];
-    } catch (_) {
+    } catch (e) {
+      _unreadable('suggestChallengePrefix', e);
       return const [];
     }
   }
@@ -956,7 +1008,8 @@ class ApiService {
             const [];
       }
       return const [];
-    } catch (_) {
+    } catch (e) {
+      _unreadable('suggestChallengeSubject', e);
       return const [];
     }
   }
@@ -1020,7 +1073,8 @@ class ApiService {
       throw _refusalOr(res, 'Could not submit your response.');
     } on ApiRefused {
       rethrow;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('acceptChallenge', e);
       return null;
     }
   }
@@ -1047,7 +1101,8 @@ class ApiService {
         return json.decode(res.body) as Map<String, dynamic>;
       }
       return null;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('searchMusic', e);
       return null;
     }
   }
@@ -1086,7 +1141,8 @@ class ApiService {
       );
       if (res.statusCode == 200) return json.decode(res.body);
       return null;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('likeChallenge', e);
       return null;
     }
   }
@@ -1112,7 +1168,8 @@ class ApiService {
         }),
       );
       return res.statusCode == 200;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('deleteChallenge', e);
       return false;
     }
   }
@@ -1151,7 +1208,8 @@ class ApiService {
         return ActionResult(false, why.isEmpty ? 'Vote not counted.' : why);
       }
       return const ActionResult(false, 'Vote failed. Try again.');
-    } catch (_) {
+    } catch (e) {
+      _unreadable('voteChallenge', e);
       return const ActionResult(false, 'Vote failed. Try again.');
     }
   }
@@ -1184,7 +1242,8 @@ class ApiService {
         return ReportResult(false, why.isEmpty ? failed.message : why);
       }
       return failed;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('reportOffTopic', e);
       return failed;
     }
   }
@@ -1201,7 +1260,8 @@ class ApiService {
       if (res.statusCode != 200) return null;
       return BattleStandings.fromJson(
           json.decode(res.body) as Map<String, dynamic>);
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getBattleStandings', e);
       return null;
     }
   }
@@ -1226,7 +1286,8 @@ class ApiService {
         final n = (json.decode(res.body) as Map<String, dynamic>)['shares'];
         if (n is num) return n.toInt();
       }
-    } catch (_) {
+    } catch (e) {
+      _unreadable('shareChallenge', e);
       // Logged by _AuthHttp; the share itself still happens.
     }
     return null;
@@ -1249,7 +1310,8 @@ class ApiService {
         return json.decode(res.body) as Map<String, dynamic>;
       }
       return null;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('likeResponse', e);
       return null;
     }
   }
@@ -1290,7 +1352,8 @@ class ApiService {
         return data.map((j) => VoteSummary.fromJson(j)).toList();
       }
       return [];
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getVoteResults', e);
       return [];
     }
   }
@@ -1529,7 +1592,8 @@ class ApiService {
         body: json.encode({'events': events}),
       );
       return res.statusCode == 200;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('trackEventsBatch', e);
       return false;
     }
   }
@@ -1540,7 +1604,8 @@ class ApiService {
       final res = await _authHttp.get(Uri.parse('$_base/api/v1/categories'));
       if (res.statusCode == 200) return json.decode(res.body);
       return {'categories': [], 'emotionTags': [], 'energyLevels': []};
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getCategories', e);
       return {'categories': [], 'emotionTags': [], 'energyLevels': []};
     }
   }
@@ -1553,7 +1618,8 @@ class ApiService {
       );
       if (res.statusCode == 200) return json.decode(res.body);
       return null;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getUserProfile', e);
       return null;
     }
   }
@@ -1570,7 +1636,8 @@ class ApiService {
         headers: {'Content-Type': 'application/json'},
       );
       return res.statusCode == 200;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('reseedDatabase', e);
       return false;
     }
   }
@@ -1598,7 +1665,8 @@ class ApiService {
         }),
       );
       return res.statusCode == 201;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('reportContent', e);
       return false;
     }
   }
@@ -1648,7 +1716,8 @@ class ApiService {
       );
       if (res.statusCode == 200) return json.decode(res.body);
       return null;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('addChallengeComment', e);
       return null;
     }
   }
@@ -1829,7 +1898,8 @@ class ApiService {
         }),
       );
       return res.statusCode == 200;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('editChatMessage', e);
       return false;
     }
   }
@@ -1849,7 +1919,8 @@ class ApiService {
         }),
       );
       return res.statusCode == 200;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('deleteChatMessage', e);
       return false;
     }
   }
@@ -1893,7 +1964,8 @@ class ApiService {
       );
       if (res.statusCode == 200) return json.decode(res.body);
       return null;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('forwardChatMessage', e);
       return null;
     }
   }
@@ -1909,7 +1981,8 @@ class ApiService {
         return json.decode(res.body) as Map<String, dynamic>;
       }
       return {'online': false, 'lastSeen': ''};
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getUserOnlineStatus', e);
       return {'online': false, 'lastSeen': ''};
     }
   }
@@ -2003,7 +2076,8 @@ class ApiService {
         return json.decode(res.body) as Map<String, dynamic>;
       }
       return null;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('mediaMultipart', e);
       return null;
     }
   }
@@ -2118,7 +2192,8 @@ class ApiService {
           if (cardId.isNotEmpty) 'cardId': cardId,
         }),
       );
-    } catch (_) {
+    } catch (e) {
+      _unreadable('recordSuggestionAccepted', e);
       // Best-effort. A failed acceptance signal degrades only future
       // ranking; current UI state already reflects the follow.
     }
@@ -2142,7 +2217,8 @@ class ApiService {
       );
       if (res.statusCode == 200) return json.decode(res.body);
       return null;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('toggleSaveChallenge', e);
       return null;
     }
   }
@@ -2204,6 +2280,31 @@ class ApiService {
       debugPrint('[avatars] ${names.length} photos answered ${res.statusCode}');
     } catch (e) {
       debugPrint('[avatars] ${names.length} photos could not be read: $e');
+    }
+    return null;
+  }
+
+  /// PATCH /api/v1/challenges/{id}/battles — the owner opens their post to
+  /// battles, or closes it. The server's answer, or null when it did not
+  /// change; the log says why.
+  static Future<bool?> setOpenToBattles(String challengeId, bool open) async {
+    try {
+      final res = await _authHttp
+          .patch(
+            Uri.parse('$_base/api/v1/challenges/$challengeId/battles'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'open': open}),
+          )
+          .timeout(const Duration(seconds: 20));
+      if (res.statusCode == 200) {
+        final body = json.decode(res.body) as Map<String, dynamic>;
+        return body['openToBattles'] == true;
+      }
+      debugPrint('[battles] opening $challengeId to battles ($open) '
+          'answered ${res.statusCode}: ${res.body.trim()}');
+    } catch (e) {
+      debugPrint('[battles] opening $challengeId to battles ($open) '
+          'failed: $e');
     }
     return null;
   }
@@ -2291,7 +2392,8 @@ class ApiService {
         }),
       );
       return res.statusCode == 200;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('registerPushToken', e);
       return false;
     }
   }
@@ -2316,7 +2418,8 @@ class ApiService {
       );
       if (res.statusCode == 200) return json.decode(res.body) as Map<String, dynamic>;
       return null;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getNotificationPrefs', e);
       return null;
     }
   }
@@ -2330,7 +2433,8 @@ class ApiService {
         body: json.encode(prefs),
       );
       return res.statusCode == 200;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('setNotificationPrefs', e);
       return false;
     }
   }
@@ -2358,7 +2462,8 @@ class ApiService {
       );
       if (res.statusCode == 200) return json.decode(res.body) as Map<String, dynamic>;
       return null;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getCreatorInsightsOverview', e);
       return null;
     }
   }
@@ -2376,7 +2481,8 @@ class ApiService {
       );
       if (res.statusCode == 200) return json.decode(res.body) as Map<String, dynamic>;
       return null;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getCreatorInsightsPerContent', e);
       return null;
     }
   }
@@ -2454,7 +2560,8 @@ class ApiService {
             success: true,
             user: u == null ? null : UserModel.fromJson(u),
           );
-        } catch (_) {
+        } catch (e) {
+          _unreadable('updateUserProfile', e);
           // Empty or malformed body — still a 200, still a success.
           return const UpdateProfileResult(success: true, user: null);
         }
@@ -2538,12 +2645,30 @@ class ApiService {
         body: json.encode({'userId': userId}),
       );
       return res.statusCode == 200;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('clearWatchHistory', e);
       return false;
     }
   }
 
   // ─── Blocks ─────────────────────────────────────────────────────────
+
+  /// DELETE /api/v1/users/{id} — deletes the signed-in person's account
+  /// and everything in it, for good: profile, posts and battles, comments,
+  /// likes, votes, followers. True once the server has done it.
+  static Future<bool> deleteAccount(String userId) async {
+    try {
+      final res = await _authHttp
+          .delete(Uri.parse('$_base/api/v1/users/$userId'))
+          .timeout(const Duration(seconds: 60));
+      if (res.statusCode == 200) return true;
+      debugPrint('[account] deleting the account answered '
+          '${res.statusCode}: ${res.body.trim()}');
+    } catch (e) {
+      _unreadable('deleteAccount', e);
+    }
+    return false;
+  }
 
   /// POST /api/v1/blocks — block another user.
   /// Tears down follow edges in both directions on the server.
@@ -2561,7 +2686,8 @@ class ApiService {
         }),
       );
       return res.statusCode == 200;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('blockUser', e);
       return false;
     }
   }
@@ -2581,7 +2707,8 @@ class ApiService {
         }),
       );
       return res.statusCode == 200;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('unblockUser', e);
       return false;
     }
   }
@@ -2599,7 +2726,8 @@ class ApiService {
             const [];
       }
       return const [];
-    } catch (_) {
+    } catch (e) {
+      _unreadable('getBlockedUsers', e);
       return const [];
     }
   }
@@ -2624,7 +2752,8 @@ class ApiService {
         return json.decode(res.body) as Map<String, dynamic>;
       }
       return null;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('enrollTOTP', e);
       return null;
     }
   }
@@ -2643,7 +2772,8 @@ class ApiService {
         body: json.encode({'userId': userId, 'code': code}),
       );
       return res.statusCode == 200;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('verifyTOTP', e);
       return false;
     }
   }
@@ -2661,7 +2791,8 @@ class ApiService {
         body: json.encode({'userId': userId, 'code': code}),
       );
       return res.statusCode == 200;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('disableTOTP', e);
       return false;
     }
   }
@@ -2696,7 +2827,8 @@ class ApiService {
         }),
       );
       return res.statusCode == 200 || res.statusCode == 201;
-    } catch (_) {
+    } catch (e) {
+      _unreadable('reportBug', e);
       return false;
     }
   }

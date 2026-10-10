@@ -63,13 +63,22 @@ late List<String> feedAsks;
 /// Every video file the app started fetching.
 late List<String> videoAsks;
 
+/// The owner's "Open to battles" switch: which post, and what was asked.
+late List<(String, bool)> battlesFlips;
+
 void fakeServer() {
   feedAsks = [];
   videoAsks = [];
+  battlesFlips = [];
   ApiService.useClient(
     MockClient((req) async {
       final p = req.url.path;
       Object body = {};
+      if (req.method == 'PATCH' && p.endsWith('/battles')) {
+        final open = (json.decode(req.body) as Map)['open'] == true;
+        battlesFlips.add((p.split('/')[4], open));
+        return http.Response(json.encode({'openToBattles': open}), 200);
+      }
       if (p.endsWith('.mp4')) {
         videoAsks.add(req.url.toString());
         return http.Response('no', 404);
@@ -223,6 +232,56 @@ void main() {
     // Another tab: the fetching moves with you.
     await tapTab(t, 'Won 1');
     expect(VideoCacheService.instance.debugWindow, {'https://x/21.mp4'});
+    await close(t);
+  });
+
+  testWidgets('holding down one of your own videos: open to battles or '
+      'not, and delete', (t) async {
+    await open(
+      t,
+      ProfilePage(user: person('5', 'maya'), isEmbedded: false),
+      me: '5',
+    );
+    final tile = find.byKey(const ValueKey('short_tile_12'));
+    await t.longPress(tile);
+    await settle(t);
+    final sw = find.byKey(const ValueKey('battles_switch_12'));
+    expect(sw, findsOneWidget);
+    expect(find.text('Delete post'), findsOneWidget);
+    expect(t.widget<SwitchListTile>(sw).value, isTrue);
+
+    await t.tap(sw);
+    await settle(t);
+    expect(battlesFlips, [('12', false)]);
+    expect(t.widget<SwitchListTile>(sw).value, isFalse);
+    expect(find.text('Now a normal post. Nobody can answer it.'),
+        findsOneWidget);
+
+    // Put away and held down again: it remembers.
+    await t.tapAt(const Offset(200, 60));
+    await settle(t);
+    await t.longPress(tile);
+    await settle(t);
+    expect(t.widget<SwitchListTile>(sw).value, isFalse);
+
+    // Delete is still there, and still asks first.
+    await t.tap(find.text('Delete post'));
+    await settle(t);
+    expect(find.text('Delete post?'), findsOneWidget);
+    await t.tap(find.text('Cancel'));
+    await settle(t);
+    await close(t);
+  });
+
+  testWidgets('somebody else\'s video held down offers nothing of the '
+      'owner\'s', (t) async {
+    await open(t, ProfilePage(user: person('5', 'maya'), isEmbedded: false));
+    expect(find.byKey(const ValueKey('short_tile_12')), findsOneWidget);
+    await t.longPress(find.byKey(const ValueKey('short_tile_12')));
+    await settle(t);
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.byKey(const ValueKey('battles_switch_12')), findsNothing);
+    expect(find.text('Delete post'), findsNothing);
     await close(t);
   });
 
