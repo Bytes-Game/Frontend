@@ -4,6 +4,7 @@ import 'package:myapp/models/notification_model.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
+import 'package:myapp/services/avatar_book.dart';
 
 /// Central state holder for user data, following list, and notifications.
 ///
@@ -42,8 +43,14 @@ class DataProvider with ChangeNotifier {
   }
 
   // —— Setters (used by AuthProvider on login) ——————————————————————————
-  void setUser(UserModel? u) {
+  ///
+  /// [fromPhone]: [u] is the copy kept on the phone since the last sign-in,
+  /// which can be days old. Its photo is not taught to the AvatarBook: the
+  /// book kept a newer one, and refreshUser fetches the real one.
+  void setUser(UserModel? u, {bool fromPhone = false}) {
     _user = u;
+    // Your own photo, so it changes everywhere the moment you change it.
+    if (!fromPhone) AvatarBook.instance.learnUser(u);
     // Initialize event tracker for the recommendation engine
     if (u != null) {
       EventTracker.instance.init(u.id);
@@ -63,31 +70,42 @@ class DataProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  /// Pulls the canonical user document from the server and replaces the
-  /// local one. Called after login + on every profile-page open so a
-  /// user who edited their profile, restarted the app, and logged back
-  /// in sees their latest changes without an extra tap.
+  /// Brings your profile up to date from the server: the app opens on the
+  /// copy kept from your last sign-in, which can be days old — from before
+  /// a new photo, tag or bio set on this phone or another. Called after
+  /// opening and on every visit to your profile page.
   ///
-  /// Best-effort: a network hiccup just leaves the existing [_user]
-  /// untouched — better than blanking the profile because /profile was
-  /// slow on the first request.
+  /// This used to ask /profile, which answers with the feed's picture of
+  /// your tastes, not your account. That has no "id", so every refresh was
+  /// quietly dropped and the kept copy was never brought up to date.
+  ///
+  /// Best-effort: when the server cannot be reached the profile on screen
+  /// stays as it is, and the log says so.
   Future<void> refreshUser() async {
-    final id = _user?.id;
-    if (id == null || id.isEmpty) return;
-    final raw = await ApiService.getUserProfile(id);
-    if (raw == null) return;
-    // /profile sometimes wraps under a "user" key, sometimes returns
-    // the raw user object — accept both shapes so the route can evolve
-    // without forcing a coordinated client roll-out.
-    final candidate = (raw['user'] as Map<String, dynamic>?) ?? raw;
-    try {
-      final fresh = UserModel.fromJson(candidate);
-      if (fresh.id.isEmpty) return; // malformed payload, drop
-      _user = fresh;
-      notifyListeners();
-    } catch (_) {
-      // Bad JSON shape — keep the previous user rather than crash.
+    final me = _user;
+    if (me == null || me.username.isEmpty) return;
+    final fresh = await ApiService.getUserByUsername(me.username);
+    if (fresh == null) {
+      debugPrint('[profile] could not bring your profile up to date; '
+          'showing the copy kept from sign-in');
+      return;
     }
+    // Signed out, or someone else signed in, while this was out.
+    if (_user?.id != me.id || fresh.id != me.id) return;
+    // Only what that answer carries. It does not say whether two-step
+    // sign-in is on, and settings only change through this app, so those
+    // stay as they are.
+    _user = _user!.copyWith(
+      fullName: fresh.fullName,
+      bio: fresh.bio,
+      visibility: fresh.visibility,
+      league: fresh.league,
+      wins: fresh.wins,
+      losses: fresh.losses,
+      avatarUrl: fresh.avatarUrl,
+      profileTag: fresh.profileTag,
+    );
+    notifyListeners();
   }
 
   // —— Follow / Unfollow ——————————————————————————————————————————————

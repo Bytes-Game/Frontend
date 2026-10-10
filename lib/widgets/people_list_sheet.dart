@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:myapp/models/battle_model.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/open_profile.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 
 /// The lists behind the counts: who liked, who voted for whom, who shared.
@@ -27,9 +28,9 @@ extension on PeopleList {
 /// button, as on Instagram.
 ///
 /// One tab per video on a battle (the creator's and the answer), opening on
-/// [startOnAnswer]'s; a single list on a short. Only the people in the
-/// video are shown it; nobody is told when a vote or like comes in, so this
-/// is where they look instead.
+/// [startOnAnswer]'s; a single list on a short. Anyone who can watch the
+/// video can open it, as on Instagram, and a tap on somebody — their
+/// picture or their name — opens their profile.
 Future<void> showPeople(
   BuildContext context,
   String challengeId,
@@ -166,6 +167,7 @@ class _People extends StatelessWidget {
         final p = people[i];
         return ListTile(
           key: ValueKey('person_${p.userId}'),
+          onTap: () => openProfileByName(context, p.username),
           leading: ArenaAvatar(name: p.username, size: 40),
           title: Row(
             children: [

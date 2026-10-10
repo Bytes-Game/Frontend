@@ -7,6 +7,8 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/widgets/chat_share_widgets.dart';
 import 'package:myapp/widgets/mentions.dart';
+import 'package:myapp/widgets/video_about_row.dart';
+import 'package:myapp/widgets/arena_ui.dart' show PersonPhoto;
 
 /// TikTok-style vertical action bar for the right side of the feed.
 /// Shows like, dislike, comment, share for shorts.
@@ -987,20 +989,26 @@ class _CommentAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return SizedBox(
       width: size,
       height: size,
-      decoration: const BoxDecoration(
-        shape: BoxShape.circle,
-        color: Color(0xFF2C2C30),
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        name.isEmpty ? '?' : name[0].toUpperCase(),
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: size * 0.4,
-          fontWeight: FontWeight.w700,
+      child: PersonPhoto(
+        name: name,
+        size: size,
+        fallback: Container(
+          decoration: const BoxDecoration(
+            shape: BoxShape.circle,
+            color: Color(0xFF2C2C30),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            name.isEmpty ? '?' : name[0].toUpperCase(),
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: size * 0.4,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
         ),
       ),
     );
@@ -1074,17 +1082,29 @@ class _CommentRow extends StatelessWidget {
 }
 
 /// The top of the comments sheet when it opens from a video's caption: who
-/// posted it and the caption in full.
+/// posted it, the caption in full, and "What's this video about?".
 class CommentSheetCaption extends StatelessWidget {
   final String username;
   final String caption;
   final String detail;
+
+  /// The video "What's this video about?" asks about; with no challenge,
+  /// it is not offered.
+  final String challengeId;
+
+  /// The answer in a battle when that is the video on screen, and whose it
+  /// is; empty for the challenger's.
+  final String responseId;
+  final String responder;
 
   const CommentSheetCaption({
     super.key,
     required this.username,
     required this.caption,
     this.detail = '',
+    this.challengeId = '',
+    this.responseId = '',
+    this.responder = '',
   });
 
   @override
@@ -1123,6 +1143,14 @@ class CommentSheetCaption extends StatelessWidget {
                   Text(
                     detail,
                     style: const TextStyle(color: _Sheet.muted, fontSize: 12.5),
+                  ),
+                ],
+                if (challengeId.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  VideoAboutRow(
+                    challengeId: challengeId,
+                    responseId: responseId,
+                    whose: responseId.isEmpty ? '' : responder,
                   ),
                 ],
               ],

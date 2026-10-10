@@ -40,6 +40,7 @@ import 'package:myapp/widgets/feed_action_bar.dart'
         ChallengeShareSheet,
         CommentSheetCaption,
         showChallengeVoteDialog;
+import 'package:myapp/widgets/arena_ui.dart' show PersonPhoto;
 
 /// Which backend feed endpoint a SmartReelsFeed should pull from. Each one
 /// uses a meaningfully different ranking algorithm:
@@ -2634,6 +2635,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     final item = _items[index];
     if (item is! _ReelItem) return;
     if (item.type != 'challenge' || item.id.isEmpty) return; // posts retired
+    final onAnswer = item.isBattle && item.faces.showingOpponent;
     EventTracker.instance.trackTap(
       target: 'reel_open_comments',
       pageName: 'home_page',
@@ -2660,6 +2662,10 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
           username: item.creatorUsername,
           caption: item.fullCaption,
           detail: '${_ReelTileState._compact(item.views)} views',
+          // "What's this video about?" asks about the video on screen.
+          challengeId: item.id,
+          responseId: onAnswer ? item.opponentResponseId : '',
+          responder: item.opponentUsername,
         ),
       ),
     );
@@ -4052,16 +4058,13 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   /// Who is ahead in the live score: "creator", "answer", or "".
   String get _leader => widget.item.ahead;
 
-  /// Opens who liked, voted or shared — for the people in the video: who
-  /// posted it, and on a battle who answered. Null for everyone else, whose
-  /// number is then only a number. Opens on the side on screen.
+  /// Opens who liked, voted or shared — for anyone signed in, as on
+  /// Instagram (it was only the people in the video). Opens on the side on
+  /// screen.
   VoidCallback? _who(PeopleList list) {
     final me = Provider.of<DataProvider>(context, listen: false).user;
     final item = widget.item;
     if (me == null || item.id.isEmpty || item.type != 'challenge') return null;
-    final inIt = item.creatorId == me.id ||
-        (item.isBattle && item.opponentUsername == me.username);
-    if (!inIt) return null;
     return () => showPeople(
       context,
       item.id,
@@ -5952,18 +5955,22 @@ class _ReelAvatar extends StatelessWidget {
         height: size,
         padding: const EdgeInsets.all(1.5),
         decoration: BoxDecoration(shape: BoxShape.circle, color: ring),
-        child: Container(
-          decoration: const BoxDecoration(
-            shape: BoxShape.circle,
-            color: Color(0xFF2C2C2E),
-          ),
-          alignment: Alignment.center,
-          child: Text(
-            username.isNotEmpty ? username[0].toUpperCase() : '?',
-            style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
-              fontSize: size * 0.42,
+        child: PersonPhoto(
+          name: username,
+          size: size,
+          fallback: Container(
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Color(0xFF2C2C2E),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              username.isNotEmpty ? username[0].toUpperCase() : '?',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: size * 0.42,
+              ),
             ),
           ),
         ),

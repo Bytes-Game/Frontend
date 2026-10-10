@@ -2,16 +2,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/config/profile_tags.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
+import 'package:myapp/services/profile_photo_flow.dart';
+import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/league_badge.dart';
 
 /// Form for editing the signed-in user's profile.
 ///
+/// The photo changes on its own, the moment it is chosen, as on Instagram
+/// (see ProfilePhotoFlow). Everything else waits for Save.
+///
 /// Wired end-to-end to `PATCH /api/v1/users/{id}` — the Save button
-/// pushes the dirty fields (fullName, bio, visibility) to the backend,
+/// pushes the dirty fields (fullName, bio, visibility, tag) to the backend,
 /// merges the returned user into [DataProvider], and pops the page
 /// with a success toast. Username is locked behind a "request change"
 /// affordance because username collisions are a hosting-uniqueness
@@ -29,8 +35,12 @@ class _EditProfilePageState extends State<EditProfilePage>
   late final TextEditingController _fullName;
   late final TextEditingController _bio;
   late String _visibility;
+  late String _tag;
   bool _dirty = false;
   bool _saving = false;
+
+  /// A new photo is being framed, uploaded or saved.
+  bool _photoBusy = false;
 
   @override
   String get pageName => 'edit_profile_page';
@@ -45,6 +55,7 @@ class _EditProfilePageState extends State<EditProfilePage>
     _visibility = user?.visibility.isNotEmpty == true
         ? user!.visibility
         : 'public';
+    _tag = user?.profileTag ?? '';
     for (final c in [_fullName, _bio]) {
       c.addListener(_recomputeDirty);
     }
@@ -64,7 +75,8 @@ class _EditProfilePageState extends State<EditProfilePage>
         _bio.text != (user?.bio ?? '') ||
         _visibility != (user?.visibility.isNotEmpty == true
             ? user!.visibility
-            : 'public');
+            : 'public') ||
+        _tag != (user?.profileTag ?? '');
     if (dirty != _dirty) setState(() => _dirty = dirty);
   }
 
@@ -97,6 +109,7 @@ class _EditProfilePageState extends State<EditProfilePage>
       fullName: fullName != user.fullName ? fullName : null,
       bio: bio != user.bio ? bio : null,
       visibility: _visibility != user.visibility ? _visibility : null,
+      profileTag: _tag != user.profileTag ? _tag : null,
     );
     if (!mounted) return;
     setState(() => _saving = false);
@@ -127,6 +140,121 @@ class _EditProfilePageState extends State<EditProfilePage>
     setState(() => _dirty = false);
     _toast('Profile updated');
     Navigator.of(context).pop(true);
+  }
+
+  /// Take a photo, choose one, or remove the one there is.
+  Future<void> _editPhoto() async {
+    final dp = Provider.of<DataProvider>(context, listen: false);
+    final me = dp.user;
+    if (me == null || _photoBusy) return;
+    EventTracker.instance.trackTap(
+      target: 'edit_profile_photo',
+      pageName: pageName,
+    );
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              key: const ValueKey('profile_photo_camera'),
+              leading: const Icon(Icons.photo_camera_rounded, color: kAccent),
+              title: const Text('Take a photo'),
+              onTap: () => Navigator.pop(ctx, 'camera'),
+            ),
+            ListTile(
+              key: const ValueKey('profile_photo_gallery'),
+              leading: const Icon(Icons.photo_library_rounded, color: kAccent),
+              title: const Text('Choose from your photos'),
+              onTap: () => Navigator.pop(ctx, 'gallery'),
+            ),
+            if (me.avatarUrl.isNotEmpty)
+              ListTile(
+                key: const ValueKey('profile_photo_remove'),
+                leading: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: Colors.red,
+                ),
+                title: const Text(
+                  'Remove current picture',
+                  style: TextStyle(color: Colors.red),
+                ),
+                onTap: () => Navigator.pop(ctx, 'remove'),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    setState(() => _photoBusy = true);
+    final change = choice == 'remove'
+        ? await ProfilePhotoFlow.remove(me)
+        : await ProfilePhotoFlow.change(context, me, camera: choice == 'camera');
+    if (!mounted) return;
+    setState(() => _photoBusy = false);
+    final updated = change.user;
+    if (updated != null) {
+      // Keeps the form's unsaved edits: only the photo is taken from it.
+      dp.setUser(me.copyWith(avatarUrl: updated.avatarUrl));
+      _toast(updated.avatarUrl.isEmpty
+          ? 'Profile photo removed'
+          : 'Profile photo updated');
+    } else if (change.problem.isNotEmpty) {
+      _toast(change.problem);
+    }
+  }
+
+  /// What the profile is about: one word from [profileTags], or none.
+  Future<void> _pickTag() async {
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'What is your profile about?',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Shown under your name, so people know what to expect.',
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final t in profileTags)
+                    ChoiceChip(
+                      key: ValueKey('tag_$t'),
+                      label: Text(t),
+                      selected: t == _tag,
+                      onSelected: (_) => Navigator.pop(ctx, t),
+                    ),
+                  ChoiceChip(
+                    key: const ValueKey('tag_none'),
+                    label: const Text('No tag'),
+                    selected: _tag.isEmpty,
+                    onSelected: (_) => Navigator.pop(ctx, ''),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _tag = picked);
+    _recomputeDirty();
   }
 
   Future<bool> _confirmDiscardIfDirty() async {
@@ -200,30 +328,63 @@ class _EditProfilePageState extends State<EditProfilePage>
             vertical: AppTheme.space16,
           ),
           children: [
-            // Your picture: the first letter of your username. Photo
-            // uploads are not built, so there is no camera button offering
-            // one (it used to be there and only said "pending").
+            // Your picture: your photo, or your initial. Tap it, or "Edit
+            // picture", to take one, choose one, or remove it.
             Center(
-              child: Stack(
-                children: [
-                  CircleAvatar(
-                    radius: 48,
-                    backgroundColor: cs.surfaceContainerHighest,
-                    child: Text(
-                      (user?.username.isNotEmpty == true)
-                          ? user!.username[0].toUpperCase()
-                          : '?',
-                      style: TextStyle(
-                        fontSize: 36,
-                        fontWeight: FontWeight.w700,
-                        color: cs.onSurface,
+              child: GestureDetector(
+                key: const ValueKey('edit_photo_avatar'),
+                onTap: _editPhoto,
+                child: Stack(
+                  children: [
+                    ArenaAvatar(name: user?.username ?? '', size: 96),
+                    if (_photoBusy)
+                      const Positioned.fill(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.black45,
+                          ),
+                          child: Center(
+                            child: CircularProgressIndicator(
+                              key: ValueKey('edit_photo_busy'),
+                              color: Colors.white,
+                              strokeWidth: 2.5,
+                            ),
+                          ),
+                        ),
+                      ),
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: kAccent,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Theme.of(context).scaffoldBackgroundColor,
+                            width: 2,
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.photo_camera_rounded,
+                          size: 16,
+                          color: Colors.white,
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-            const SizedBox(height: AppTheme.space16),
+            Center(
+              child: TextButton(
+                key: const ValueKey('edit_photo'),
+                onPressed: _photoBusy ? null : _editPhoto,
+                child: const Text('Edit picture'),
+              ),
+            ),
+            const SizedBox(height: AppTheme.space8),
 
             // Your username, shown but not editable. It used to have a
             // Change button that only said "coming soon" in developer
@@ -281,6 +442,23 @@ class _EditProfilePageState extends State<EditProfilePage>
               maxLength: 500,
               maxLines: 4,
             ),
+
+            // One word for what the profile is about, shown under the name.
+            ListTile(
+              key: const ValueKey('edit_profile_tag'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Profile tag'),
+              subtitle: Text(
+                _tag.isEmpty ? 'Say what your profile is about' : _tag,
+                style: tt.bodyMedium?.copyWith(
+                  color: _tag.isEmpty ? cs.onSurfaceVariant : kAccent,
+                  fontWeight: _tag.isEmpty ? null : FontWeight.w600,
+                ),
+              ),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: _pickTag,
+            ),
+            const SizedBox(height: AppTheme.space8),
 
             // Visibility selector. Drives the server-side gate that
             // determines whether non-followers can see this user's

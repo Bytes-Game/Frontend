@@ -146,7 +146,7 @@ class AuthProvider with ChangeNotifier {
 
   void _hydrateFromStored(BuildContext context, UserModel user) {
     final dp = Provider.of<DataProvider>(context, listen: false);
-    dp.setUser(user);
+    dp.setUser(user, fromPhone: true);
     dp.setFollowing(List<String>.from(user.followingList));
     _applyTheme(context, user);
     // Background refresh: stored snapshot may be days old.

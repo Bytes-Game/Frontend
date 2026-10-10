@@ -28,6 +28,7 @@ import 'package:myapp/widgets/match_warning.dart';
 import 'package:myapp/widgets/photo_choice.dart';
 import 'package:myapp/widgets/report_video.dart';
 import 'package:myapp/widgets/video_grid_tile.dart' show openVideoPlaylist;
+import 'package:myapp/widgets/arena_ui.dart' show PersonPhoto;
 
 /// Full-screen challenge detail: video, description, responses, and action buttons.
 class ChallengeDetailPage extends StatefulWidget {
@@ -163,6 +164,7 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
           username: c.creatorUsername,
           caption: _question(c),
           detail: '${_compact(c.views)} views',
+          challengeId: c.id,
         ),
       ),
     ).then((_) => _loadExtras());
@@ -603,8 +605,6 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     final isOwner = c != null && dp.user?.id == c.creatorId;
     final isBattle = _responses.isNotEmpty;
     final me = dp.user?.id;
-    final isPlayer = me != null &&
-        (isOwner || _responses.any((r) => r.responderId == me));
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -748,9 +748,10 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                         onLike: dp.user == null ? null : _like,
                         onComments: _openComments,
                         onShare: dp.user == null ? null : _share,
-                        onWho: isPlayer
-                            ? (list) => showPeople(context, c.id, list)
-                            : null,
+                        // Anyone signed in, as on Instagram.
+                        onWho: dp.user == null
+                            ? null
+                            : (list) => showPeople(context, c.id, list),
                       ),
                       if (c.status == 'open' && !isOwner) ...[
                         const SizedBox(height: 16),
@@ -1390,8 +1391,7 @@ class _StatusChip extends StatelessWidget {
 /// reel.
 ///
 /// As on Instagram, the icon does the thing (like, comment, share) and the
-/// number opens who did it — for the people in the video ([onWho]); for
-/// everyone else the number is only a number.
+/// number opens who did it ([onWho]), for anyone signed in.
 class _StatsBar extends StatelessWidget {
   final bool liked;
   final int likes;
@@ -1599,18 +1599,26 @@ class _CommentsPreview extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                CircleAvatar(
-                  radius: 15,
-                  backgroundColor: _raised,
-                  child: Text(
-                    ((c['authorUsername'] as String?) ?? '?')
-                        .characters
-                        .first
-                        .toUpperCase(),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
+                SizedBox(
+                  width: 30,
+                  height: 30,
+                  child: PersonPhoto(
+                    name: (c['authorUsername'] as String?) ?? '',
+                    size: 30,
+                    fallback: CircleAvatar(
+                      radius: 15,
+                      backgroundColor: _raised,
+                      child: Text(
+                        ((c['authorUsername'] as String?) ?? '?')
+                            .characters
+                            .first
+                            .toUpperCase(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ),
                   ),
                 ),

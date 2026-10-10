@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'package:myapp/models/battle_model.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/widgets/arena_ui.dart' show PersonPhoto;
 
 /// The live score of one battle.
 ///
@@ -432,12 +433,25 @@ class _SideRow extends StatelessWidget {
         children: [
           Row(
             children: [
-              CircleAvatar(
-                radius: 16,
-                backgroundColor: accent.withValues(alpha: 0.25),
-                child: Text(
-                  side.username.isEmpty ? '?' : side.username[0].toUpperCase(),
-                  style: TextStyle(color: accent, fontWeight: FontWeight.w800),
+              SizedBox(
+                width: 32,
+                height: 32,
+                child: PersonPhoto(
+                  name: side.username,
+                  size: 32,
+                  fallback: CircleAvatar(
+                    radius: 16,
+                    backgroundColor: accent.withValues(alpha: 0.25),
+                    child: Text(
+                      side.username.isEmpty
+                          ? '?'
+                          : side.username[0].toUpperCase(),
+                      style: TextStyle(
+                        color: accent,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 10),

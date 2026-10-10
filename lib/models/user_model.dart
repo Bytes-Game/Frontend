@@ -34,6 +34,14 @@ class UserModel {
   /// Decided battles that ended level.
   final int draws;
 
+  /// Their profile photo's address; empty for none (the app then shows
+  /// their initial). See AvatarBook.
+  final String avatarUrl;
+
+  /// The word they picked for what their profile is about — "Motivator",
+  /// "Influencer" — from [profileTags]; empty for none.
+  final String profileTag;
+
   UserModel({
     required this.id,
     required this.username,
@@ -50,6 +58,8 @@ class UserModel {
     this.settings = const {},
     this.rating = 1000,
     this.draws = 0,
+    this.avatarUrl = '',
+    this.profileTag = '',
   });
 
   /// Build a copy with selected fields swapped. Used by callers that
@@ -70,6 +80,8 @@ class UserModel {
     String? visibility,
     bool? twoFactorEnabled,
     Map<String, dynamic>? settings,
+    String? avatarUrl,
+    String? profileTag,
   }) {
     return UserModel(
       id: id ?? this.id,
@@ -87,6 +99,8 @@ class UserModel {
       settings: settings ?? this.settings,
       rating: rating,
       draws: draws,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
+      profileTag: profileTag ?? this.profileTag,
     );
   }
 
@@ -111,6 +125,8 @@ class UserModel {
       settings: (json['settings'] as Map<String, dynamic>?) ?? const {},
       rating: json['rating'] is num ? (json['rating'] as num).toInt() : 1000,
       draws: json['draws'] is num ? (json['draws'] as num).toInt() : 0,
+      avatarUrl: (json['avatarUrl'] as String?) ?? '',
+      profileTag: (json['profileTag'] as String?) ?? '',
       );
   }
 }

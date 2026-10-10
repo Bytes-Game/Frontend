@@ -7,6 +7,8 @@ import 'package:myapp/models/notification_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/battle_model.dart';
+import 'package:myapp/models/video_about.dart';
+import 'package:myapp/services/avatar_book.dart';
 
 /// Thin wrapper over package:http that injects the session bearer token (held
 /// in [ApiService.authToken]) into every backend request. Introduced so the
@@ -430,7 +432,11 @@ class ApiService {
       final res = await _authHttp.get(
           Uri.parse('$_base/api/v1/users/${Uri.encodeComponent(username)}'));
       if (res.statusCode == 200) {
-        return UserModel.fromJson(json.decode(res.body) as Map<String, dynamic>);
+        final user = UserModel.fromJson(
+          json.decode(res.body) as Map<String, dynamic>,
+        );
+        AvatarBook.instance.learnUser(user);
+        return user;
       }
       return null;
     } catch (_) {
@@ -2145,8 +2151,8 @@ class ApiService {
 
   /// GET /api/v1/challenges/{id}/people?what=likes|votes|shares — who
   /// liked each video, who voted for whom, or who shared, split by video.
-  /// The server answers only the people in the video; null for anyone
-  /// else, or when it could not be read.
+  /// Open to anyone who may watch the video, the way Instagram's are; null
+  /// when it could not be read.
   static Future<List<PeopleSide>?> getPeople(
     String challengeId,
     String what,
@@ -2157,14 +2163,71 @@ class ApiService {
       );
       if (res.statusCode == 200) {
         final body = json.decode(res.body) as Map<String, dynamic>;
-        return (body['sides'] as List? ?? [])
+        final sides = (body['sides'] as List? ?? [])
             .whereType<Map<String, dynamic>>()
             .map(PeopleSide.fromJson)
             .toList();
+        // Each person comes with their photo: the book learns it, so the
+        // list shows faces without asking again.
+        for (final side in sides) {
+          for (final p in side.people) {
+            AvatarBook.instance.learn(p.username, p.avatarUrl);
+          }
+        }
+        return sides;
       }
       debugPrint('[people] $what on $challengeId answered ${res.statusCode}');
     } catch (e) {
       debugPrint('[people] $what on $challengeId could not be read: $e');
+    }
+    return null;
+  }
+
+  /// GET /api/v1/users/avatars — the profile photo of each of [names] ("" for
+  /// someone with none). A name with no account is left out. Null when the
+  /// server could not be asked. See AvatarBook.
+  static Future<Map<String, String>?> getAvatars(List<String> names) async {
+    if (names.isEmpty) return const {};
+    try {
+      final q = Uri.encodeQueryComponent(names.join(','));
+      final res = await _authHttp
+          .get(Uri.parse('$_base/api/v1/users/avatars?names=$q'))
+          .timeout(const Duration(seconds: 20));
+      if (res.statusCode == 200) {
+        final body = json.decode(res.body) as Map<String, dynamic>;
+        final raw = body['avatars'];
+        if (raw is Map) {
+          return {for (final e in raw.entries) '${e.key}': '${e.value ?? ''}'};
+        }
+        return const {};
+      }
+      debugPrint('[avatars] ${names.length} photos answered ${res.statusCode}');
+    } catch (e) {
+      debugPrint('[avatars] ${names.length} photos could not be read: $e');
+    }
+    return null;
+  }
+
+  /// GET /api/v1/challenges/{id}/about — what the video is about, as the
+  /// server's model wrote it; for an answer in a battle, [responseId]'s.
+  /// Null when it could not be read.
+  static Future<VideoAbout?> getVideoAbout(
+    String challengeId, {
+    String responseId = '',
+  }) async {
+    try {
+      final side = responseId.isEmpty ? '' : '?response=$responseId';
+      final res = await _authHttp
+          .get(Uri.parse('$_base/api/v1/challenges/$challengeId/about$side'))
+          .timeout(const Duration(seconds: 20));
+      if (res.statusCode == 200) {
+        return VideoAbout.fromJson(
+          json.decode(res.body) as Map<String, dynamic>,
+        );
+      }
+      debugPrint('[about] $challengeId$side answered ${res.statusCode}');
+    } catch (e) {
+      debugPrint('[about] $challengeId could not be read: $e');
     }
     return null;
   }
@@ -2359,6 +2422,8 @@ class ApiService {
     String? bio,
     String? visibility,
     Map<String, dynamic>? settings,
+    String? avatarUrl,
+    String? profileTag,
   }) async {
     try {
       final body = <String, dynamic>{'userId': userId};
@@ -2366,6 +2431,8 @@ class ApiService {
       if (bio != null) body['bio'] = bio;
       if (visibility != null) body['visibility'] = visibility;
       if (settings != null) body['settings'] = settings;
+      if (avatarUrl != null) body['avatarUrl'] = avatarUrl;
+      if (profileTag != null) body['profileTag'] = profileTag;
       final res = await _authHttp
           .patch(
             Uri.parse('$_base/api/v1/users/$userId'),
