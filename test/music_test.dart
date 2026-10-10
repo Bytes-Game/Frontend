@@ -476,6 +476,11 @@ void main() {
       expect(track.path, '${dir.path}/music_a.mp3');
       expect(track.volume, 0.8);
       expect(track.loop, isTrue);
+      expect(
+        track.audioEndTime,
+        const Duration(seconds: 10, milliseconds: 500),
+        reason: 'the 10 seconds under the video, not the whole song',
+      );
       expect(made.enableAudio, isTrue, reason: 'the video\'s own sound stays');
       expect(made.bitrate, 12000000);
       expect(handed.single, contains('edit_'));

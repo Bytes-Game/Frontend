@@ -190,6 +190,15 @@ namespace BattleArena
             return true;
         }
 
+        // Starts the way every phone line does: "10-09 23:10:21.551 I/".
+        static bool HasPhoneTime(string line)
+        {
+            return line.Length >= 21 && line[2] == '-' && line[5] == ' ' &&
+                line[8] == ':' && line[11] == ':' && line[14] == '.' &&
+                line[18] == ' ' && line[20] == '/' &&
+                char.IsDigit(line[0]) && char.IsDigit(line[6]);
+        }
+
         static bool IsHexish(char c)
         {
             return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
@@ -324,9 +333,12 @@ namespace BattleArena
                     char lv; string tag; int pid; string msg; int ms;
                     if (!Parse(line, out lv, out tag, out pid, out msg, out ms))
                     {
-                        // The one line logcat writes in another shape:
-                        // "--------- beginning of main" and the like.
-                        if (line.StartsWith("--------- ", StringComparison.Ordinal))
+                        // Still the phone's: "--------- beginning of main"
+                        // and the like, and the odd line Android writes
+                        // with no process number ("I/SmartPower: ..."),
+                        // which were reported as missing from the file.
+                        if (line.StartsWith("--------- ", StringComparison.Ordinal) ||
+                            HasPhoneTime(line))
                             res.PhoneLines++;
                         else if (line.IndexOf("[editor]", StringComparison.Ordinal) >= 0)
                         {

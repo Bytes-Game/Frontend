@@ -46,6 +46,11 @@ void main() {
       final track = edit.track('/s.mp3', length: const Duration(seconds: 15));
       expect(track.path, '/s.mp3');
       expect(track.audioStartTime, const Duration(seconds: 42));
+      expect(
+        track.audioEndTime,
+        const Duration(seconds: 57, milliseconds: 500),
+        reason: 'only the part used is read, not the rest of the song',
+      );
       expect(track.volume, 0.5);
       expect(track.loop, isTrue);
       expect(track.fadeInDuration, const Duration(seconds: 2));

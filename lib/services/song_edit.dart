@@ -55,6 +55,11 @@ class SongEdit {
     return start > latest ? latest : start;
   }
 
+  /// A little more of the song than the post needs, so rounding never
+  /// leaves the post a few samples short (which would loop the song's
+  /// first instant back in at the very end).
+  static const endSpare = Duration(milliseconds: 500);
+
   /// The song as saved under a post [length] long, from the file at [path].
   VideoAudioTrack track(String path, {required Duration length}) {
     final fade = fadeFor(length);
@@ -64,6 +69,11 @@ class SongEdit {
       // A song shorter than the post starts again.
       loop: true,
       audioStartTime: start > Duration.zero ? start : null,
+      // Where the part used ends. Without it the phone reads the song from
+      // the start of the part to the very end of the song before saving: a
+      // device log shows a 7-second video taking 33 seconds to save, 31.5
+      // of them spent reading three minutes of song it then threw away.
+      audioEndTime: start + length + endSpare,
       fadeInDuration: fadeIn ? fade : Duration.zero,
       fadeOutDuration: fadeOut ? fade : Duration.zero,
     );

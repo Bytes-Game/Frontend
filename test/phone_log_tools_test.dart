@@ -42,7 +42,8 @@ String _line(int ms, String level, String tag, int pid, String msg) {
 /// repeating itself thousands of times, the app's own decoder chatter, the
 /// app's messages (some not plain ASCII), an app not responding, the app
 /// dying and coming back, another Flutter app printing its own "flutter"
-/// lines, and lines in no logcat shape at all.
+/// lines, a line with no process number, and lines in no logcat shape at
+/// all.
 List<String> _phoneLog() {
   final out = <String>[
     '--------- beginning of main',
@@ -151,6 +152,11 @@ List<String> _phoneLog() {
       'Fatal signal 6 (SIGABRT), code -1 in tid $_app (1.ui)',
     ),
     '--------- beginning of crash',
+    // A real line from a device log: Android wrote this one with no
+    // process number. It is still the phone's, and was counted as missing.
+    '10-09 23:10:21.551 I/SmartPower: com.android.chrome:sandboxed_process0:'
+        'org.chromium.content.app.SandboxedProcessService0:22/900-1->'
+        'background(0ms) R(become background) adj=-10000.',
     _line(
       ms + 9600,
       'I',
