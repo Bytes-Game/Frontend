@@ -100,26 +100,40 @@ void main() {
           .where((l) => l.contains('Get-Content') && l.contains(r'$deviceLog'));
       expect(piped, isEmpty, reason: '$piped');
       expect(
-          _commands(src).where((l) =>
-              l.contains('Add-PhoneLog') &&
-              l.contains(r'-PhoneLog $deviceLog')),
+          _commands(src)
+              .where((l) => l.contains(r'Add-PhoneLog -PhoneLog $deviceLog')),
           hasLength(1),
           reason: 'the fold is the shared one, which shrinks the log');
     });
 
-    test('the separate copy is kept, not deleted', () {
-      // If the append fails, the phone's log has to still exist on its own
-      // rather than be lost inside a half-written merge.
-      expect(src, isNot(contains(r'Remove-Item -LiteralPath $deviceLog')));
-      expect(src, contains('also kept on its own'));
+    test('the phone is recorded in the temp folder, not beside the log', () {
+      // "Make it in logs.txt only, do not create any other file." This
+      // used to keep a second copy next to the log, and the copy was the
+      // reason a 200 MB log came with a 130 MB friend.
+      final at = _commands(src)
+          .where((l) => l.startsWith(r'$deviceLog = '))
+          .toList();
+      expect(at, hasLength(1));
+      expect(at.single, contains('GetTempPath()'));
+      expect(at.single, isNot(contains(r'$LogFile')));
+      expect(
+          _commands(src).where(
+              (l) => l.startsWith(r'Remove-Item -LiteralPath $deviceLog')),
+          hasLength(1),
+          reason: 'deleted once its lines are in the log');
     });
 
-    test('a failed fold says so loudly', () {
+    test('a failed shrink says so loudly, and still gets the lines in', () {
       // Silence here means sending a log missing exactly the part that was
-      // added to stop logs going missing.
-      expect(src, contains('COULD NOT FOLD THE PHONE LOG IN'));
-      expect(src, contains('Send BOTH files'),
-          reason: 'it fails and gives no way to recover the run');
+      // added to stop logs going missing. test/phone_log_tools_test.dart
+      // breaks the shrinking on purpose and checks the lines arrive whole.
+      expect(src, contains('COULD NOT SHRINK THE PHONE LOG'));
+      expect(
+          _commands(src)
+              .where((l) => l.startsWith('Add-PhoneLogWhole -PhoneLog')),
+          hasLength(1));
+      expect(src, contains('COULD NOT COPY IT IN WHOLE EITHER'),
+          reason: 'and if that fails too, it says where the lines are');
     });
   });
 
@@ -133,10 +147,14 @@ void main() {
       expect(src, isNot(contains(r"-SimpleMatch '[reel] starts='")));
     });
 
-    test('and looks in the phone log too', () {
-      expect(src, contains(r'$searchIn += $deviceLog'),
-          reason: 'the run is declared empty because the summary landed in '
-              'the phone log rather than the flutter one');
+    test('and looks once the phone log is in the file', () {
+      // The summary often lands only in the phone's log, when flutter run
+      // stopped following the app. Searched before the fold, the run is
+      // declared empty.
+      final fold = src.indexOf(r'Add-PhoneLog -PhoneLog $deviceLog');
+      final search = src.indexOf(r"Select-String -LiteralPath $searchIn");
+      expect(fold, greaterThan(-1));
+      expect(search, greaterThan(fold));
     });
   });
 }

@@ -13,7 +13,11 @@
 # file at the end - so there is one file to read and one file to send. The
 # phone repeats itself a lot, so the folded copy keeps every line the app
 # printed and counts the phone's repeats instead of copying them (see
-# phone_log.ps1); the phone's full log stays next to it, uncut.
+# phone_log.ps1).
+#
+# And ONLY that one file: nothing else is left next to it. The phone's
+# recording waits in the temp folder while the app runs, and is deleted
+# once it is in the log.
 #
 # Anything else you pass is handed straight to "flutter run", so
 # "tools\run_profile.bat -d R58M12345" still works.
@@ -100,17 +104,28 @@ if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
 # from the folder PowerShell started in rather than this one.
 $LogFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($LogFile)
 
+# Older versions left the phone's whole log next to this one as a second
+# file. Everything in it went into the log as well, so it is only clutter -
+# and the log is meant to be the one file.
+$leftOver = "$LogFile.device.txt"
+if (Test-Path -LiteralPath $leftOver -PathType Leaf) {
+    Remove-Item -LiteralPath $leftOver -Force
+    Write-Host "Removed $leftOver, left by an older version of this script." -ForegroundColor Yellow
+}
+
 # Logs used to be written in UTF-16. Adding UTF-8 to the end of one of
-# those garbles everything after the join, so an old one is moved aside.
+# those garbles everything after the join, so an old one is turned into
+# UTF-8 first, in place - not moved aside into a second file.
 if ($Append -and (Test-Path -LiteralPath $LogFile -PathType Leaf)) {
     $head = New-Object byte[] 2
     $stream = [System.IO.File]::OpenRead($LogFile)
     $read = $stream.Read($head, 0, 2)
     $stream.Dispose()
     if ($read -eq 2 -and $head[0] -eq 0xFF -and $head[1] -eq 0xFE) {
-        $older = "$LogFile.old.txt"
-        Move-Item -LiteralPath $LogFile -Destination $older -Force
-        Write-Host "The old log is in the old format, so it was moved to $older." -ForegroundColor Yellow
+        $text = [System.IO.File]::ReadAllText($LogFile)
+        [System.IO.File]::WriteAllText($LogFile, $text, (New-Object System.Text.UTF8Encoding($true)))
+        $text = $null
+        Write-Host "The old log was in the old format; it is now UTF-8, so this run can be added." -ForegroundColor Yellow
     }
 }
 
@@ -153,7 +168,11 @@ try {
 # Start the phone-side recording before the app launches, so nothing from
 # the first seconds is missed. Runs as its own process, writing its own
 # file, and is stopped in the finally block below whatever happens.
-$deviceLog = "$LogFile.device.txt"
+#
+# That file is in the temp folder, not next to the log, and is deleted once
+# it has been folded in: the log is the one file this leaves behind. (It
+# cannot be the log itself: two writers on one file interleave mid-line.)
+$deviceLog = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'run_profile_phone_log.txt')
 $logcatProc = $null
 $wantLogcat = -not $NoLogcat
 
@@ -218,7 +237,7 @@ if ($wantLogcat) {
             -ArgumentList @('logcat', '-v', 'time') `
             -RedirectStandardOutput $deviceLog `
             -NoNewWindow -PassThru
-        Write-Host "Also recording the phone to $deviceLog" -ForegroundColor Cyan
+        Write-Host "Also recording the phone. It goes into $LogFile at the end." -ForegroundColor Cyan
     }
 }
 
@@ -282,24 +301,39 @@ try {
     # instead of copied (phone_log.ps1 has the details). Copying all of it
     # once made a file nobody could open or send.
     #
-    # The device copy is left in place, uncut. If this fails - disk full,
-    # file locked by an editor - the phone's log still exists on its own
-    # rather than being lost inside a half-written merge.
+    # The temp copy is deleted once its lines are in the log. If shrinking
+    # fails, the phone's log goes in whole instead, so it is still in the
+    # one file. Only if even that fails is the temp copy kept, and the
+    # message says where: losing the run would be worse than a second file.
     $found = $null
     if ($wantLogcat -and (Test-Path -LiteralPath $deviceLog)) {
         Write-Host ""
         Write-Host "Folding the phone's log in..." -ForegroundColor Cyan
+        $inLog = $false
         try {
             $found = Add-PhoneLog -PhoneLog $deviceLog -Into $LogFile -Append $true -ProjectRoot $projectRoot
+            $inLog = $true
             Write-Host "Phone log ($(Format-Count $found.Lines) lines) folded into $LogFile" -ForegroundColor Cyan
-            Write-Host "  (also kept on its own at $deviceLog)"
         } catch {
             # Say so loudly. A silent failure here means sending a log that
             # is missing exactly the part that was added to stop logs being
             # missing.
-            Write-Host "COULD NOT FOLD THE PHONE LOG IN: $($_.Exception.Message)" -ForegroundColor Yellow
-            Write-Host "  Send BOTH files: $LogFile and $deviceLog"
-            Write-Host "  The phone's one is big: zip it first (right-click, Send to > Compressed (zipped) folder)."
+            Write-Host "COULD NOT SHRINK THE PHONE LOG: $($_.Exception.Message)" -ForegroundColor Yellow
+            try {
+                Add-PhoneLogWhole -PhoneLog $deviceLog -Into $LogFile
+                $inLog = $true
+                Write-Host "  It was copied into $LogFile whole instead, every line." -ForegroundColor Yellow
+            } catch {
+                Write-Host "  COULD NOT COPY IT IN WHOLE EITHER: $($_.Exception.Message)" -ForegroundColor Red
+                Write-Host "  The phone's log is kept at $deviceLog - send that as well."
+            }
+        }
+        if ($inLog) {
+            try {
+                Remove-Item -LiteralPath $deviceLog -Force -ErrorAction Stop
+            } catch {
+                Write-Host "  (could not delete the temporary copy at $deviceLog`: $($_.Exception.Message))" -ForegroundColor Yellow
+            }
         }
     }
 
@@ -308,11 +342,13 @@ try {
     # open.
     Write-Host ""
     Show-SavedFile $LogFile
-    if ($found) { Show-PhoneLogFindings $found $deviceLog }
+    if ($found) { Show-PhoneLogFindings $found }
     Write-Host ""
 
     # The playback measurement lives on one line near the end of the run.
     # Pull it back out so it does not have to be hunted for in the file.
+    # The phone's log is in the file by now (the app's own lines are always
+    # kept), and the temp copy is only still there if it could not go in.
     $searchIn = @($LogFile)
     if ($wantLogcat -and (Test-Path -LiteralPath $deviceLog)) { $searchIn += $deviceLog }
     # Match on 'starts=' alone, NOT on '[reel] starts='.

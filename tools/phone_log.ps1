@@ -1,7 +1,7 @@
 # The phone's log, made small enough to open and to send.
 #
-# Shared by run_profile.ps1 (at the end of every run) and
-# shrink_phone_log.ps1 (for a phone log already on disk). Load it with
+# Shared by run_profile.ps1 (at the end of every run) and shrink_log.ps1
+# (to make a log from before this existed small, in place). Load it with
 #
 #   . (Join-Path $PSScriptRoot 'phone_log.ps1')
 #
@@ -28,6 +28,11 @@
 #
 # Two lines are the same kind when they match after the time, the process
 # number, and every other number in them are taken out.
+#
+# ONE FILE. Everything goes into the log itself (F:\logs.txt): no second
+# copy, no "small" version next to it. Asked for in so many words: "make it
+# in logs.txt only, do not create any other file". The phone's recording
+# waits in the temp folder while the app runs and is deleted once it is in.
 #
 # The work is done in C#: Windows PowerShell 5.1 takes minutes to go
 # through 800,000 lines one at a time, which looks like a hung script.
@@ -161,9 +166,67 @@ namespace BattleArena
             return s.Length <= n ? s : s.Substring(0, n) + "...";
         }
 
-        static StreamReader Open(string path)
+        // Opened past its first [skip] lines: a phone log can start partway
+        // through a run log, under the run's own lines.
+        static StreamReader Open(string path, int skip)
         {
-            return new StreamReader(path, new UTF8Encoding(false), true);
+            var r = new StreamReader(path, new UTF8Encoding(false), true);
+            for (int s = 0; s < skip && r.ReadLine() != null; s++) { }
+            return r;
+        }
+
+        // Where an earlier version of the run script put the phone's whole
+        // log in a run log: { the run's own lines end here, the phone's
+        // lines start here, 1 when it is already shrunk }, -1s for none.
+        public static int[] FindPhoneSection(string path)
+        {
+            var found = new int[] { -1, -1, 0 };
+            using (var r = new StreamReader(path, new UTF8Encoding(false), true))
+            {
+                string line, before = null, beforeThat = null;
+                int i = -1;
+                bool inHeader = false;
+                while ((line = r.ReadLine()) != null)
+                {
+                    i++;
+                    if (inHeader)
+                    {
+                        if (line.StartsWith("=====", StringComparison.Ordinal))
+                        {
+                            found[1] = i + 1;
+                            return found;
+                        }
+                    }
+                    else if (line.StartsWith("PHONE LOG (adb logcat)", StringComparison.Ordinal))
+                    {
+                        if (line.StartsWith("PHONE LOG (adb logcat): ", StringComparison.Ordinal))
+                        {
+                            found[2] = 1;
+                            return found;
+                        }
+                        found[0] = (before != null && before.StartsWith("=====", StringComparison.Ordinal) &&
+                            beforeThat != null && beforeThat.Length == 0) ? i - 2 : i;
+                        inHeader = true;
+                    }
+                    beforeThat = before;
+                    before = line;
+                }
+            }
+            if (found[0] >= 0 && found[1] < 0) found[1] = found[0];
+            return found;
+        }
+
+        // The first [count] lines of [from] (all of them when negative) as a
+        // new UTF-8 file, whatever [from] was written in.
+        public static void CopyLines(string from, string to, int count)
+        {
+            using (var r = new StreamReader(from, new UTF8Encoding(false), true))
+            using (var w = new StreamWriter(to, false, new UTF8Encoding(true)))
+            {
+                string line;
+                for (int i = 0; (count < 0 || i < count) && (line = r.ReadLine()) != null; i++)
+                    w.WriteLine(line);
+            }
         }
 
         public static long CountLines(string path)
@@ -176,7 +239,7 @@ namespace BattleArena
             return n;
         }
 
-        public static PhoneLogResult Fold(string phoneLog, string into,
+        public static PhoneLogResult Fold(string phoneLog, int skip, string into,
             bool append, string appId, int keepApp, int keepOther, int top)
         {
             // Pass 1: which processes are the app's. The app's own messages
@@ -184,7 +247,7 @@ namespace BattleArena
             // the app (more than one means it was restarted).
             var appPids = new Dictionary<int, bool>();
             long total = 0;
-            using (var r = Open(phoneLog))
+            using (var r = Open(phoneLog, skip))
             {
                 string line;
                 while ((line = r.ReadLine()) != null)
@@ -213,7 +276,7 @@ namespace BattleArena
             var problemAt = new Dictionary<string, int>(StringComparer.Ordinal);
             var editor = new List<string>();
             int anrPid = -1, anrLeft = 0;
-            using (var r = Open(phoneLog))
+            using (var r = Open(phoneLog, skip))
             {
                 string line;
                 int i = -1;
@@ -361,14 +424,13 @@ namespace BattleArena
                     "The other {0:N0} lines are repeats. They are counted at the end of this", res.Cut));
                 w.WriteLine("section instead of copied. Lines about a crash or an app not responding");
                 w.WriteLine("are always kept.");
-                w.WriteLine("Every line, uncut: " + phoneLog);
                 w.WriteLine(Rule);
                 w.WriteLine("THE MOST COMMON KINDS OF LINE IN THE PHONE LOG");
                 w.WriteLine("(how many, then the line with its numbers shown as #)");
                 foreach (var s in res.TopKinds) w.WriteLine(s);
                 w.WriteLine(Rule);
 
-                using (var r = Open(phoneLog))
+                using (var r = Open(phoneLog, skip))
                 {
                     string line;
                     int i = -1;
@@ -450,8 +512,66 @@ function Add-PhoneLog {
     # process started in, not from where PowerShell is.
     $full = (Get-Item -LiteralPath $PhoneLog).FullName
     $Into = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Into)
-    return [BattleArena.PhoneLog]::Fold($full, $Into, $Append,
+    return [BattleArena.PhoneLog]::Fold($full, 0, $Into, $Append,
         (Get-AppId $ProjectRoot), 200, 20, 25)
+}
+
+# When shrinking fails: the phone's log added to the end whole, as it is,
+# so it is in the one file rather than lost. Bytes straight across - adb
+# writes UTF-8, the same as the log - so 800,000 lines take seconds.
+function Add-PhoneLogWhole([string]$PhoneLog, [string]$Into) {
+    $Into = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Into)
+    $header = [System.Text.Encoding]::UTF8.GetBytes(
+        "`r`n=============================================================`r`n" +
+        "PHONE LOG (adb logcat), WHOLE: it could not be shrunk, so every line is here.`r`n" +
+        "=============================================================`r`n")
+    $from = [System.IO.File]::OpenRead((Get-Item -LiteralPath $PhoneLog).FullName)
+    try {
+        $to = New-Object System.IO.FileStream($Into, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write)
+        try {
+            $to.Write($header, 0, $header.Length)
+            $from.CopyTo($to)
+        } finally { $to.Dispose() }
+    } finally { $from.Dispose() }
+}
+
+# Makes a log from before this existed small, in place. The run's own lines
+# stay as they are; the phone's log under them is shrunk. The phone's lines
+# come from the separate copy older versions left next to the log, when it
+# is there (the copy inside the log was read in the wrong character set),
+# and from the log itself otherwise.
+#
+# Returns @{ Result = what Fold found } or @{ Why = why nothing was done }.
+function Invoke-ShrinkLog([string]$LogFile, [string]$OldPhoneLog, [string]$ProjectRoot) {
+    Import-PhoneLogReader
+    $LogFile = (Get-Item -LiteralPath $LogFile).FullName
+    $section = [BattleArena.PhoneLog]::FindPhoneSection($LogFile)
+    if ($section[2] -eq 1) { return @{ Why = 'it is already small' } }
+
+    if ($OldPhoneLog -and (Test-Path -LiteralPath $OldPhoneLog -PathType Leaf)) {
+        $source = (Get-Item -LiteralPath $OldPhoneLog).FullName
+        $skip = 0
+    } elseif ($section[0] -ge 0) {
+        $source = $LogFile
+        $skip = $section[1]
+    } else {
+        return @{ Why = 'there is no phone log in it' }
+    }
+
+    # Built beside it and swapped in at the end, so a failure part way
+    # leaves the log as it was rather than half rewritten.
+    $building = "$LogFile.shrinking"
+    try {
+        [BattleArena.PhoneLog]::CopyLines($LogFile, $building, $section[0])
+        $result = [BattleArena.PhoneLog]::Fold($source, $skip, $building, $true,
+            (Get-AppId $ProjectRoot), 200, 20, 25)
+        # NullString, not $null: PowerShell turns $null into "" on its way
+        # to a .NET string, and "" is not a valid "no backup file".
+        [System.IO.File]::Replace($building, $LogFile, [System.Management.Automation.Language.NullString]::Value)
+    } finally {
+        if (Test-Path -LiteralPath $building) { Remove-Item -LiteralPath $building -Force }
+    }
+    return @{ Result = $result }
 }
 
 # Says what is actually on disk, read back from the disk - not what the
@@ -482,7 +602,7 @@ function Show-SavedFile([string]$Path) {
 }
 
 # The parts of the phone's log worth seeing without opening the file.
-function Show-PhoneLogFindings($Result, [string]$PhoneLog) {
+function Show-PhoneLogFindings($Result) {
     $restarts = ''
     if ($Result.AppProcesses -gt 1) {
         $restarts = " - it ran $($Result.AppProcesses) times, so it was closed or killed and opened again"
@@ -490,7 +610,6 @@ function Show-PhoneLogFindings($Result, [string]$PhoneLog) {
     Write-Host "  The app's own lines: $(Format-Count $Result.AppLines)$restarts"
     Write-Host "  The phone wrote $(Format-Count $Result.Lines) lines. $(Format-Count $Result.Cut) of them are repeats, counted at"
     Write-Host "  the end of the phone section instead of copied."
-    Write-Host "  Every phone line, uncut: $PhoneLog ($(Format-Size $PhoneLog))"
 
     Write-Host ""
     Write-Host "The most common lines from the phone:" -ForegroundColor Cyan

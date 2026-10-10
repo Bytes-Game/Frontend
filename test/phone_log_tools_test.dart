@@ -9,7 +9,9 @@
 // saved". The run had the freeze in it; nobody could get at it.
 //
 // Now the phone's repeats are counted instead of copied, the file is
-// UTF-8, and what is reported as saved is read back from the disk.
+// UTF-8, and what is reported as saved is read back from the disk. And it
+// is ONE file: "make it in logs.txt only, do not create any other file".
+// Every test here checks the log's folder holds nothing else afterwards.
 //
 // These run the real scripts with PowerShell 7 (pwsh), which every GitHub
 // runner has. Windows PowerShell 5.1 - what the scripts meet on the
@@ -166,6 +168,19 @@ void main() {
   final skip = pwsh == null && !onCi
       ? 'PowerShell 7 (pwsh) is not installed here, or set PWSH to it'
       : null;
+  final unix = Platform.isWindows ? 'the stand-ins are shell scripts' : null;
+
+  late Directory dir;
+  // Where the log goes. Nothing but the log may be in it afterwards.
+  late Directory out;
+  // The temp folder the scripts see. Empty again afterwards.
+  late Directory tmp;
+  setUp(() {
+    dir = Directory.systemTemp.createTempSync('phone_log_');
+    out = Directory('${dir.path}/out')..createSync();
+    tmp = Directory('${dir.path}/tmp')..createSync();
+  });
+  tearDown(() => dir.deleteSync(recursive: true));
 
   Future<ProcessResult> run(List<String> args, {Map<String, String>? env}) {
     if (pwsh == null) {
@@ -177,21 +192,33 @@ void main() {
     return Process.run(
       pwsh,
       ['-NoProfile', ...args],
-      environment: env,
+      environment: {'TMPDIR': tmp.path, ...?env},
       stdoutEncoding: utf8,
       stderrEncoding: utf8,
     );
   }
 
-  late Directory dir;
-  setUp(() => dir = Directory.systemTemp.createTempSync('phone_log_'));
-  tearDown(() => dir.deleteSync(recursive: true));
+  List<String> filesIn(Directory d) =>
+      d.listSync().map((e) => e.path.split('/').last).toList()..sort();
 
-  File writePhoneLog(List<String> lines) {
-    // adb writes UTF-8 with no byte-order mark.
-    final f = File('${dir.path}/logs.txt.device.txt');
-    f.writeAsBytesSync(utf8.encode('${lines.join('\n')}\n'));
-    return f;
+  /// A copy of the scripts whose shrinking fails part way: after the log
+  /// is being rebuilt, so a half-built file would be there to clean up.
+  String brokenTools() {
+    final tools = Directory('${dir.path}/proj/tools')
+      ..createSync(recursive: true);
+    for (final name in ['run_profile.ps1', 'shrink_log.ps1', 'phone_log.ps1']) {
+      var src = File('tools/$name').readAsStringSync();
+      if (name == 'phone_log.ps1') {
+        const pass2 = 'var res = new PhoneLogResult();';
+        expect(src, contains(pass2));
+        src = src.replaceFirst(
+          pass2,
+          'if (total >= 0) throw new IOException("broken on purpose"); $pass2',
+        );
+      }
+      File('${tools.path}/$name').writeAsStringSync(src);
+    }
+    return tools.path;
   }
 
   /// Lines of [text] that are log lines, not the header, table or footer.
@@ -199,6 +226,16 @@ void main() {
       .convert(text)
       .where((l) => l.startsWith('10-09 ') || l.startsWith('---------'))
       .toList();
+
+  String readUtf8(File f) {
+    final bytes = f.readAsBytesSync();
+    expect(bytes.take(3), [
+      0xEF,
+      0xBB,
+      0xBF,
+    ], reason: 'UTF-8 with its mark, so Notepad and 5.1 read it right');
+    return utf8.decode(bytes.skip(3).toList());
+  }
 
   group('the C# that shrinks the log', () {
     test(
@@ -258,119 +295,182 @@ void main() {
     });
   });
 
-  group('tools/shrink_phone_log', () {
+  group('tools/shrink_log, on a log from an older version', () {
+    // What the older version left: F:\logs.txt in UTF-16 with the phone's
+    // whole log copied in (read in the wrong character set, so "café ✓"
+    // came out as mojibake), and the same phone log again beside it.
     late List<String> input;
-    late String small;
-    late ProcessResult r;
+    late File log;
+    late File oldCopy;
+    const runPart = [
+      '',
+      '=============================================================',
+      'flutter run --profile',
+      'started 2026-10-09 23:30:00',
+      '=============================================================',
+      'Launching lib/main.dart on phone in profile mode...',
+      'I/flutter (27066): [reel] decoders{c2=15} starts=1',
+      'Application finished.',
+    ];
 
-    setUp(() async {
-      if (skip != null) return;
+    setUp(() {
       input = _phoneLog();
-      final phone = writePhoneLog(input);
-      final out = '${dir.path}/logs.small.txt';
-      r = await run([
-        '-File',
-        'tools/shrink_phone_log.ps1',
-        '-PhoneLog',
-        phone.path,
-        '-Out',
-        out,
-      ]);
-      expect(r.exitCode, 0, reason: '${r.stdout}\n${r.stderr}');
-      final bytes = File(out).readAsBytesSync();
-      expect(bytes.take(3), [
-        0xEF,
-        0xBB,
-        0xBF,
-      ], reason: 'UTF-8 with its mark, so Notepad and 5.1 read it right');
-      small = utf8.decode(bytes.skip(3).toList());
+      final mangled = input
+          .map((l) => latin1.decode(utf8.encode(l), allowInvalid: true))
+          .toList();
+      final text = [
+        ...runPart,
+        '',
+        '=============================================================',
+        'PHONE LOG (adb logcat) - ${input.length} lines',
+        'Everything below is from the phone itself, so it covers any',
+        'stretch where flutter run stopped following the app.',
+        '=============================================================',
+        ...mangled,
+      ].join('\r\n');
+      log = File('${out.path}/logs.txt')
+        ..writeAsBytesSync([
+          0xFF,
+          0xFE,
+          for (final unit in '$text\r\n'.codeUnits) ...[unit & 0xFF, unit >> 8],
+        ]);
+      oldCopy = File('${out.path}/logs.txt.device.txt')
+        ..writeAsBytesSync(utf8.encode('${input.join('\n')}\n'));
     });
 
-    test('keeps every line the app printed, in order', () {
+    Future<ProcessResult> shrink({String tools = 'tools'}) =>
+        run(['-File', '$tools/shrink_log.ps1', '-LogFile', log.path]);
+
+    test('rewrites logs.txt in place, and leaves no other file', () async {
+      final r = await shrink();
+      expect(r.exitCode, 0, reason: '${r.stdout}\n${r.stderr}');
+      expect(filesIn(out), ['logs.txt']);
+      expect(filesIn(tmp), isEmpty);
+      expect(r.stdout, contains('Removed ${oldCopy.path}'));
+      expect(log.lengthSync(), lessThan(input.join('\n').length ~/ 2));
+    }, skip: skip);
+
+    test("keeps the run's own lines, then the phone shrunk", () async {
+      await shrink();
+      final text = readUtf8(log);
+      expect(const LineSplitter().convert(text).take(runPart.length), runPart);
+      expect(
+        text,
+        contains('PHONE LOG (adb logcat): ${_comma(input.length)} lines'),
+      );
+      expect(
+        text,
+        isNot(contains('PHONE LOG (adb logcat) - ')),
+        reason: 'the old copy of the phone log is replaced, not kept too',
+      );
+    }, skip: skip);
+
+    test(
+      'takes the phone from the old second copy, which has the right letters',
+      () async {
+        await shrink();
+        final text = readUtf8(log);
+        expect(text, contains('café ✓'));
+        expect(text, isNot(contains('cafÃ©')));
+      },
+      skip: skip,
+    );
+
+    test('keeps every line the app printed, in order', () async {
+      await shrink();
       final app = input.where((l) => l.contains('I/flutter ')).toList();
       expect(app, hasLength(44));
       expect(
-        logLines(small).where((l) => l.contains('I/flutter ')).toList(),
+        logLines(readUtf8(log)).where((l) => l.contains('I/flutter ')).toList(),
         app,
       );
-      expect(
-        small,
-        contains('café ✓'),
-        reason: 'not plain ASCII, and has to survive the trip',
-      );
     }, skip: skip);
 
-    test('keeps the first 20 of a repeat from elsewhere on the phone', () {
-      final kept = logLines(
-        small,
-      ).where((l) => l.contains('W/BLASTBufferQueue('));
-      expect(kept, hasLength(20));
-      expect(
-        logLines(small).where((l) => l.contains('I/Other ')),
-        hasLength(20),
-        reason: '25 of them, so 5 counted',
-      );
-    }, skip: skip);
+    test(
+      'keeps the first 20 of a repeat from elsewhere on the phone',
+      () async {
+        await shrink();
+        final lines = logLines(readUtf8(log));
+        expect(
+          lines.where((l) => l.contains('W/BLASTBufferQueue(')),
+          hasLength(20),
+        );
+        expect(
+          lines.where((l) => l.contains('I/Other ')),
+          hasLength(20),
+          reason: '25 of them, so 5 counted',
+        );
+      },
+      skip: skip,
+    );
 
-    test("keeps the first 200 of a repeat from the app's own process", () {
-      expect(
-        logLines(small).where((l) => l.contains('D/CCodec ')),
-        hasLength(200),
-        reason: "300 decoder lines from the app's process, so 100 counted",
-      );
-    }, skip: skip);
+    test(
+      "keeps the first 200 of a repeat from the app's own process",
+      () async {
+        await shrink();
+        expect(
+          logLines(readUtf8(log)).where((l) => l.contains('D/CCodec ')),
+          hasLength(200),
+          reason: "300 decoder lines from the app's process, so 100 counted",
+        );
+      },
+      skip: skip,
+    );
 
-    test('counts what it leaves out, by kind', () {
+    test('counts what it leaves out, by kind', () async {
+      await shrink();
+      final text = readUtf8(log);
       expect(
-        small,
+        text,
         contains('3,000  W/BLASTBufferQueue: [SurfaceView##] '),
         reason: 'the table of what filled the log',
       );
-      expect(small, contains('2,980 more  W/BLASTBufferQueue: '));
-      expect(small, contains('100 more  D/CCodec: '));
-      expect(small, contains('5 more  I/Other: '));
-      expect(
-        small,
-        contains(
-          'PHONE LOG (adb logcat): ${_comma(input.length)} lines from the phone.',
-        ),
-      );
+      expect(text, contains('2,980 more  W/BLASTBufferQueue: '));
+      expect(text, contains('100 more  D/CCodec: '));
+      expect(text, contains('5 more  I/Other: '));
     }, skip: skip);
 
-    test('always keeps crashes, an app not responding, and odd lines', () {
-      expect(
-        logLines(small).where((l) => l.contains('FATAL EXCEPTION')),
-        hasLength(30),
-        reason: 'a crash repeated past the limit for repeats',
-      );
-      for (final keep in [
-        'ANR in com.example.devf',
-        'Reason: Input dispatching timed out',
-        'Fatal signal 6',
-        '--------- beginning of crash',
-        'Process com.example.devf (pid $_app) has died',
-      ]) {
+    test(
+      'always keeps crashes, an app not responding, and odd lines',
+      () async {
+        await shrink();
+        final lines = logLines(readUtf8(log));
         expect(
-          logLines(small).where((l) => l.contains(keep)),
-          hasLength(1),
-          reason: keep,
+          lines.where((l) => l.contains('FATAL EXCEPTION')),
+          hasLength(30),
+          reason: 'a crash repeated past the limit for repeats',
         );
-      }
-    }, skip: skip);
+        for (final keep in [
+          'ANR in com.example.devf',
+          'Reason: Input dispatching timed out',
+          'Fatal signal 6',
+          '--------- beginning of crash',
+          'Process com.example.devf (pid $_app) has died',
+        ]) {
+          expect(
+            lines.where((l) => l.contains(keep)),
+            hasLength(1),
+            reason: keep,
+          );
+        }
+      },
+      skip: skip,
+    );
 
-    test('keeps lines in the order they happened', () {
+    test('keeps lines in the order they happened', () async {
+      await shrink();
       var at = 0;
-      for (final l in logLines(small)) {
+      for (final l in logLines(readUtf8(log))) {
         at = input.indexOf(l, at);
         expect(at, greaterThan(-1), reason: 'out of order or changed: $l');
         at++;
       }
     }, skip: skip);
 
-    test('says on screen what it found, without opening the file', () {
-      final said = r.stdout as String;
-      expect(said, contains('Saved ${dir.path}/logs.small.txt ('));
-      expect(said, contains('Attach ${dir.path}/logs.small.txt'));
+    test('says on screen what it found, without opening the file', () async {
+      final said = (await shrink()).stdout as String;
+      expect(said, contains('Saved ${log.path} ('));
+      expect(said, contains('Attach ${log.path}'));
       expect(
         said,
         contains('it ran 2 times'),
@@ -408,6 +508,51 @@ void main() {
         '  23:10:21.012  [editor] closing: the editor let go after 1ms',
       ]);
     }, skip: skip);
+
+    test('a second time changes nothing', () async {
+      await shrink();
+      final once = log.readAsBytesSync();
+      final r = await shrink();
+      expect(r.stdout, contains('Nothing to do: it is already small.'));
+      expect(log.readAsBytesSync(), once);
+    }, skip: skip);
+
+    test(
+      'without the old second copy, uses the phone log inside the file',
+      () async {
+        oldCopy.deleteSync();
+        final r = await shrink();
+        expect(r.exitCode, 0, reason: '${r.stdout}\n${r.stderr}');
+        expect(filesIn(out), ['logs.txt']);
+        final text = readUtf8(log);
+        expect(text, contains('2,980 more  W/BLASTBufferQueue: '));
+        expect(
+          logLines(text).where((l) => l.contains('I/flutter ')),
+          hasLength(44),
+        );
+      },
+      skip: skip,
+    );
+
+    test(
+      'if it fails, the log and the old copy are left as they were',
+      () async {
+        final before = log.readAsBytesSync();
+        final r = await shrink(tools: brokenTools());
+        expect(r.exitCode, isNot(0));
+        expect(r.stdout, contains('COULD NOT SHRINK IT'));
+        expect(r.stdout, contains('is unchanged'));
+        expect(log.readAsBytesSync(), before);
+        expect(
+          filesIn(out),
+          ['logs.txt', 'logs.txt.device.txt'],
+          reason:
+              'nothing half-built left behind, and the copy not deleted '
+              'when its lines did not make it in',
+        );
+      },
+      skip: skip,
+    );
   });
 
   group('tools/run_profile', () {
@@ -442,40 +587,41 @@ void main() {
       }
     });
 
-    Future<ProcessResult> runProfile(List<String> extra) => run(
+    Future<ProcessResult> runProfile(
+      List<String> extra, {
+      String tools = 'tools',
+    }) => run(
       [
         '-File',
-        'tools/run_profile.ps1',
+        '$tools/run_profile.ps1',
         '-LogFile',
-        '${dir.path}/logs.txt',
+        '${out.path}/logs.txt',
         ...extra,
       ],
       env: {'PATH': '${bin.path}:${Platform.environment['PATH']}'},
     );
 
-    final unix = Platform.isWindows ? 'the stand-ins are shell scripts' : null;
-
     test(
-      'one UTF-8 file: the run, then the phone shrunk',
+      'one UTF-8 file: the run, then the phone shrunk - and nothing else',
       () async {
         final r = await runProfile([]);
         expect(r.exitCode, 0, reason: '${r.stdout}\n${r.stderr}');
-        final bytes = File('${dir.path}/logs.txt').readAsBytesSync();
-        expect(bytes.take(3), [
-          0xEF,
-          0xBB,
-          0xBF,
-        ], reason: 'Tee-Object on 5.1 wrote UTF-16, twice the size');
-        final log = utf8.decode(bytes.skip(3).toList());
+        expect(filesIn(out), [
+          'logs.txt',
+        ], reason: 'no second copy of the phone log beside it');
+        expect(
+          filesIn(tmp),
+          isEmpty,
+          reason: "the phone's recording is deleted once it is in the log",
+        );
+        final log = readUtf8(File('${out.path}/logs.txt'));
         expect(log, contains('flutter run --profile'));
         expect(log, contains('Built app-profile.apk (82.5MB) ✓'));
         expect(log, contains('a warning on stderr'));
         expect(log, contains('Application finished.'));
         expect(
           log,
-          contains(
-            'PHONE LOG (adb logcat): ${_comma(input.length)} lines from the phone.',
-          ),
+          contains('PHONE LOG (adb logcat): ${_comma(input.length)} lines'),
         );
         expect(log, contains('2,980 more  W/BLASTBufferQueue: '));
         expect(
@@ -487,17 +633,9 @@ void main() {
           logLines(log).where((l) => l.contains('W/BLASTBufferQueue(')),
           hasLength(20),
         );
-
-        // The phone's own copy is left whole.
-        final phone = File(
-          '${dir.path}/logs.txt.device.txt',
-        ).readAsStringSync();
         expect(
-          const LineSplitter()
-              .convert(phone)
-              .where((l) => l.isNotEmpty)
-              .toList(),
-          input,
+          logLines(log).where((l) => l.contains('I/flutter ')).toList(),
+          input.where((l) => l.contains('I/flutter ')).toList(),
         );
       },
       skip: skip ?? unix,
@@ -510,9 +648,9 @@ void main() {
         final r = await runProfile([]);
         final said = r.stdout as String;
         final lines = const LineSplitter()
-            .convert(File('${dir.path}/logs.txt').readAsStringSync())
+            .convert(File('${out.path}/logs.txt').readAsStringSync())
             .length;
-        expect(said, contains('Saved ${dir.path}/logs.txt ('));
+        expect(said, contains('Saved ${out.path}/logs.txt ('));
         expect(
           said,
           contains(', ${_comma(lines)} lines)'),
@@ -536,9 +674,21 @@ void main() {
     );
 
     test(
-      '-Append moves an old UTF-16 log aside instead of mixing them',
+      "removes the second copy an older version left beside the log",
       () async {
-        final old = File('${dir.path}/logs.txt');
+        File('${out.path}/logs.txt.device.txt').writeAsStringSync('old\n');
+        final r = await runProfile([]);
+        expect(r.stdout, contains('Removed ${out.path}/logs.txt.device.txt'));
+        expect(filesIn(out), ['logs.txt']);
+      },
+      skip: skip ?? unix,
+      timeout: const Timeout(Duration(minutes: 2)),
+    );
+
+    test(
+      '-Append turns an old UTF-16 log into UTF-8 in place',
+      () async {
+        final old = File('${out.path}/logs.txt');
         old.writeAsBytesSync([
           0xFF,
           0xFE,
@@ -546,15 +696,32 @@ void main() {
         ]);
         final r = await runProfile(['-Append']);
         expect(r.exitCode, 0, reason: '${r.stdout}\n${r.stderr}');
-        expect(File('${dir.path}/logs.txt.old.txt').readAsBytesSync().take(2), [
-          0xFF,
-          0xFE,
-        ]);
-        final bytes = old.readAsBytesSync();
-        expect(bytes.take(3), [0xEF, 0xBB, 0xBF]);
+        expect(filesIn(out), [
+          'logs.txt',
+        ], reason: 'not moved aside into a second file');
+        final log = readUtf8(old);
+        expect(log, startsWith('old run'));
+        expect(log, contains('Application finished.'));
+      },
+      skip: skip ?? unix,
+      timeout: const Timeout(Duration(minutes: 2)),
+    );
+
+    test(
+      'if shrinking fails, the phone goes in whole, and nothing is left',
+      () async {
+        final r = await runProfile([], tools: brokenTools());
+        expect(r.exitCode, 0, reason: '${r.stdout}\n${r.stderr}');
+        expect(r.stdout, contains('COULD NOT SHRINK THE PHONE LOG'));
+        expect(r.stdout, contains('whole instead, every line'));
+        expect(filesIn(out), ['logs.txt']);
+        expect(filesIn(tmp), isEmpty);
+        final log = readUtf8(File('${out.path}/logs.txt'));
+        expect(log, contains('PHONE LOG (adb logcat), WHOLE'));
         expect(
-          utf8.decode(bytes.skip(3).toList()),
-          contains('Application finished.'),
+          logLines(log),
+          input,
+          reason: 'every line, as the phone wrote it',
         );
       },
       skip: skip ?? unix,
