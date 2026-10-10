@@ -36,6 +36,7 @@ import 'package:myapp/pages/onboarding_interests_page.dart';
 import 'package:myapp/screens/login_screen.dart';
 import 'package:myapp/screens/main_shell.dart';
 import 'package:myapp/services/upload_job_manager.dart';
+import 'package:myapp/services/avatar_book.dart';
 import 'package:myapp/widgets/upload_status_overlay.dart';
 
 /// Sentry DSN — read at compile time from `--dart-define=SENTRY_DSN=...`.
@@ -184,6 +185,10 @@ Future<void> main() async {
   // And the chats, so Messages opens on them at once.
   // ignore: discarded_futures
   ChatCache.instance.restore();
+  // Everybody's profile photos kept from last time, then asked for as
+  // people appear. Nothing asks the server before this.
+  // ignore: discarded_futures
+  AvatarBook.instance.start();
 
   // Crash + uncaught-error reporting via Sentry. The SDK installs:
   //   * FlutterError.onError handler   — catches framework errors

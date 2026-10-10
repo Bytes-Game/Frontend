@@ -405,12 +405,16 @@ class PersonAt {
   final String userId;
   final String username;
   final String league;
+
+  /// Their profile photo; empty for none.
+  final String avatarUrl;
   final DateTime? at;
 
   const PersonAt({
     required this.userId,
     required this.username,
     this.league = '',
+    this.avatarUrl = '',
     this.at,
   });
 
@@ -418,6 +422,7 @@ class PersonAt {
     userId: '${j['userId'] ?? ''}',
     username: '${j['username'] ?? ''}',
     league: '${j['league'] ?? ''}',
+    avatarUrl: '${j['avatarUrl'] ?? ''}',
     at: _toTime(j['at']),
   );
 }

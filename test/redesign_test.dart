@@ -335,11 +335,13 @@ void main() {
       await settle(t);
       expect(find.byType(EditProfilePage), findsOneWidget);
       // No buttons that only say "coming soon": the username says plainly
-      // it can't be changed, and there is no camera offering a photo.
+      // it can't be changed, and the picture really changes (see
+      // profile_photos_test.dart).
       expect(find.byKey(const ValueKey('edit_username')), findsOneWidget);
       expect(find.text("Can't be changed"), findsOneWidget);
       expect(find.text('Change'), findsNothing);
       expect(find.byIcon(Icons.camera_alt_outlined), findsNothing);
+      expect(find.byKey(const ValueKey('edit_photo')), findsOneWidget);
     });
 
     testWidgets('someone else\'s: follow, plus message and battle as icons', (

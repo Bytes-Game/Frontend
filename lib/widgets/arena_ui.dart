@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/services/avatar_book.dart';
 
 /// The small set of parts every screen is built from, so the whole app
 /// looks like one thing: the same search bar, the same avatars, the same
@@ -124,8 +125,52 @@ class _PressableState extends State<Pressable> {
   }
 }
 
-/// A person's picture: their initial on a soft grey disc, the way a
-/// contact without a photo looks on an iPhone.
+/// [name]'s profile photo in a circle — or [fallback], their initial, when
+/// they have none, it is not known yet, or it will not load. The photo
+/// comes from the AvatarBook, so every place a person appears shows the
+/// same one, and a new one everywhere at once.
+class PersonPhoto extends StatelessWidget {
+  final String name;
+
+  /// How big it is drawn, so the picture is decoded no bigger than that.
+  final double size;
+  final Widget fallback;
+
+  const PersonPhoto({
+    super.key,
+    required this.name,
+    required this.size,
+    required this.fallback,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<String>(
+      valueListenable: AvatarBook.instance.photoOf(name),
+      builder: (context, url, _) {
+        if (url.isEmpty) return fallback;
+        final px = (size * MediaQuery.devicePixelRatioOf(context)).ceil();
+        return ClipOval(
+          child: Image(
+            key: ValueKey('photo_$name'),
+            image: ResizeImage(NetworkImage(url), width: px < 1 ? 1 : px),
+            fit: BoxFit.cover,
+            width: double.infinity,
+            height: double.infinity,
+            gaplessPlayback: true,
+            // The initial until the picture arrives, and if it never does.
+            frameBuilder: (context, child, frame, sync) =>
+                frame == null && !sync ? fallback : child,
+            errorBuilder: (context, _, _) => fallback,
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// A person's picture: their profile photo, or their initial on a soft
+/// grey disc, the way a contact without a photo looks on an iPhone.
 ///
 /// [ring] draws a thin ring in one colour when it says something: their
 /// league in search, something unread from them in messages. A green dot
@@ -150,7 +195,7 @@ class ArenaAvatar extends StatelessWidget {
     final initial = name.isEmpty ? '?' : name[0].toUpperCase();
     final ringWidth = size >= 48 ? 2.0 : 1.5;
 
-    final face = Container(
+    final initialDisc = Container(
       decoration: const BoxDecoration(
         shape: BoxShape.circle,
         gradient: LinearGradient(
@@ -170,6 +215,7 @@ class ArenaAvatar extends StatelessWidget {
         ),
       ),
     );
+    final face = PersonPhoto(name: name, size: size, fallback: initialDisc);
 
     return SizedBox(
       width: size,

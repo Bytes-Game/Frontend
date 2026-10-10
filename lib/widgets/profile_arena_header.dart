@@ -6,7 +6,8 @@ import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/league_badge.dart';
 
 /// The top of a profile, laid out the way a contact card is: the picture on
-/// the left, and beside it the name, the handle and league, and the bio —
+/// the left, and beside it the name with the profile's tag, the handle and
+/// league, and the bio —
 /// or, on your own profile with none yet, an "Add bio" button right under
 /// your name.
 ///
@@ -162,6 +163,31 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
                         if (private) ...[
                           const SizedBox(width: 5),
                           Icon(Icons.lock_rounded, size: 15, color: muted),
+                        ],
+                        // What the profile is about, in the owner's own
+                        // pick: "Motivator", "Comedian". See profile_tags.
+                        if (user.profileTag.isNotEmpty) ...[
+                          const SizedBox(width: 7),
+                          Container(
+                            key: const ValueKey('profile_tag_pill'),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: kAccent.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              user.profileTag,
+                              maxLines: 1,
+                              style: const TextStyle(
+                                color: kAccent,
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
                         ],
                       ],
                     ),

@@ -5,6 +5,7 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/widgets/league_badge.dart';
+import 'package:myapp/widgets/arena_ui.dart' show PersonPhoto;
 
 /// Shows everyone the signed-in user has blocked, with an inline
 /// "Unblock" button per row. Loads from
@@ -82,15 +83,23 @@ class _BlockedUsersPageState extends State<BlockedUsersPage>
                     final fullName = (u['fullName'] as String?) ?? '';
                     final league = (u['league'] as String?) ?? '';
                     return ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: cs.surfaceContainerHighest,
-                        child: Text(
-                          username.isNotEmpty
-                              ? username[0].toUpperCase()
-                              : '?',
-                          style: TextStyle(
-                            color: cs.onSurface,
-                            fontWeight: FontWeight.w700,
+                      leading: SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: PersonPhoto(
+                          name: username,
+                          size: 40,
+                          fallback: CircleAvatar(
+                            backgroundColor: cs.surfaceContainerHighest,
+                            child: Text(
+                              username.isNotEmpty
+                                  ? username[0].toUpperCase()
+                                  : '?',
+                              style: TextStyle(
+                                color: cs.onSurface,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                           ),
                         ),
                       ),

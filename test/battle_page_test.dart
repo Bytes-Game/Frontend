@@ -59,6 +59,9 @@ late List<String> votesSent;
 
 /// Which lists (likes, votes, shares) the page asked for.
 late List<String> peopleAsked;
+
+/// "What's this video about?" questions, by the address asked.
+late List<String> aboutAsked;
 Completer<void>? voteGate;
 
 void fakeServer({required bool open, bool liked = false}) {
@@ -67,10 +70,19 @@ void fakeServer({required bool open, bool liked = false}) {
   detailCalls = 0;
   votesSent = [];
   peopleAsked = [];
+  aboutAsked = [];
   voteGate = null;
   ApiService.useClient(
     MockClient((req) async {
       final p = req.url.path;
+      if (p.endsWith('/about')) {
+        aboutAsked.add(req.url.toString());
+        return http.Response(
+          json.encode({'about': 'Two people dance on a bus.', 'looked': true,
+            'from': 'said'}),
+          200,
+        );
+      }
       Object body = {};
       var status = 200;
       if (p.endsWith('/challenges/1') || p.endsWith('/challenges/2')) {
@@ -335,6 +347,13 @@ void main() {
     await settle(t);
     expect(find.byKey(const ValueKey('full_caption')), findsOneWidget);
     expect(find.text('3 comments'), findsOneWidget);
+    // Under the caption: what the video is about, the challenger's.
+    await t.tap(find.byKey(const ValueKey('video_about_ask')));
+    await settle(t);
+    expect(aboutAsked, hasLength(1));
+    expect(Uri.parse(aboutAsked.single).path, endsWith('/about'));
+    expect(Uri.parse(aboutAsked.single).queryParameters, isEmpty);
+    expect(find.text('Two people dance on a bus.'), findsOneWidget);
   });
 
   testWidgets('in the light theme the words on the dark page are still '
@@ -422,17 +441,24 @@ void main() {
     }
   });
 
-  testWidgets('anyone else sees the numbers, and a tap on one opens no list', (
-    t,
-  ) async {
+  testWidgets('anyone else taps a number and sees who too, the way '
+      'Instagram does', (t) async {
+    // Somebody watching who is in neither side.
     await openPage(t, open: false, me: '1');
     expect(find.byKey(const ValueKey('stats_bar')), findsOneWidget);
     await t.tap(find.byKey(const ValueKey('stat_count_votes')));
     await settle(t);
-    expect(peopleAsked, isEmpty);
-    expect(find.text('3 votes'), findsNothing);
-    // The page itself is there.
-    expect(find.byKey(const ValueKey('card_creator')), findsOneWidget);
+    expect(find.text('3 votes'), findsOneWidget);
+    expect(find.text('maya · 1'), findsOneWidget);
+    await t.tapAt(const Offset(20, 40));
+    await settle(t);
+
+    await t.tap(find.byKey(const ValueKey('stat_count_likes')));
+    await settle(t);
+    expect(find.text('Liked by 4'), findsOneWidget);
+    await t.tapAt(const Offset(20, 40));
+    await settle(t);
+    expect(peopleAsked, ['votes', 'likes']);
   });
 
   testWidgets('opened from somewhere else, a tap on a video opens it as a '

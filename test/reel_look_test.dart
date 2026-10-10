@@ -112,6 +112,10 @@ List<Map<String, dynamic>> watchesSent = [];
 /// which answer it named.
 List<(String, String)> reportsSent = [];
 
+/// "What's this video about?" questions: the answer each one named, or ""
+/// for the challenger's video.
+List<String> aboutAsked = [];
+
 
 void fakeServer(Map<String, dynamic> first) {
   lastVote = null;
@@ -120,6 +124,7 @@ void fakeServer(Map<String, dynamic> first) {
   chatSends = [];
   watchesSent = [];
   reportsSent = [];
+  aboutAsked = [];
   standingsAsked = 0;
   refuseComments = false;
   posted = [];
@@ -156,6 +161,14 @@ void fakeServer(Map<String, dynamic> first) {
         reportsSent.add((req.url.path, body['responseId'] as String? ?? ''));
         return http.Response(
           json.encode({'reported': true, 'message': 'Thanks for reporting.'}),
+          200,
+        );
+      }
+      if (req.url.path.endsWith('/challenges/${first['id']}/about')) {
+        aboutAsked.add(req.url.queryParameters['response'] ?? '');
+        return http.Response(
+          json.encode({'about': 'Two people dance on a bus.', 'looked': true,
+            'from': 'shown'}),
           200,
         );
       }
@@ -542,6 +555,37 @@ void main() {
       await closeReel(t);
     });
 
+    testWidgets("the comments ask what the video ON SCREEN is about: "
+        "the challenger's, or the answer's", (t) async {
+      Future<void> askAbout() async {
+        await t.tap(find.byTooltip('Comments'));
+        for (var i = 0; i < 8; i++) {
+          await t.pump(const Duration(milliseconds: 100));
+        }
+        await t.tap(find.byKey(const ValueKey('video_about_ask')));
+        for (var i = 0; i < 4; i++) {
+          await t.pump(const Duration(milliseconds: 100));
+        }
+      }
+
+      await openReel(t, battle());
+      await askAbout();
+      expect(find.text("What's this video about?"), findsOneWidget);
+      expect(aboutAsked, [''], reason: "maya's video");
+      expect(find.text('Two people dance on a bus.'), findsOneWidget);
+      await t.tapAt(const Offset(20, 40));
+      await settleSheet(t);
+
+      await t.tap(find.byKey(const ValueKey('matchup_opponent')));
+      await t.pump(const Duration(milliseconds: 600));
+      await askAbout();
+      expect(find.text("What's leo_beats's answer about?"), findsOneWidget);
+      expect(aboutAsked, ['', '77'], reason: "leo's answer");
+      await t.tapAt(const Offset(20, 40));
+      await settleSheet(t);
+      await closeReel(t);
+    });
+
     testWidgets('for the people in the battle, a number opens who', (
       t,
     ) async {
@@ -570,14 +614,26 @@ void main() {
       await closeReel(t);
     });
 
-    testWidgets('for anyone else, a number is only a number', (t) async {
+    testWidgets('for anyone else too, a number opens who, the way Instagram '
+        'does', (t) async {
+      // Somebody watching who is in neither side.
       await openReel(t, battle());
       await t.tap(find.byKey(const ValueKey('count_likes')));
-      await t.pump(const Duration(milliseconds: 400));
-      expect(peopleAsked, isEmpty);
-      expect(find.textContaining('Liked by'), findsNothing);
-      // The number is part of the heart then: a tap likes.
-      expect(find.byTooltip('Unlike'), findsOneWidget);
+      await settleSheet(t);
+      expect(peopleAsked, ['likes']);
+      expect(find.text('Liked by 2'), findsOneWidget);
+      expect(find.text('nina'), findsOneWidget);
+      await t.tapAt(const Offset(20, 40));
+      await settleSheet(t);
+      // The number opened the list; it did not like the video.
+      expect(find.byTooltip('Like'), findsOneWidget);
+
+      await t.tap(find.byKey(const ValueKey('count_votes')));
+      await settleSheet(t);
+      expect(peopleAsked, ['likes', 'votes']);
+      expect(find.text('maya · 1'), findsOneWidget);
+      await t.tapAt(const Offset(20, 40));
+      await settleSheet(t);
       await closeReel(t);
     });
   });
