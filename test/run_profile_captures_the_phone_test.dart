@@ -60,16 +60,19 @@ void main() {
     });
   });
 
-  group('folding the two logs together', () {
-    test('it waits for adb to finish writing first', () {
-      // adb writes through a buffer. Appending a file that is still being
-      // written truncates it mid-line.
-      final at = src.indexOf('Stop-Process -Id \$logcatProc.Id');
-      final sleep = src.indexOf('Start-Sleep -Milliseconds');
-      expect(at, greaterThan(-1));
-      expect(sleep, greaterThan(at),
-          reason: 'the append starts while adb is still flushing, so the '
-              'last lines of the run are cut off');
+  group('one file, every line, straight in', () {
+    test('the last of what adb wrote is in before the log closes', () {
+      // Stopping adb does not mean its last lines have been read. The
+      // recorder waits for them, and only then is the log closed.
+      final stop = src.indexOf(r'$phone.Stop()');
+      final close = src.indexOf(r'$log.Dispose()');
+      expect(stop, greaterThan(-1));
+      expect(close, greaterThan(stop),
+          reason: 'the log closes first, and the end of the run is lost');
+      expect(r'$log.Dispose()'.allMatches(src), hasLength(1),
+          reason: 'closed once, after the phone has stopped');
+      expect(shared, contains('reader.Join('),
+          reason: 'Stop waits for the reader to finish');
     });
 
     test('the whole file is written in UTF-8, by one writer', () {
@@ -84,56 +87,30 @@ void main() {
               reason: '$cmdlet writes UTF-16 or ASCII on 5.1: $line');
         }
       }
+      expect(shared,
+          contains('new StreamWriter(path, append, new UTF8Encoding(true))'));
+    });
+
+    test("the phone's lines go straight into the log: no copy anywhere", () {
+      // "i don't want any copy, just paste whole logs in logs.txt
+      // directly". adb used to write a file of its own - beside the log,
+      // then in the temp folder - that was folded in afterwards.
+      expect(src, isNot(contains('RedirectStandardOutput')),
+          reason: 'adb writing a file of its own');
+      expect(src, isNot(contains(r'$deviceLog')));
       expect(
           _commands(src).where((l) =>
-              l.contains('System.IO.StreamWriter') &&
-              l.contains('UTF8Encoding')),
-          isNotEmpty);
-    });
-
-    test('and does not send the phone log through PowerShell line by line',
-        () {
-      // A phone log is hundreds of thousands of lines - 817,837 in one run.
-      // PowerShell 5.1 takes minutes over that, which reads as a hung
-      // script. The C# in phone_log.ps1 does the reading.
-      final piped = _commands(src)
-          .where((l) => l.contains('Get-Content') && l.contains(r'$deviceLog'));
-      expect(piped, isEmpty, reason: '$piped');
-      expect(
-          _commands(src)
-              .where((l) => l.contains(r'Add-PhoneLog -PhoneLog $deviceLog')),
+              l.contains(r'[BattleArena.PhoneRecorder]::Start($adb, $log)')),
           hasLength(1),
-          reason: 'the fold is the shared one, which shrinks the log');
+          reason: 'adb read as it writes, each line into the one log');
     });
 
-    test('the phone is recorded in the temp folder, not beside the log', () {
-      // "Make it in logs.txt only, do not create any other file." This
-      // used to keep a second copy next to the log, and the copy was the
-      // reason a 200 MB log came with a 130 MB friend.
-      final at = _commands(src)
-          .where((l) => l.startsWith(r'$deviceLog = '))
-          .toList();
-      expect(at, hasLength(1));
-      expect(at.single, contains('GetTempPath()'));
-      expect(at.single, isNot(contains(r'$LogFile')));
-      expect(
-          _commands(src).where(
-              (l) => l.startsWith(r'Remove-Item -LiteralPath $deviceLog')),
-          hasLength(1),
-          reason: 'deleted once its lines are in the log');
-    });
-
-    test('a failed shrink says so loudly, and still gets the lines in', () {
+    test('a recording that fails says so loudly', () {
       // Silence here means sending a log missing exactly the part that was
-      // added to stop logs going missing. test/phone_log_tools_test.dart
-      // breaks the shrinking on purpose and checks the lines arrive whole.
-      expect(src, contains('COULD NOT SHRINK THE PHONE LOG'));
-      expect(
-          _commands(src)
-              .where((l) => l.startsWith('Add-PhoneLogWhole -PhoneLog')),
-          hasLength(1));
-      expect(src, contains('COULD NOT COPY IT IN WHOLE EITHER'),
-          reason: 'and if that fails too, it says where the lines are');
+      // added to stop logs going missing.
+      expect(src, contains('COULD NOT START THE PHONE RECORDING'));
+      expect(src, contains('THE PHONE RECORDING STOPPED EARLY'));
+      expect(src, contains('COULD NOT LOAD THE LOG TOOLS'));
     });
   });
 
@@ -147,14 +124,14 @@ void main() {
       expect(src, isNot(contains(r"-SimpleMatch '[reel] starts='")));
     });
 
-    test('and looks once the phone log is in the file', () {
-      // The summary often lands only in the phone's log, when flutter run
-      // stopped following the app. Searched before the fold, the run is
-      // declared empty.
-      final fold = src.indexOf(r'Add-PhoneLog -PhoneLog $deviceLog');
-      final search = src.indexOf(r"Select-String -LiteralPath $searchIn");
-      expect(fold, greaterThan(-1));
-      expect(search, greaterThan(fold));
+    test('and looks once the phone has stopped writing', () {
+      // The summary often comes only from the phone, when flutter run
+      // stopped following the app. Searched before adb's last lines are
+      // in, the run is declared empty.
+      final stop = src.indexOf(r'$phone.Stop()');
+      final search = src.indexOf(r'Select-String -LiteralPath $searchIn');
+      expect(stop, greaterThan(-1));
+      expect(search, greaterThan(stop));
     });
   });
 }
