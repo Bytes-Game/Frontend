@@ -792,6 +792,17 @@ class VideoEditorPageState extends State<VideoEditorPage> {
   }
 
   Future<void> _close(EditorMode mode) async {
+    // One of the editor's tools (crop, filter, paint...) closing without
+    // its change. The editor reports that here too, naming the tool; only
+    // that tool closes. Taken for the whole editor closing, it popped the
+    // tool's screen with a yes/no that screen cannot take (the crop tool
+    // answers with how the picture was turned): Flutter threw, the pop
+    // never finished, and every tap after that did nothing.
+    if (mode != EditorMode.main) {
+      debugPrint('[editor] the ${mode.name} tool closed: back to the editor');
+      if (mounted) Navigator.of(context).pop();
+      return;
+    }
     debugPrint(
       '[editor] the editor closed (${_finished == null ? 'nothing saved' : 'saved'})',
     );

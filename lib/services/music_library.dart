@@ -165,7 +165,33 @@ abstract class MusicPlayer {
 }
 
 class DeviceMusicPlayer implements MusicPlayer {
-  final _p = AudioPlayer();
+  /// [player] is for tests; the app makes its own.
+  DeviceMusicPlayer([AudioPlayer? player]) : _p = player ?? AudioPlayer();
+
+  final AudioPlayer _p;
+
+  Future<void>? _sharing;
+
+  /// Plays alongside the video instead of taking the sound from it.
+  ///
+  /// By default the song asks Android for the phone's sound, and Android
+  /// takes it from whatever had it - the video in the editor, which then
+  /// pauses itself. Press play and the video starts, the song starts, and
+  /// the video stops a tenth of a second later: a run logged exactly that,
+  /// four times over, with the song cut off as well when the video took the
+  /// sound back. Not asking at all lets the two play together.
+  Future<void> _share() => _sharing ??= _p
+      .setAudioContext(
+        AudioContextConfig(
+          focus: AudioContextConfigFocus.mixWithOthers,
+        ).build(),
+      )
+      .catchError((Object e) {
+        debugPrint(
+          '[music] could not set the song to play alongside the video, '
+          'so it may stop the video: $e',
+        );
+      });
 
   @override
   Future<void> play(
@@ -173,6 +199,7 @@ class DeviceMusicPlayer implements MusicPlayer {
     Duration from = Duration.zero,
     bool loop = false,
   }) async {
+    await _share();
     await _p.setReleaseMode(loop ? ReleaseMode.loop : ReleaseMode.stop);
     await _p.play(
       source.startsWith('/') ? DeviceFileSource(source) : UrlSource(source),
