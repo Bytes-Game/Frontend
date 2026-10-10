@@ -24,6 +24,7 @@ import 'package:myapp/models/music_track.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/challenge_metadata_page.dart';
 import 'package:myapp/pages/music_picker_page.dart';
+import 'package:myapp/pages/photo_editor_page.dart';
 import 'package:myapp/pages/video_editor_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
@@ -70,8 +71,10 @@ class _Videos extends VideoPlayerPlatform {
   Future<void> pause(int playerId) async {}
   @override
   Future<void> dispose(int playerId) async => _events.remove(playerId);
+  /// The video's own sound, as last set: what is heard while editing.
+  double volume = 1;
   @override
-  Future<void> setVolume(int playerId, double v) async {}
+  Future<void> setVolume(int playerId, double v) async => volume = v;
   @override
   Future<void> setLooping(int playerId, bool looping) async {}
   @override
@@ -85,6 +88,8 @@ class _Videos extends VideoPlayerPlatform {
       const SizedBox.shrink();
 }
 
+final _videos = _Videos();
+
 const _pathProvider = MethodChannel('plugins.flutter.io/path_provider');
 
 void main() {
@@ -92,7 +97,7 @@ void main() {
   late FakeMusicLibrary library;
   late FakeVideoEngine engine;
 
-  setUpAll(() => VideoPlayerPlatform.instance = _Videos());
+  setUpAll(() => VideoPlayerPlatform.instance = _videos);
 
   setUp(() {
     dir = Directory.systemTemp.createTempSync('music');
@@ -693,6 +698,140 @@ void main() {
       });
     });
 
+    group('the song\'s settings', () {
+      Future<void> sheet(WidgetTester t) async {
+        await t.tap(find.byKey(const ValueKey('editor_music')));
+        await settle(t, 4);
+      }
+
+      Future<void> closeSheet(WidgetTester t) async {
+        await t.tapAt(const Offset(200, 60));
+        await settle(t, 4);
+      }
+
+      testWidgets('the video\'s own sound turned down: heard so while '
+          'editing, and saved so', (t) async {
+        await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+        await addSong(t);
+        await sheet(t);
+        expect(find.byKey(const ValueKey('video_volume')), findsOneWidget);
+        await t.drag(
+          find.byKey(const ValueKey('video_volume')),
+          const Offset(-600, 0),
+        );
+        await settle(t, 2);
+        expect(_videos.volume, 0, reason: 'heard at once while editing');
+        await closeSheet(t);
+        await done(t);
+        final made = engine.renders.single;
+        expect(made.videoSegments!.single.volume, 0);
+        expect(made.enableAudio, isTrue);
+        await close(t);
+      });
+
+      testWidgets('left alone, the video\'s own sound is saved untouched', (
+        t,
+      ) async {
+        await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+        await addSong(t);
+        await done(t);
+        expect(engine.renders.single.videoSegments!.single.volume, isNull);
+        await close(t);
+      });
+
+      testWidgets('no video slider for a silent video, nor one switched '
+          'off', (t) async {
+        engine.source = const VideoFacts(
+          duration: Duration(seconds: 10),
+          resolution: Size(1080, 1920),
+          bitrate: 12000000,
+          hasSound: false,
+        );
+        await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+        await addSong(t);
+        await sheet(t);
+        expect(find.byKey(const ValueKey('music_volume')), findsOneWidget);
+        expect(find.byKey(const ValueKey('video_volume')), findsNothing);
+        await closeSheet(t);
+        await close(t);
+      });
+
+      testWidgets('removing the song puts the video\'s sound back to full', (
+        t,
+      ) async {
+        await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+        await addSong(t);
+        await sheet(t);
+        await t.drag(
+          find.byKey(const ValueKey('video_volume')),
+          const Offset(-600, 0),
+        );
+        await settle(t, 2);
+        await t.tap(find.byKey(const ValueKey('music_remove')));
+        await settle(t, 4);
+        expect(_videos.volume, 1);
+        await done(t);
+        expect(engine.renders, isEmpty, reason: 'nothing left to remake');
+        await close(t);
+      });
+
+      testWidgets('fades: heard while editing, and saved with the song', (
+        t,
+      ) async {
+        await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+        await addSong(t);
+        await sheet(t);
+        await t.tap(find.byKey(const ValueKey('music_fade_in')));
+        await settle(t, 2);
+        final under = FakeMusicPlayer.made.last;
+        expect(
+          under.calls.lastWhere((c) => c.startsWith('play')),
+          startsWith('play ${dir.path}/music_a.mp3 from 0'),
+          reason: 'played again from the start of the video',
+        );
+        expect(
+          under.calls.last,
+          'volume 0.00',
+          reason: 'a fade in starts from silence',
+        );
+        await t.tap(find.byKey(const ValueKey('music_fade_out')));
+        await settle(t, 2);
+        await closeSheet(t);
+        await done(t);
+        final track = engine.renders.single.audioTracks.single;
+        expect(track.fadeInDuration, const Duration(seconds: 2));
+        expect(track.fadeOutDuration, const Duration(seconds: 2));
+        await close(t);
+      });
+
+      testWidgets('the part of the song: dragged, it says where, plays from '
+          'there with the video, and is what is saved', (t) async {
+        await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+        await addSong(t);
+        await sheet(t);
+        expect(find.text('0:00 – 0:10  of 3:00'), findsOneWidget);
+        final strip = find.byKey(const ValueKey('song_part'));
+        // A third of the strip along: a minute into a 3-minute song.
+        await t.drag(strip, Offset(t.getSize(strip).width / 3, 0));
+        await settle(t, 2);
+        final label = t.widget<Text>(
+          find.byKey(const ValueKey('song_part_time')),
+        );
+        expect(label.data, matches(RegExp(r'^[01]:\d\d – 1:\d\d  of 3:00$')));
+        final under = FakeMusicPlayer.made.last;
+        final played = under.calls.lastWhere((c) => c.startsWith('play'));
+        final from = int.parse(RegExp(r'from (\d+)').firstMatch(played)![1]!);
+        // About a minute in: the finger's first few pixels only start the
+        // drag, as on a phone.
+        expect(from, inInclusiveRange(45000, 62000));
+        await closeSheet(t);
+        await done(t);
+        final track = engine.renders.single.audioTracks.single;
+        expect(track.audioStartTime!.inMilliseconds, from);
+        await close(t);
+      });
+    });
+
     testWidgets('the song\'s volume and start are what is saved', (t) async {
       await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
       await addSong(t);
@@ -703,7 +842,7 @@ void main() {
         find.byKey(const ValueKey('music_volume')),
         const Offset(-600, 0),
       );
-      final start = find.byKey(const ValueKey('music_start'));
+      final start = find.byKey(const ValueKey('song_part'));
       await t.tapAt(t.getCenter(start));
       await settle(t, 2);
       await t.tapAt(const Offset(200, 100)); // close the sheet
@@ -711,7 +850,8 @@ void main() {
       await done(t);
       final track = engine.renders.single.audioTracks.single;
       expect(track.volume, closeTo(0.05, 0.001));
-      expect(track.audioStartTime!.inSeconds, closeTo(90, 3));
+      // The 10-second part centred on the middle of a 3-minute song.
+      expect(track.audioStartTime!.inSeconds, closeTo(85, 3));
       await close(t);
     });
 
@@ -748,6 +888,136 @@ void main() {
       await settle(t);
       expect(handed.single, video.path);
       expect(handedMusic.single, isNull, reason: 'no song in it to credit');
+      await close(t);
+    });
+  });
+
+  group('a song under a photo', () {
+    late File photo;
+    final handed = <String>[];
+    final handedMusic = <MusicTrack?>[];
+
+    Future<bool> next(BuildContext c, String path, MusicTrack? music) async {
+      handed.add(path);
+      handedMusic.add(music);
+      return true;
+    }
+
+    setUp(() {
+      handed.clear();
+      handedMusic.clear();
+      photo = File('${dir.path}/picked.jpg')..writeAsBytesSync(tinyJpeg);
+      library.all = [song('a', title: 'Alpha')];
+    });
+
+    Future<void> addSong(WidgetTester t) async {
+      await t.tap(find.byKey(const ValueKey('editor_add_music')));
+      await settle(t);
+      await t.tap(find.byKey(const ValueKey('music_use_a')));
+      await settle(t);
+      expect(find.byType(MusicPickerPage), findsNothing);
+    }
+
+    Future<void> done(WidgetTester t) async {
+      final before = handed.length;
+      await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
+      for (var i = 0; i < 300; i++) {
+        if (handed.length > before ||
+            find
+                .byKey(const ValueKey('edit_lost_sound'))
+                .evaluate()
+                .isNotEmpty) {
+          break;
+        }
+        await settle(t, 1);
+      }
+      await settle(t, 4);
+    }
+
+    testWidgets('Music is first in the row; the song plays its part', (
+      t,
+    ) async {
+      await open(t, PhotoEditorPage(sourcePath: photo.path, onDone: next));
+      expect(find.byKey(const ValueKey('editor_add_music')), findsOneWidget);
+      expect(find.text('Filter'), findsOneWidget, reason: 'the tools stay');
+      await addSong(t);
+      expect(find.byKey(const ValueKey('editor_music')), findsOneWidget);
+      expect(find.text('Alpha'), findsOneWidget);
+      final under = FakeMusicPlayer.made.last;
+      expect(
+        under.calls.where((c) => c.startsWith('play')).last,
+        endsWith('a.mp3 from 0 loop true'),
+      );
+      await close(t);
+    });
+
+    testWidgets('Done: the photo made a video of the chosen length, the '
+        'song under it, and the song credited', (t) async {
+      await open(t, PhotoEditorPage(sourcePath: photo.path, onDone: next));
+      await addSong(t);
+      await t.tap(find.byKey(const ValueKey('editor_music')));
+      await settle(t, 4);
+      expect(find.byKey(const ValueKey('photo_length_10')), findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('photo_length_15')));
+      await settle(t, 2);
+      expect(find.text('0:00 – 0:15  of 3:00'), findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('music_fade_out')));
+      await settle(t, 2);
+      await t.tapAt(const Offset(200, 60));
+      await settle(t, 4);
+      await done(t);
+
+      final still = engine.stills.single;
+      expect(still.image, photo.path, reason: 'the photo, unchanged');
+      expect(still.length, const Duration(seconds: 15));
+      final made = engine.renders.single;
+      expect(made.videoSegments!.single.video.file!.path, contains('still'));
+      final track = made.audioTracks.single;
+      expect(track.path, '${dir.path}/music_a.mp3');
+      expect(track.fadeOutDuration, const Duration(seconds: 2));
+      expect(handed.single, contains('devf_edit_'));
+      expect(handed.single, isNot(contains('still')), reason: 'the final one');
+      expect(handedMusic.single?.id, library.idFor(song('a')));
+      await close(t);
+    });
+
+    testWidgets('no song: the photo goes on as a photo, nothing made', (
+      t,
+    ) async {
+      await open(t, PhotoEditorPage(sourcePath: photo.path, onDone: next));
+      await done(t);
+      expect(engine.stills, isEmpty);
+      expect(engine.renders, isEmpty);
+      expect(handed, [photo.path]);
+      expect(handedMusic.single, isNull);
+      await close(t);
+    });
+
+    testWidgets('the song lost on this phone: the photo is offered without '
+        'it', (t) async {
+      engine.remakeKeepsSound = false;
+      await open(t, PhotoEditorPage(sourcePath: photo.path, onDone: next));
+      await addSong(t);
+      await done(t);
+      expect(find.byKey(const ValueKey('edit_lost_sound')), findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('edit_lost_sound_post')));
+      await settle(t);
+      expect(handed, [photo.path]);
+      expect(handedMusic.single, isNull, reason: 'no song in it to credit');
+      await close(t);
+    });
+
+    testWidgets('an answer to a photo battle has no Music button', (t) async {
+      await open(
+        t,
+        PhotoEditorPage(
+          sourcePath: photo.path,
+          onDone: next,
+          allowMusic: false,
+        ),
+      );
+      expect(find.byKey(const ValueKey('editor_add_music')), findsNothing);
+      expect(find.text('Filter'), findsOneWidget);
       await close(t);
     });
   });
@@ -940,6 +1210,68 @@ void main() {
       for (final j in [...UploadJobManager.instance.activeJobs.value]) {
         UploadJobManager.instance.dismiss(j.id);
       }
+      await close(t);
+    });
+
+    testWidgets('a photo with a song, from the + button: the details page '
+        'posts it as a video, with the song', (t) async {
+      phone(t);
+      fakeVideoProcessing(t);
+      final gallery = FakeGallery()..addPhoto(dir, 'p1');
+      DeviceGallery.instance = gallery;
+      addTearDown(() => DeviceGallery.instance = PhoneGallery());
+      library.all = [song('a', title: 'Alpha')];
+
+      await t.pumpWidget(
+        ChangeNotifierProvider<DataProvider>(
+          create: (_) => DataProvider()
+            ..setUser(
+              UserModel(
+                id: '1',
+                username: 'me',
+                wins: 0,
+                losses: 0,
+                followersCount: 0,
+                followingCount: 0,
+              ),
+            ),
+          child: MaterialApp(
+            localizationsDelegates: editorLocalizations,
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => Center(
+                  child: TextButton(
+                    onPressed: () => CreateFlow.open(context),
+                    child: const Text('go'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await t.tap(find.text('go'));
+      await settle(t, 6);
+      await t.tap(find.byKey(const ValueKey('create_next')));
+      await settle(t);
+      expect(find.byType(PhotoEditorPage), findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('editor_add_music')));
+      await settle(t);
+      await t.tap(find.byKey(const ValueKey('music_use_a')));
+      await settle(t);
+      await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
+      for (var i = 0; i < 300; i++) {
+        if (find.byType(ChallengeMetadataPage).evaluate().isNotEmpty) break;
+        await settle(t, 1);
+      }
+      await settle(t, 4);
+
+      final details = t.widget<ChallengeMetadataPage>(
+        find.byType(ChallengeMetadataPage),
+      );
+      expect(details.photo, isFalse, reason: 'a photo with a song is a video');
+      expect(details.processedSourcePath, contains('devf_edit_'));
+      expect(details.music?.id, library.idFor(song('a')));
       await close(t);
     });
   });

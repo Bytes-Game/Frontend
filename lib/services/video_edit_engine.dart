@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -53,6 +54,15 @@ abstract class VideoEditEngine {
 
   /// Save the edit described by [data] to a new file, and answer its path.
   Future<String> render(VideoRenderData data);
+
+  /// The photo at [imagePath] as a video that shows it, still, for
+  /// [length]: the first half of a photo with a song (the song goes under it
+  /// with [render]). Silent. [id] is the task, for [progress] and [cancel].
+  Future<String> renderStill(
+    String imagePath,
+    Duration length, {
+    required String id,
+  });
 
   /// How far along a [render] is, from 0 to 1.
   Stream<double> progress(String taskId);
@@ -135,9 +145,61 @@ class PhoneVideoEditEngine implements VideoEditEngine {
   }
 
   @override
+  Future<String> renderStill(
+    String imagePath,
+    Duration length, {
+    required String id,
+  }) async {
+    final dir = await getTemporaryDirectory();
+    // devf_edit_: the app's clean-up knows it as the editor's own copy.
+    final dest =
+        '${dir.path}/devf_edit_still_${DateTime.now().millisecondsSinceEpoch}.mp4';
+    final size = stillVideoSize(await _imageSize(imagePath));
+    return _editor.renderStopMotionToFile(
+      dest,
+      StopMotionRenderData(
+        id: id,
+        frames: [
+          StopMotionFrame(
+            image: EditorLayerImage.file(imagePath),
+            duration: length,
+          ),
+        ],
+        frameRate: 30,
+        resolution: size,
+        // A still picture needs far less than moving video at its size.
+        bitrate: 4000000,
+      ),
+    );
+  }
+
+  static Future<Size> _imageSize(String path) async {
+    final buffer = await ui.ImmutableBuffer.fromUint8List(
+      await File(path).readAsBytes(),
+    );
+    final image = await ui.ImageDescriptor.encoded(buffer);
+    final size = Size(image.width.toDouble(), image.height.toDouble());
+    image.dispose();
+    buffer.dispose();
+    return size;
+  }
+
+  @override
   Stream<double> progress(String taskId) =>
       _editor.progressStreamById(taskId).map((p) => p.progress);
 
   @override
   Future<void> cancel(String taskId) => _editor.cancel(taskId);
+}
+
+/// The size of the video a photo of [image] pixels becomes: its own shape,
+/// no bigger than the 1080 x 1920 the app plays, in even numbers of pixels
+/// (video encoders refuse odd ones).
+Size stillVideoSize(Size image) {
+  final long = image.longestSide;
+  final short = image.shortestSide;
+  if (long <= 0 || short <= 0) return const Size(1080, 1920);
+  final scale = [1.0, 1920 / long, 1080 / short].reduce((a, b) => a < b ? a : b);
+  int even(double v) => (v * scale / 2).round() * 2;
+  return Size(even(image.width).toDouble(), even(image.height).toDouble());
 }

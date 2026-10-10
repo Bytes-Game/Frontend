@@ -94,6 +94,21 @@ class FakeVideoEngine implements VideoEditEngine {
     return _file('edit');
   }
 
+  /// Every photo made into a still video: which, and for how long.
+  final List<({String image, Duration length})> stills = [];
+
+  @override
+  Future<String> renderStill(
+    String imagePath,
+    Duration length, {
+    required String id,
+  }) async {
+    stills.add((image: imagePath, length: length));
+    final fail = renderFail;
+    if (fail != null) throw fail;
+    return _file('edit_still');
+  }
+
   @override
   Stream<double> progress(String taskId) => progressReports.stream;
 

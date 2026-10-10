@@ -646,6 +646,11 @@ void main() {
       await t.tap(find.byKey(const ValueKey('create_next')));
       await letItUpload(t);
       expect(find.byType(PhotoEditorPage), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('editor_add_music')),
+        findsOneWidget,
+        reason: 'a new photo post can have a song',
+      );
       await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
       await letItUpload(t);
     }
@@ -781,6 +786,11 @@ void main() {
       final editor = t.widget<PhotoEditorPage>(find.byType(PhotoEditorPage));
       expect(editor.sourcePath, photos.next!.path);
       expect(editor.inGallery, isFalse, reason: 'taken just now');
+      expect(
+        find.byKey(const ValueKey('editor_add_music')),
+        findsNothing,
+        reason: 'a photo battle stays a photo against a photo',
+      );
       await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
       await letItUpload(t);
       // The last check, worded for a photo.

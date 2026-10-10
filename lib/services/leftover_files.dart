@@ -23,6 +23,8 @@ import 'package:myapp/services/upload_job_manager.dart';
 ///
 ///   devf_edit_…mp4     a video the editor remade, a full copy of it
 ///   devf_cut_…mp4      a video the editor only cut shorter
+///   devf_edit_still_…  a photo made into a still video, before its song
+///                      goes under it (a devf_edit_ copy like any other)
 ///   edited_photo_…jpg  a photo the editor changed
 ///   post_photo_…jpg    a photo from the gallery, made ready to post
 ///   devf_music/…       the songs downloaded to put under a video
