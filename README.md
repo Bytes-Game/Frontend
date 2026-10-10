@@ -46,16 +46,13 @@ tools\run_profile.bat
 ```
 
 This runs the app and saves everything to `F:\logs.txt`: what `flutter run`
-prints, then the phone's own log. The phone repeats itself a lot, so its
-repeats are counted instead of copied, and every line the app printed is
-kept. Attach that one file. The phone's full log stays next to it, uncut, in
-`F:\logs.txt.device.txt`.
+prints, and every line of the phone's own log, written straight into the file
+as it happens. Nothing else is created, not even a temporary copy. Attach
+that one file; if it is too big to attach, zip it first.
 
-At the end it says how big the saved file really is, what the phone said went
-wrong (a crash, the app not responding), and the video editor's last steps.
-
-Already have a phone log too big to open or attach? `tools\shrink_phone_log.bat`
-turns `F:\logs.txt.device.txt` into `F:\logs.small.txt`.
+At the end it says how big the saved file really is, how many of the phone's
+lines are in it, what the phone said went wrong (a crash, the app not
+responding), and the video editor's last steps.
 
 ### Building it to share
 

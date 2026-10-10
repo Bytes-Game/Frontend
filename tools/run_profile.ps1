@@ -9,11 +9,10 @@
 #   tools\run_profile.bat -Append               add to the log instead of replacing it
 #   tools\run_profile.bat -NoLogcat             skip the phone-side recording
 #
-# The phone's own log is captured as well, ALWAYS, and folded into the same
-# file at the end - so there is one file to read and one file to send. The
-# phone repeats itself a lot, so the folded copy keeps every line the app
-# printed and counts the phone's repeats instead of copying them (see
-# phone_log.ps1); the phone's full log stays next to it, uncut.
+# The phone's own log is captured as well, ALWAYS, and goes into the same
+# file - so there is one file to read and one file to send. Every line of
+# it, straight into the log as the phone writes it: no copy anywhere, no
+# temp file, nothing shrunk or left out (see phone_log.ps1).
 #
 # Anything else you pass is handed straight to "flutter run", so
 # "tools\run_profile.bat -d R58M12345" still works.
@@ -100,17 +99,28 @@ if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
 # from the folder PowerShell started in rather than this one.
 $LogFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($LogFile)
 
+# Older versions left the phone's whole log next to this one as a second
+# file. Everything in it went into the log as well, so it is only clutter -
+# and the log is meant to be the one file.
+$leftOver = "$LogFile.device.txt"
+if (Test-Path -LiteralPath $leftOver -PathType Leaf) {
+    Remove-Item -LiteralPath $leftOver -Force
+    Write-Host "Removed $leftOver, left by an older version of this script." -ForegroundColor Yellow
+}
+
 # Logs used to be written in UTF-16. Adding UTF-8 to the end of one of
-# those garbles everything after the join, so an old one is moved aside.
+# those garbles everything after the join, so an old one is turned into
+# UTF-8 first, in place - not moved aside into a second file.
 if ($Append -and (Test-Path -LiteralPath $LogFile -PathType Leaf)) {
     $head = New-Object byte[] 2
     $stream = [System.IO.File]::OpenRead($LogFile)
     $read = $stream.Read($head, 0, 2)
     $stream.Dispose()
     if ($read -eq 2 -and $head[0] -eq 0xFF -and $head[1] -eq 0xFE) {
-        $older = "$LogFile.old.txt"
-        Move-Item -LiteralPath $LogFile -Destination $older -Force
-        Write-Host "The old log is in the old format, so it was moved to $older." -ForegroundColor Yellow
+        $text = [System.IO.File]::ReadAllText($LogFile)
+        [System.IO.File]::WriteAllText($LogFile, $text, (New-Object System.Text.UTF8Encoding($true)))
+        $text = $null
+        Write-Host "The old log was in the old format; it is now UTF-8, so this run can be added." -ForegroundColor Yellow
     }
 }
 
@@ -123,23 +133,28 @@ if (Test-Path -LiteralPath (Join-Path $projectRoot 'firebase_push.json')) {
     $flutterArgs += '--dart-define-from-file=firebase_push.json'
 }
 
-# One writer, in UTF-8, for everything the run prints.
+# One writer, in UTF-8, for everything: what flutter prints and the
+# phone's log, a whole line at a time (phone_log.ps1).
 #
 # This used to be Tee-Object, which on Windows PowerShell 5.1 writes UTF-16:
-# two bytes for every letter. With the phone's log folded in, a run came to
-# a couple of hundred megabytes - too big to open comfortably and far too
-# big to attach, so it was reported as "logs not saved". UTF-8 is half the
-# size, opens anywhere, and is what adb writes the phone's log in.
-#
-# AutoFlush, so every line is on disk as it arrives: a run stopped with
-# Ctrl+C, or a window closed, still leaves everything up to that point.
-function Open-LogWriter([string]$Path, [bool]$Add) {
+# two bytes for every letter. UTF-8 is half the size, opens anywhere, and
+# is what adb writes the phone's log in.
+$tools = $true
+try {
+    Import-LogTools
+} catch {
+    $tools = $false
+    Write-Host "COULD NOT LOAD THE LOG TOOLS: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "  flutter's output is still saved; the phone's log will not be." -ForegroundColor Red
+}
+function Open-Log([string]$Path, [bool]$Add) {
+    if ($tools) { return New-Object BattleArena.RunLog($Path, $Add) }
     $writer = New-Object System.IO.StreamWriter($Path, $Add, (New-Object System.Text.UTF8Encoding($true)))
     $writer.AutoFlush = $true
     return $writer
 }
 try {
-    $log = Open-LogWriter $LogFile ([bool]$Append)
+    $log = Open-Log $LogFile ([bool]$Append)
 } catch {
     # Most often: the old log is open in another program that holds on to
     # it. Better a log somewhere else than no log.
@@ -147,14 +162,25 @@ try {
     Write-Host "Could not write to $LogFile ($($_.Exception.Message))." -ForegroundColor Yellow
     Write-Host "Writing to $fallback instead." -ForegroundColor Yellow
     $LogFile = $fallback
-    $log = Open-LogWriter $LogFile ([bool]$Append)
+    $log = Open-Log $LogFile ([bool]$Append)
+}
+
+foreach ($line in @(
+    '',
+    '=============================================================',
+    "flutter $($flutterArgs -join ' ')",
+    "started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+    '============================================================='
+)) {
+    $log.WriteLine($line)
+    Write-Host $line
 }
 
 # Start the phone-side recording before the app launches, so nothing from
-# the first seconds is missed. Runs as its own process, writing its own
-# file, and is stopped in the finally block below whatever happens.
-$deviceLog = "$LogFile.device.txt"
-$logcatProc = $null
+# the first seconds is missed. Its lines go straight into the log as adb
+# writes them, and it is stopped in the finally block below whatever
+# happens.
+$phone = $null
 $wantLogcat = -not $NoLogcat
 
 # Where adb is. If flutter can reach the phone, adb is on this computer:
@@ -214,23 +240,17 @@ if ($wantLogcat) {
         # -c clears whatever the phone was already holding, so the file
         # starts at this run rather than at some earlier one.
         & $adb logcat -c 2>&1 | Out-Null
-        $logcatProc = Start-Process -FilePath $adb `
-            -ArgumentList @('logcat', '-v', 'time') `
-            -RedirectStandardOutput $deviceLog `
-            -NoNewWindow -PassThru
-        Write-Host "Also recording the phone to $deviceLog" -ForegroundColor Cyan
+        if (-not $tools) {
+            Write-Host "The phone-side recording is off: the log tools did not load (above)." -ForegroundColor Red
+        } else {
+            try {
+                $phone = [BattleArena.PhoneRecorder]::Start($adb, $log)
+                Write-Host "Also recording the phone, straight into $LogFile" -ForegroundColor Cyan
+            } catch {
+                Write-Host "COULD NOT START THE PHONE RECORDING: $($_.Exception.Message)" -ForegroundColor Red
+            }
+        }
     }
-}
-
-foreach ($line in @(
-    '',
-    '=============================================================',
-    "flutter $($flutterArgs -join ' ')",
-    "started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
-    '============================================================='
-)) {
-    $log.WriteLine($line)
-    Write-Host $line
 }
 
 Write-Host "Logging to $LogFile" -ForegroundColor Cyan
@@ -259,62 +279,41 @@ try {
         }
 } finally {
     [Console]::OutputEncoding = $previousOutputEncoding
-    $log.Dispose()
 
-    if ($logcatProc -and -not $logcatProc.HasExited) {
-        Stop-Process -Id $logcatProc.Id -Force -ErrorAction SilentlyContinue
-        # adb writes through a buffer. Stopping it does not mean the last
-        # lines have reached the disk, and appending a file that is still
-        # being written truncates it mid-line.
-        Start-Sleep -Milliseconds 700
-    }
-
-    # Fold the phone's log into the main one, so there is a single file to
-    # read and a single file to send.
-    #
-    # Appended AFTER the run rather than written alongside it: two writers
-    # on one file interleave mid-line and produce a log that cannot be
-    # trusted, which is worse than two files. By here the flutter stream
-    # has finished, so this is the one safe moment to join them.
-    #
-    # Shrunk on the way in: every line the app printed and every crash or
-    # not-responding line is kept, and the phone's repeats are counted
-    # instead of copied (phone_log.ps1 has the details). Copying all of it
-    # once made a file nobody could open or send.
-    #
-    # The device copy is left in place, uncut. If this fails - disk full,
-    # file locked by an editor - the phone's log still exists on its own
-    # rather than being lost inside a half-written merge.
-    $found = $null
-    if ($wantLogcat -and (Test-Path -LiteralPath $deviceLog)) {
+    # Stop the phone's recording first, and wait for the last of its lines
+    # to be in the log - stopping adb does not mean they have been read -
+    # then close the log.
+    if ($phone) {
+        $phone.Stop()
         Write-Host ""
-        Write-Host "Folding the phone's log in..." -ForegroundColor Cyan
-        try {
-            $found = Add-PhoneLog -PhoneLog $deviceLog -Into $LogFile -Append $true -ProjectRoot $projectRoot
-            Write-Host "Phone log ($(Format-Count $found.Lines) lines) folded into $LogFile" -ForegroundColor Cyan
-            Write-Host "  (also kept on its own at $deviceLog)"
-        } catch {
-            # Say so loudly. A silent failure here means sending a log that
-            # is missing exactly the part that was added to stop logs being
-            # missing.
-            Write-Host "COULD NOT FOLD THE PHONE LOG IN: $($_.Exception.Message)" -ForegroundColor Yellow
-            Write-Host "  Send BOTH files: $LogFile and $deviceLog"
-            Write-Host "  The phone's one is big: zip it first (right-click, Send to > Compressed (zipped) folder)."
+        Write-Host "Phone log: $(Format-Count $phone.Lines) lines, written straight into $LogFile" -ForegroundColor Cyan
+        if ($phone.Failure) {
+            Write-Host "  THE PHONE RECORDING STOPPED EARLY: $($phone.Failure)" -ForegroundColor Red
         }
     }
+    $log.Dispose()
 
     # What is really on disk, read back - not a message printed whatever
     # happened. "Full log saved" used to be said about a file nobody could
-    # open.
+    # use.
     Write-Host ""
     Show-SavedFile $LogFile
-    if ($found) { Show-PhoneLogFindings $found $deviceLog }
+    if ($tools -and (Test-Path -LiteralPath $LogFile -PathType Leaf)) {
+        try {
+            $found = [BattleArena.PhoneLog]::Scan($LogFile, (Get-AppId $projectRoot), 25)
+            $recorded = -1
+            if ($phone -and -not $Append) { $recorded = $phone.Lines }
+            Show-PhoneLogFindings $found $recorded
+        } catch {
+            Write-Host "COULD NOT READ THE LOG BACK: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
     Write-Host ""
 
     # The playback measurement lives on one line near the end of the run.
     # Pull it back out so it does not have to be hunted for in the file.
+    # The phone's lines are in the same file, so this sees them too.
     $searchIn = @($LogFile)
-    if ($wantLogcat -and (Test-Path -LiteralPath $deviceLog)) { $searchIn += $deviceLog }
     # Match on 'starts=' alone, NOT on '[reel] starts='.
     #
     # Those two words stopped being next to each other the day the decoder

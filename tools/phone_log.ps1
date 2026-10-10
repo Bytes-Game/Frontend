@@ -1,68 +1,148 @@
-# The phone's log, made small enough to open and to send.
+# The run log: everything into F:\logs.txt, whole, as it happens.
 #
-# Shared by run_profile.ps1 (at the end of every run) and
-# shrink_phone_log.ps1 (for a phone log already on disk). Load it with
+# Shared by run_profile.ps1. Load it with
 #
 #   . (Join-Path $PSScriptRoot 'phone_log.ps1')
 #
-# WHY. A run once recorded 817,837 lines from the phone. The script folded
-# every one of them into F:\logs.txt, in UTF-16 (two bytes a letter), which
-# made a file of a couple of hundred megabytes. Notepad struggles to open
-# that, and it is far too big to attach - so the person running it opened
-# the file, found nothing they could use, and reported "logs not saved".
-# The run had the answer in it; nobody could get at it.
+# ONE FILE, WHOLE, DIRECT. Asked for in so many words: "make it in logs.txt
+# only, do not create any other file", then "i don't want any copy, just
+# paste whole logs in logs.txt directly". So:
 #
-# Most of a phone's log is the same few lines over and over: one part of
-# Android repeating a warning many times a second. So this keeps:
+#   - the phone's log (adb logcat) is read here as adb writes it, and each
+#     line goes straight into the log - no temp file, no second copy;
+#   - what "flutter run" prints goes into the same log the same way;
+#   - every line is kept: nothing is shrunk, counted instead of copied, or
+#     left out.
 #
-#   - every line the app itself prints (tag "flutter"), always;
-#   - every line about a crash or an app not responding, always;
-#   - every line that is not in the usual logcat shape, always;
-#   - from the app's own process, the first 200 lines of each kind;
-#   - from the rest of the phone, the first 20 lines of each kind;
+# One writer takes both, a whole line at a time, so the phone's lines and
+# flutter's sit in the order they happened and never cut into each other.
 #
-# in the order they happened. Everything past those limits is COUNTED, not
-# thrown away: a table at the top says which kinds of line there were and
-# how many, and a list at the end says how many of each were left out and
-# when they ran. "3,000 decoder errors" is still in the file as a number.
+# At the end the log is read back to say what is in it: how many lines, the
+# kinds of line that filled it, what the phone said went wrong, and the
+# video editor's last steps. That is on screen only; it creates nothing.
 #
-# Two lines are the same kind when they match after the time, the process
-# number, and every other number in them are taken out.
-#
-# The work is done in C#: Windows PowerShell 5.1 takes minutes to go
-# through 800,000 lines one at a time, which looks like a hung script.
+# The work is done in C#: reading adb as it writes needs a thread of its
+# own, and Windows PowerShell 5.1 takes minutes to read 800,000 lines one at
+# a time, which looks like a hung script.
 #
 # Keep this file plain ASCII. Windows PowerShell 5.1 misreads UTF-8 files
 # that have no byte-order mark. And keep the C# to C# 5 with nothing beyond
-# mscorlib (no Linq, no HashSet, no Queue): Windows PowerShell compiles it
-# with the old compiler that ships with Windows. A test checks both.
+# mscorlib and System.dll (no Linq, no HashSet): Windows PowerShell compiles
+# it with the old compiler that ships with Windows, and hands it only those
+# two. A test checks both.
 
 $PhoneLogSource = @'
 using System;
-using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Threading;
 
 namespace BattleArena
 {
+    // The log file. One writer for everything, a whole line at a time, so
+    // flutter's lines and the phone's never cut into each other. UTF-8,
+    // and on disk as each line arrives: a run stopped with Ctrl+C, or a
+    // window closed, still leaves everything up to that point.
+    public sealed class RunLog : IDisposable
+    {
+        readonly object gate = new object();
+        readonly StreamWriter w;
+
+        public RunLog(string path, bool append)
+        {
+            w = new StreamWriter(path, append, new UTF8Encoding(true));
+            w.AutoFlush = true;
+        }
+
+        public void WriteLine(string line)
+        {
+            lock (gate) { w.WriteLine(line); }
+        }
+
+        public void Dispose()
+        {
+            lock (gate) { w.Dispose(); }
+        }
+    }
+
+    // adb logcat, read as it writes, every line straight into the log.
+    // adb records the PHONE, not one app, so it keeps going through the
+    // app being killed, restarted or reopened.
+    public sealed class PhoneRecorder
+    {
+        Process adb;
+        Thread reader;
+        long lines;
+        string failure;
+
+        public long Lines { get { return Interlocked.Read(ref lines); } }
+
+        // Why the recording stopped early, or null.
+        public string Failure { get { return failure; } }
+
+        public static PhoneRecorder Start(string adbPath, RunLog log)
+        {
+            var psi = new ProcessStartInfo(adbPath, "logcat -v time");
+            psi.UseShellExecute = false;
+            psi.RedirectStandardOutput = true;
+            psi.CreateNoWindow = true;
+            psi.StandardOutputEncoding = new UTF8Encoding(false);
+            var rec = new PhoneRecorder();
+            rec.adb = Process.Start(psi);
+            rec.reader = new Thread(delegate ()
+            {
+                try
+                {
+                    string line;
+                    while ((line = rec.adb.StandardOutput.ReadLine()) != null)
+                    {
+                        // Some adb versions on Windows end lines with
+                        // \r\r\n, which reads as a blank line after each.
+                        if (line.Length == 0) continue;
+                        log.WriteLine(line);
+                        Interlocked.Increment(ref rec.lines);
+                    }
+                }
+                catch (Exception e)
+                {
+                    rec.failure = e.Message;
+                }
+            });
+            rec.reader.IsBackground = true;
+            rec.reader.Start();
+            return rec;
+        }
+
+        // Stops adb, then waits until the last of what it wrote is in the
+        // log - stopping it does not mean its last lines have been read.
+        public void Stop()
+        {
+            try
+            {
+                if (!adb.HasExited) adb.Kill();
+            }
+            catch (Exception e)
+            {
+                if (failure == null) failure = "could not stop adb: " + e.Message;
+            }
+            if (!reader.Join(10000) && failure == null)
+                failure = "adb's last lines were still arriving after 10 seconds";
+        }
+    }
+
     public sealed class PhoneLogKind
     {
         public string Key;
         public long Count;
-        public int KeptApp;
-        public int KeptOther;
-        public long Cut;
-        public int CutFirstMs = -1;
-        public int CutLastMs = -1;
     }
 
     public sealed class PhoneLogResult
     {
         public long Lines;
-        public long Kept;
-        public long Cut;
+        public long PhoneLines;
         public long AppLines;
         public int AppProcesses;
         public string[] TopKinds;
@@ -149,21 +229,9 @@ namespace BattleArena
             return sb.ToString();
         }
 
-        static string Clock(int ms)
-        {
-            if (ms < 0) return "?";
-            return string.Format(Inv, "{0:00}:{1:00}:{2:00}.{3:000}",
-                ms / 3600000, ms / 60000 % 60, ms / 1000 % 60, ms % 1000);
-        }
-
         static string Cap(string s, int n)
         {
             return s.Length <= n ? s : s.Substring(0, n) + "...";
-        }
-
-        static StreamReader Open(string path)
-        {
-            return new StreamReader(path, new UTF8Encoding(false), true);
         }
 
         public static long CountLines(string path)
@@ -176,34 +244,33 @@ namespace BattleArena
             return n;
         }
 
-        public static PhoneLogResult Fold(string phoneLog, string into,
-            bool append, string appId, int keepApp, int keepOther, int top)
+        static StreamReader Open(string path)
+        {
+            return new StreamReader(path, new UTF8Encoding(false), true);
+        }
+
+        // Reads the log back and says what is in it. Changes nothing.
+        public static PhoneLogResult Scan(string path, string appId, int top)
         {
             // Pass 1: which processes are the app's. The app's own messages
             // carry the tag "flutter"; every process that printed one is
             // the app (more than one means it was restarted).
             var appPids = new Dictionary<int, bool>();
-            long total = 0;
-            using (var r = Open(phoneLog))
+            using (var r = Open(path))
             {
                 string line;
                 while ((line = r.ReadLine()) != null)
                 {
-                    if (line.Length == 0) continue;
-                    total++;
                     char lv; string tag; int pid; string msg; int ms;
                     if (Parse(line, out lv, out tag, out pid, out msg, out ms) &&
                         tag == "flutter")
                         appPids[pid] = true;
                 }
             }
-            if (total > int.MaxValue) throw new InvalidOperationException(
-                "the phone log has more lines than can be counted here");
 
-            // Pass 2: what each line is, and which ones are kept.
+            // Pass 2: what each line is.
             var res = new PhoneLogResult();
             res.AppProcesses = appPids.Count;
-            var keep = new BitArray((int)total);
             var kinds = new Dictionary<string, PhoneLogKind>(StringComparer.Ordinal);
             // Each kind of problem once, with how many more like it, so a
             // crash repeated 30 times by some other app cannot push this
@@ -211,27 +278,32 @@ namespace BattleArena
             var problems = new List<string>();
             var problemCounts = new List<int>();
             var problemAt = new Dictionary<string, int>(StringComparer.Ordinal);
+            // The editor's steps from the phone's lines, which carry the
+            // time; from flutter run's own copy only when there are none.
             var editor = new List<string>();
+            var editorFromRun = new List<string>();
             int anrPid = -1, anrLeft = 0;
-            using (var r = Open(phoneLog))
+            using (var r = Open(path))
             {
                 string line;
-                int i = -1;
                 while ((line = r.ReadLine()) != null)
                 {
-                    if (line.Length == 0) continue;
-                    i++;
-                    // A file still growing between the passes: stop at
-                    // what the first pass counted.
-                    if (i >= keep.Length) break;
                     res.Lines++;
                     char lv; string tag; int pid; string msg; int ms;
                     if (!Parse(line, out lv, out tag, out pid, out msg, out ms))
                     {
-                        keep[i] = true;
-                        res.Kept++;
+                        // The one line logcat writes in another shape:
+                        // "--------- beginning of main" and the like.
+                        if (line.StartsWith("--------- ", StringComparison.Ordinal))
+                            res.PhoneLines++;
+                        else if (line.IndexOf("[editor]", StringComparison.Ordinal) >= 0)
+                        {
+                            editorFromRun.Add(Cap(line, 200));
+                            if (editorFromRun.Count > EditorStepsKept) editorFromRun.RemoveAt(0);
+                        }
                         continue;
                     }
+                    res.PhoneLines++;
                     bool isApp = appPids.ContainsKey(pid);
                     bool flutter = tag == "flutter";
                     if (flutter)
@@ -271,6 +343,7 @@ namespace BattleArena
                                  msg.IndexOf("Killing", StringComparison.Ordinal) >= 0 ||
                                  msg.IndexOf("not responding", StringComparison.OrdinalIgnoreCase) >= 0));
                     }
+
                     string key = KindOf(lv, tag, msg);
                     if (problem)
                     {
@@ -292,31 +365,6 @@ namespace BattleArena
                         kinds[key] = k;
                     }
                     k.Count++;
-
-                    bool kept;
-                    if (flutter || problem) kept = true;
-                    else if (isApp)
-                    {
-                        kept = k.KeptApp < keepApp;
-                        if (kept) k.KeptApp++;
-                    }
-                    else
-                    {
-                        kept = k.KeptOther < keepOther;
-                        if (kept) k.KeptOther++;
-                    }
-                    if (kept)
-                    {
-                        keep[i] = true;
-                        res.Kept++;
-                    }
-                    else
-                    {
-                        k.Cut++;
-                        res.Cut++;
-                        if (k.CutFirstMs < 0) k.CutFirstMs = ms;
-                        k.CutLastMs = ms;
-                    }
                 }
             }
 
@@ -334,79 +382,21 @@ namespace BattleArena
                 if (problemCounts[p] > 1)
                     problems[p] += string.Format(Inv, "  (and {0:N0} more like it)", problemCounts[p] - 1);
             res.Problems = problems.ToArray();
-            res.EditorSteps = editor.ToArray();
-
-            var cutKinds = new List<PhoneLogKind>();
-            foreach (var k in all) if (k.Cut > 0) cutKinds.Add(k);
-            cutKinds.Sort(delegate (PhoneLogKind a, PhoneLogKind b)
-            {
-                int c = b.Cut.CompareTo(a.Cut);
-                return c != 0 ? c : string.CompareOrdinal(a.Key, b.Key);
-            });
-
-            // Pass 3: write it. UTF-8, and a byte-order mark only when the
-            // file is new (an append lands after the text already there).
-            const string Rule = "=============================================================";
-            using (var w = new StreamWriter(into, append, new UTF8Encoding(true)))
-            {
-                w.WriteLine();
-                w.WriteLine(Rule);
-                w.WriteLine(string.Format(Inv, "PHONE LOG (adb logcat): {0:N0} lines from the phone.", res.Lines));
-                w.WriteLine(string.Format(Inv, "This app's own messages (tag flutter): {0:N0}, all kept.", res.AppLines));
-                w.WriteLine(string.Format(Inv,
-                    "Everything else is kept in order up to the first {0} lines of each kind from", keepApp));
-                w.WriteLine(string.Format(Inv,
-                    "this app's process and the first {0} of each kind from the rest of the phone.", keepOther));
-                w.WriteLine(string.Format(Inv,
-                    "The other {0:N0} lines are repeats. They are counted at the end of this", res.Cut));
-                w.WriteLine("section instead of copied. Lines about a crash or an app not responding");
-                w.WriteLine("are always kept.");
-                w.WriteLine("Every line, uncut: " + phoneLog);
-                w.WriteLine(Rule);
-                w.WriteLine("THE MOST COMMON KINDS OF LINE IN THE PHONE LOG");
-                w.WriteLine("(how many, then the line with its numbers shown as #)");
-                foreach (var s in res.TopKinds) w.WriteLine(s);
-                w.WriteLine(Rule);
-
-                using (var r = Open(phoneLog))
-                {
-                    string line;
-                    int i = -1;
-                    while ((line = r.ReadLine()) != null)
-                    {
-                        if (line.Length == 0) continue;
-                        i++;
-                        if (i < keep.Length && keep[i]) w.WriteLine(line);
-                    }
-                }
-
-                w.WriteLine(Rule);
-                w.WriteLine(string.Format(Inv,
-                    "END OF PHONE LOG. Repeats counted instead of copied: {0:N0} lines.", res.Cut));
-                if (cutKinds.Count > 0)
-                {
-                    w.WriteLine("(how many more, the kind of line, and from when to when)");
-                    foreach (var k in cutKinds)
-                        w.WriteLine(string.Format(Inv, "{0,10:N0} more  {1}  [{2} to {3}]",
-                            k.Cut, k.Key, Clock(k.CutFirstMs), Clock(k.CutLastMs)));
-                }
-                w.WriteLine(Rule);
-            }
+            res.EditorSteps = (editor.Count > 0 ? editor : editorFromRun).ToArray();
             return res;
         }
     }
 }
 '@
 
-# Compiled on first use, not when this file is loaded: if compiling ever
-# fails, the run itself has still been recorded.
+# Compiled once, at the start of a run.
 #
 # -IgnoreWarnings: Add-Type treats a compiler WARNING as an error. The old
 # compiler on Windows does not warn about exactly the same things as the
-# new one the tests compile with, so a warning only it gives would stop the
-# fold on the PC alone. The tests compile without this, so the code itself
-# stays free of warnings.
-function Import-PhoneLogReader {
+# new one the tests compile with, so a warning only it gives would stop
+# the tools loading on the PC alone. The tests compile without this, so the
+# code itself stays free of warnings.
+function Import-LogTools {
     if (-not ('BattleArena.PhoneLog' -as [type])) {
         Add-Type -TypeDefinition $PhoneLogSource -Language CSharp -IgnoreWarnings
     }
@@ -435,25 +425,6 @@ function Format-Size([string]$Path) {
     return $mb.ToString('N1', [System.Globalization.CultureInfo]::InvariantCulture) + ' MB'
 }
 
-# Shrinks $PhoneLog into $Into (added to the end when $Append). Returns
-# what was found: line counts, the most common kinds, the problems the
-# phone reported, and the video editor's last steps.
-function Add-PhoneLog {
-    param(
-        [string]$PhoneLog,
-        [string]$Into,
-        [bool]$Append,
-        [string]$ProjectRoot
-    )
-    Import-PhoneLogReader
-    # Full paths for C#: .NET reads a short path from the folder the
-    # process started in, not from where PowerShell is.
-    $full = (Get-Item -LiteralPath $PhoneLog).FullName
-    $Into = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Into)
-    return [BattleArena.PhoneLog]::Fold($full, $Into, $Append,
-        (Get-AppId $ProjectRoot), 200, 20, 25)
-}
-
 # Says what is actually on disk, read back from the disk - not what the
 # script meant to write. "Full log saved" used to be printed whatever
 # happened, and a run reported as saved was not one anybody could use.
@@ -469,7 +440,7 @@ function Show-SavedFile([string]$Path) {
     }
     $lines = ''
     try {
-        Import-PhoneLogReader
+        Import-LogTools
         $lines = ', ' + (Format-Count ([BattleArena.PhoneLog]::CountLines($Path))) + ' lines'
     } catch {
         Write-Host "  (could not count its lines: $($_.Exception.Message))" -ForegroundColor Yellow
@@ -481,16 +452,18 @@ function Show-SavedFile([string]$Path) {
     }
 }
 
-# The parts of the phone's log worth seeing without opening the file.
-function Show-PhoneLogFindings($Result, [string]$PhoneLog) {
+# What is in the log, worth seeing without opening the file. $Recorded is
+# how many lines the phone recording took in (-1 when it did not run), so
+# a file holding fewer than that says so instead of passing for complete.
+function Show-PhoneLogFindings($Result, [long]$Recorded = -1) {
     $restarts = ''
     if ($Result.AppProcesses -gt 1) {
         $restarts = " - it ran $($Result.AppProcesses) times, so it was closed or killed and opened again"
     }
-    Write-Host "  The app's own lines: $(Format-Count $Result.AppLines)$restarts"
-    Write-Host "  The phone wrote $(Format-Count $Result.Lines) lines. $(Format-Count $Result.Cut) of them are repeats, counted at"
-    Write-Host "  the end of the phone section instead of copied."
-    Write-Host "  Every phone line, uncut: $PhoneLog ($(Format-Size $PhoneLog))"
+    Write-Host "  From the phone: $(Format-Count $Result.PhoneLines) lines, every one. The app's own: $(Format-Count $Result.AppLines)$restarts"
+    if ($Recorded -ge 0 -and $Result.PhoneLines -lt $Recorded) {
+        Write-Host "  BUT THE PHONE SENT $(Format-Count $Recorded) LINES. $(Format-Count ($Recorded - $Result.PhoneLines)) are missing from the file." -ForegroundColor Red
+    }
 
     Write-Host ""
     Write-Host "The most common lines from the phone:" -ForegroundColor Cyan
