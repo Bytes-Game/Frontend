@@ -754,7 +754,29 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
         if (seed != null) _items.add(seed);
       }
     });
-    await _loadNextPage(refresh: refresh || freshOnOpen);
+    // A video tapped in Search, or on a profile, waits for the videos after
+    // it before it plays, as the owner asked (see #121) — but only for a
+    // moment. It used to wait for as long as the server took, and a server
+    // waking up takes 30 seconds or fails: a device log showed a tapped
+    // video sit on its picture through three taps in a row while the list
+    // behind it took 27 seconds and then failed. A server that answers
+    // normally answers inside the limit, so nothing changes there.
+    final rest = _loadNextPage(refresh: refresh || freshOnOpen);
+    final seeded = hasSeed && _items.isNotEmpty;
+    var restCame = true;
+    final waitedFrom = DateTime.now();
+    if (seeded) {
+      restCame = await rest
+          .then((_) => true)
+          .timeout(_seedWaitsForRest, onTimeout: () => false);
+      if (!restCame) {
+        debugPrint('[reel] the videos after the one you opened have not '
+            'come in ${_seedWaitsForRest.inMilliseconds}ms; playing it '
+            'without them');
+      }
+    } else {
+      await rest;
+    }
     if (!mounted) return;
     // Only once it worked: a first load that failed is retried, and the
     // retry should still be the fresh one.
@@ -804,7 +826,26 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
         ConnectionPrewarmService.instance.prewarmUrlOrigin(entry.videoUrl);
       }
     }
+    if (restCame) return;
+    // The opened video is already playing. When the rest does come, get
+    // the next ones ready — and only that: playing again would send the
+    // video on screen back to its start.
+    await rest;
+    if (!mounted) return;
+    debugPrint('[reel] the videos after the one you opened came after '
+        '${DateTime.now().difference(waitedFrom).inMilliseconds}ms '
+        '(${_items.length - 1} of them)');
+    _prefetchUpcomingVideos();
+    for (final entry in _items.take(4)) {
+      if (entry is _ReelItem && entry.videoUrl.isNotEmpty) {
+        ConnectionPrewarmService.instance.prewarmUrlOrigin(entry.videoUrl);
+      }
+    }
   }
+
+  /// How long a video somebody opened waits for the videos after it before
+  /// it plays without them. See [_load].
+  static const Duration _seedWaitsForRest = Duration(seconds: 2);
 
   /// Open on [reels], the videos kept from last time, straight away — then
   /// ask for the fresh page and put it behind them.

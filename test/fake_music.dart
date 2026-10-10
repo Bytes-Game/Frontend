@@ -3,6 +3,7 @@
 // player, and — for a test that follows a video post all the way to the
 // server — the phone's media tools that processing asks.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -57,6 +58,12 @@ class FakeMusicLibrary implements MusicLibrary {
   /// When set, picking is refused with these words.
   String? refuse;
 
+  /// When set, a download does not finish until this completes.
+  Completer<void>? hold;
+
+  /// How many downloads fail, as with no connection, before one works.
+  int failDownloads = 0;
+
   final List<(String, int)> searches = [];
   final List<MusicTrack> picked = [];
   final List<MusicTrack> downloaded = [];
@@ -107,6 +114,12 @@ class FakeMusicLibrary implements MusicLibrary {
   @override
   Future<String> download(MusicTrack track) async {
     downloaded.add(track);
+    final wait = hold;
+    if (wait != null) await wait.future;
+    if (failDownloads > 0) {
+      failDownloads--;
+      throw const HttpException('no connection');
+    }
     final f = File('${dir.path}/music_${track.sourceId}.mp3')
       ..writeAsBytesSync(List.filled(512, 9));
     return f.path;

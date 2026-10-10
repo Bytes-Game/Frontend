@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:material_ui/material_ui.dart' as mui;
 import 'package:pro_image_editor/pro_image_editor.dart';
@@ -97,6 +98,31 @@ class VideoEditorPageState extends State<VideoEditorPage> {
   TrimDurationSpan? _span;
   bool _seeking = false;
 
+  /// Whether the person has the video playing — the editor's play button,
+  /// as its play and pause tell this page.
+  ///
+  /// Not the player's own "playing". That goes false for a moment every
+  /// time the video jumps, while the phone gets the new spot ready, and
+  /// comes back by itself. The song used to ask the player at the jump back
+  /// to the start, hear "not playing", and stop — and the video then carried
+  /// on without it. A device log shows exactly that at every loop: the song
+  /// paused 7ms after the video jumped back, and the video playing again
+  /// 90ms later, alone.
+  bool _playing = false;
+
+  /// Where the video was at the last tick, to notice it going back to the
+  /// start by itself.
+  Duration? _lastAt;
+
+  /// When this page last moved the video itself. A position read just
+  /// before that move can arrive just after it, and must not look like the
+  /// video going back by itself.
+  DateTime _movedAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Whether the trim bar has said where it starts. It says so once as it
+  /// appears, which is not the person moving it.
+  bool _trimShown = false;
+
   final String _taskId = 'edit_${DateTime.now().microsecondsSinceEpoch}';
 
   /// What saving produced, waiting for the editor to close.
@@ -108,6 +134,19 @@ class VideoEditorPageState extends State<VideoEditorPage> {
   /// Saving was stopped with Cancel: the editor stays open, and nothing
   /// needs saying.
   bool _saveStopped = false;
+
+  /// What to tell the person when saving failed.
+  String _saveProblem = _couldNotSave;
+  static const _couldNotSave = "Couldn't save your edit. Try again.";
+  static const _couldNotGetSong =
+      "Couldn't download the song. Check your connection and tap Done again.";
+
+  /// Done came before the song finished downloading: the saving box says
+  /// so while it waits (see PickedMusic).
+  final _fetchingSong = ValueNotifier<bool>(false);
+
+  /// Completes when the person stops waiting for the song.
+  Completer<void>? _stopWaiting;
 
   /// The remake lost the sound the original had.
   bool _soundLost = false;
@@ -176,6 +215,8 @@ class VideoEditorPageState extends State<VideoEditorPage> {
     }
 
     letGo('the song player', _musicPlayer?.dispose());
+    _stopWaiting?.complete();
+    _fetchingSong.dispose();
     unawaited(LeftoverFiles.instance.forget(_made.difference({_posted})));
     _player?.removeListener(_onTick);
     letGo('the video player', _player?.dispose());
@@ -193,7 +234,11 @@ class VideoEditorPageState extends State<VideoEditorPage> {
       final facts = await _engine.facts(widget.sourcePath);
       final player = VideoPlayerController.file(File(widget.sourcePath));
       await player.initialize();
-      await player.setLooping(false);
+      // The phone loops the whole video by itself. Not looping, a video
+      // that reaches its very end stops there — and the end the player
+      // reaches is not always the length this page was told, so the loop
+      // back below could miss it and leave the video standing still.
+      await player.setLooping(true);
       if (!mounted) {
         await player.dispose();
         return;
@@ -221,6 +266,12 @@ class VideoEditorPageState extends State<VideoEditorPage> {
         _player = player;
         _controller = controller;
       });
+      // The editor opens showing the video as playing (initialPlay), so
+      // start it. Nothing did: the button said playing while the picture
+      // stood still, and the first tap "paused" a video that was not
+      // moving.
+      _playing = true;
+      unawaited(player.play());
       EventTracker.instance.track(
         eventType: 'video_editor_open',
         contentId: 'pending',
@@ -306,14 +357,28 @@ class VideoEditorPageState extends State<VideoEditorPage> {
     if (player == null || controller == null || facts == null) return;
     final at = player.value.position;
     controller.setPlayTime(at);
+    final last = _lastAt;
+    _lastAt = at;
+    if (_seeking) return;
+    final start = _span?.start ?? Duration.zero;
     final end = _span?.end ?? facts.duration;
-    if (at >= end && !_seeking) {
-      unawaited(_seekTo(_span?.start ?? Duration.zero));
+    if (at >= end) {
+      unawaited(_seekTo(start));
+    } else if (_playing &&
+        last != null &&
+        last - at > const Duration(milliseconds: 500) &&
+        DateTime.now().difference(_movedAt) > const Duration(seconds: 1)) {
+      // Gone back to the start by itself: the phone looped the whole video
+      // (see _open). The song goes back with it, and the video to the start
+      // of the kept part.
+      debugPrint('[editor] the video looped by itself: the song goes back too');
+      unawaited(at < start ? _seekTo(start) : _musicFollow(at));
     }
   }
 
   Future<void> _seekTo(Duration at) async {
     _seeking = true;
+    _movedAt = DateTime.now();
     try {
       await _player?.seekTo(at);
       await _musicFollow(at);
@@ -332,14 +397,15 @@ class VideoEditorPageState extends State<VideoEditorPage> {
   }
 
   /// Keeps the song where the video is: playing from the same moment when
-  /// the video plays, still when it stops.
+  /// the video plays, still when it stops. "Plays" is what the person chose
+  /// (see [_playing]).
   Future<void> _musicFollow(Duration at) async {
     final music = _music;
     final player = _musicPlayer;
     if (music == null || player == null) return;
     try {
-      if (_player?.value.isPlaying ?? false) {
-        await player.play(music.path, from: _songAt(at), loop: true);
+      if (_playing) {
+        await player.play(music.playable, from: _songAt(at), loop: true);
         await player.setVolume(_musicVolume);
       } else {
         await player.pause();
@@ -351,7 +417,7 @@ class VideoEditorPageState extends State<VideoEditorPage> {
   }
 
   Future<void> _chooseMusic() async {
-    final wasPlaying = _player?.value.isPlaying ?? false;
+    final wasPlaying = _playing;
     _controller?.pause();
     await _musicPlayer?.pause();
     if (!mounted) return;
@@ -636,6 +702,7 @@ class VideoEditorPageState extends State<VideoEditorPage> {
     if (facts == null) return;
     _saveFailed = false;
     _saveStopped = false;
+    _saveProblem = _couldNotSave;
     _soundLost = false;
     unawaited(_player?.pause());
     final colour = _realColour(p.colorFilters);
@@ -672,6 +739,7 @@ class VideoEditorPageState extends State<VideoEditorPage> {
         case VideoSaveWay.cut:
           _finished = _keep(await _cut(plan, facts));
         case VideoSaveWay.remake:
+          final song = music == null ? null : await _songFile(music);
           final out = await _engine.render(
             pve.VideoRenderData(
               id: _taskId,
@@ -682,9 +750,9 @@ class VideoEditorPageState extends State<VideoEditorPage> {
               ],
               enableAudio: !muted,
               audioTracks: [
-                if (music != null)
+                if (song != null)
                   pve.VideoAudioTrack(
-                    path: music.path,
+                    path: song,
                     volume: _musicVolume,
                     // A song shorter than the video starts again.
                     loop: true,
@@ -752,6 +820,20 @@ class VideoEditorPageState extends State<VideoEditorPage> {
       debugPrint('[editor] saving was stopped with Cancel');
       _finished = null;
       _saveStopped = true;
+    } on _StoppedWaiting {
+      debugPrint('[editor] stopped waiting for the song');
+      _finished = null;
+      _saveStopped = true;
+    } on _SongUnavailable catch (e) {
+      debugPrint('[editor] saving the edit failed: ${e.cause}');
+      EventTracker.instance.trackError(
+        surface: 'video_editor_page',
+        errorType: 'video_edit_song_download_failed',
+        message: '${e.cause}',
+      );
+      _finished = null;
+      _saveFailed = true;
+      _saveProblem = _couldNotGetSong;
     } catch (e) {
       debugPrint('[editor] saving the edit failed: $e');
       EventTracker.instance.trackError(
@@ -762,6 +844,41 @@ class VideoEditorPageState extends State<VideoEditorPage> {
       _finished = null;
       _saveFailed = true;
     }
+  }
+
+  /// The song's file, for the remake. Usually it has downloaded by now; if
+  /// Done came first, the saving box says so while this waits, and offers
+  /// to stop waiting.
+  Future<String> _songFile(PickedMusic music) async {
+    final here = music.path;
+    if (here != null) return here;
+    debugPrint('[editor] Done before the song finished downloading: waiting');
+    final clock = Stopwatch()..start();
+    final stop = _stopWaiting = Completer<void>();
+    _fetchingSong.value = true;
+    try {
+      final got = await Future.any<String?>([
+        music.file(),
+        stop.future.then((_) => null),
+      ]);
+      if (got == null) throw const _StoppedWaiting();
+      debugPrint(
+        '[editor] the song was ready after ${clock.elapsedMilliseconds}ms',
+      );
+      return got;
+    } on _StoppedWaiting {
+      rethrow;
+    } catch (e) {
+      throw _SongUnavailable(e);
+    } finally {
+      _stopWaiting = null;
+      if (mounted) _fetchingSong.value = false;
+    }
+  }
+
+  void _stopWaitingForSong() {
+    final stop = _stopWaiting;
+    if (stop != null && !stop.isCompleted) stop.complete();
   }
 
   /// Cut without remaking. On a phone that cannot (an iPhone), remade at
@@ -810,7 +927,7 @@ class VideoEditorPageState extends State<VideoEditorPage> {
     _finished = null;
     if (_saveFailed) {
       _saveFailed = false;
-      _toast("Couldn't save your edit. Try again.");
+      _toast(_saveProblem);
       return;
     }
     if (_saveStopped) {
@@ -923,8 +1040,12 @@ class VideoEditorPageState extends State<VideoEditorPage> {
         // While Done saves: how far a remake has got, and a way to stop it.
         dialogConfigs: DialogConfigs(
           widgets: DialogWidgets(
-            loadingDialog: (message, configs) =>
-                _SavingBox(engine: _engine, taskId: _taskId),
+            loadingDialog: (message, configs) => _SavingBox(
+              engine: _engine,
+              taskId: _taskId,
+              fetchingSong: _fetchingSong,
+              onStopWaiting: _stopWaitingForSong,
+            ),
           ),
         ),
         paintEditor: const PaintEditorConfigs(
@@ -962,17 +1083,31 @@ class VideoEditorPageState extends State<VideoEditorPage> {
         ),
         videoEditorCallbacks: VideoEditorCallbacks(
           onPlay: () async {
+            _playing = true;
             await player.play();
             await _musicFollow(player.value.position);
           },
           onPause: () async {
+            _playing = false;
             await player.pause();
             await _musicFollow(player.value.position);
           },
           onMuteToggle: (muted) => player.setVolume(muted ? 0 : 1),
           onTrimSpanUpdate: (span) {
+            final before = _span;
             _span = span;
-            if (player.value.isPlaying) controller.pause();
+            // Pausing for the trim bar's own first report stopped the video
+            // the moment the editor opened.
+            if (!_trimShown) {
+              _trimShown = true;
+              return;
+            }
+            if (before != null &&
+                before.start == span.start &&
+                before.end == span.end) {
+              return;
+            }
+            if (_playing) controller.pause();
           },
           onTrimSpanEnd: (span) {
             _span = span;
@@ -984,14 +1119,33 @@ class VideoEditorPageState extends State<VideoEditorPage> {
   }
 }
 
+/// The person stopped waiting for the song to download.
+class _StoppedWaiting implements Exception {
+  const _StoppedWaiting();
+}
+
+/// The song could not be downloaded, even trying twice.
+class _SongUnavailable implements Exception {
+  final Object cause;
+  const _SongUnavailable(this.cause);
+}
+
 /// The "please wait" box while the video editor saves. A cut or the
 /// original is quick and shows only a spinner; a remake can take a while
-/// on a long video, so it shows how far it has got, and a Cancel.
+/// on a long video, so it shows how far it has got, and a Cancel. Before
+/// that, if the song is still downloading, it says so, with a Cancel too.
 class _SavingBox extends StatefulWidget {
   final VideoEditEngine engine;
   final String taskId;
+  final ValueListenable<bool> fetchingSong;
+  final VoidCallback onStopWaiting;
 
-  const _SavingBox({required this.engine, required this.taskId});
+  const _SavingBox({
+    required this.engine,
+    required this.taskId,
+    required this.fetchingSong,
+    required this.onStopWaiting,
+  });
 
   @override
   State<_SavingBox> createState() => _SavingBoxState();
@@ -1035,7 +1189,12 @@ class _SavingBoxState extends State<_SavingBox> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ValueListenableBuilder<bool>(
+    valueListenable: widget.fetchingSong,
+    builder: (context, fetching, _) => _box(fetching && _done == null),
+  );
+
+  Widget _box(bool fetchingSong) {
     final done = _done;
     return Stack(
       children: [
@@ -1062,13 +1221,22 @@ class _SavingBoxState extends State<_SavingBox> {
                       ),
                     const SizedBox(height: 16),
                     Text(
-                      done == null
+                      fetchingSong
+                          ? 'Getting the song ready…'
+                          : done == null
                           ? 'Saving…'
                           : 'Saving your video… ${(done * 100).round()}%',
+                      key: const ValueKey('video_saving_words'),
                       style: const TextStyle(color: Colors.white),
                     ),
                     const SizedBox(height: 6),
-                    if (done != null)
+                    if (fetchingSong)
+                      TextButton(
+                        key: const ValueKey('video_saving_stop_song'),
+                        onPressed: widget.onStopWaiting,
+                        child: const Text('Cancel'),
+                      )
+                    else if (done != null)
                       TextButton(
                         key: const ValueKey('video_saving_cancel'),
                         onPressed: _stopping ? null : _stop,

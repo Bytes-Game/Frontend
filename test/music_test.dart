@@ -235,8 +235,31 @@ void main() {
       final picked = closed() as PickedMusic;
       expect(picked.track.id, library.idFor(song('a')));
       expect(picked.track.title, 'Alpha');
-      expect(File(picked.path).existsSync(), isTrue);
+      expect(File(picked.path!).existsSync(), isTrue);
       expect(player.calls, contains('stop'), reason: 'the preview stops');
+      await close(t);
+    });
+
+    testWidgets('Use closes the picker straight away, while the song is '
+        'still downloading', (t) async {
+      library.all = [song('a', title: 'Alpha')];
+      library.hold = Completer<void>();
+      final closed = await open(t, const MusicPickerPage());
+      await t.tap(find.byKey(const ValueKey('music_use_a')));
+      await settle(t);
+      expect(find.byType(MusicPickerPage), findsNothing);
+      final picked = closed() as PickedMusic;
+      expect(picked.path, isNull, reason: 'the song is still on its way');
+      expect(
+        picked.playable,
+        'https://files.example/a.mp3',
+        reason: 'until then it plays from the internet',
+      );
+
+      library.hold!.complete();
+      await settle(t, 2);
+      expect(picked.path, '${dir.path}/music_a.mp3');
+      expect(picked.playable, picked.path);
       await close(t);
     });
 
@@ -556,6 +579,118 @@ void main() {
       );
       expect(under.calls.last, 'volume 0.80');
       await close(t);
+    });
+
+    group('a song still downloading', () {
+      /// Taps Done and waits until the save has an outcome, the way [done]
+      /// does, counting "couldn't download the song" as one.
+      Future<void> doneAndWait(WidgetTester t) async {
+        final before = handed.length;
+        bool answered() =>
+            handed.length > before ||
+            find.textContaining("Couldn't").evaluate().isNotEmpty;
+        await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
+        for (var i = 0; i < 300 && !answered(); i++) {
+          await settle(t, 1);
+        }
+        await settle(t, 4);
+      }
+
+      testWidgets('plays from the internet, then from the phone once it is '
+          'there', (t) async {
+        library.hold = Completer<void>();
+        await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+        await addSong(t);
+        final under = FakeMusicPlayer.made.last;
+        expect(
+          under.calls,
+          contains('play https://files.example/a.mp3 from 0 loop true'),
+        );
+
+        library.hold!.complete();
+        await settle(t, 2);
+        final state = t.state<VideoEditorPageState>(
+          find.byType(VideoEditorPage),
+        );
+        state.controller!.pause();
+        await settle(t, 2);
+        state.controller!.play();
+        await settle(t, 2);
+        expect(
+          under.calls.lastWhere((c) => c.startsWith('play')),
+          'play ${dir.path}/music_a.mp3 from 0 loop true',
+        );
+        await close(t);
+      });
+
+      testWidgets('Done waits for it, saying so, then saves with it', (
+        t,
+      ) async {
+        library.hold = Completer<void>();
+        await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+        await addSong(t);
+        await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
+        await settle(t, 6);
+        expect(find.text('Getting the song ready…'), findsOneWidget);
+        expect(engine.renders, isEmpty, reason: 'not without the song');
+        expect(handed, isEmpty);
+
+        library.hold!.complete();
+        for (var i = 0; i < 300 && handed.isEmpty; i++) {
+          await settle(t, 1);
+        }
+        expect(
+          engine.renders.single.audioTracks.single.path,
+          '${dir.path}/music_a.mp3',
+        );
+        expect(handedMusic.single?.id, library.idFor(song('a')));
+        await close(t);
+      });
+
+      testWidgets('Cancel while it waits: back in the editor, nothing said, '
+          'and Done works after', (t) async {
+        library.hold = Completer<void>();
+        await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+        await addSong(t);
+        await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
+        await settle(t, 6);
+        await t.tap(find.byKey(const ValueKey('video_saving_stop_song')));
+        await settle(t, 6);
+        expect(find.byKey(const ValueKey('video_saving')), findsNothing);
+        expect(find.textContaining("Couldn't"), findsNothing);
+        expect(find.byType(VideoEditorPage), findsOneWidget);
+        expect(engine.renders, isEmpty);
+
+        library.hold!.complete();
+        await settle(t, 2);
+        await doneAndWait(t);
+        expect(handed, hasLength(1));
+        expect(
+          engine.renders.single.audioTracks.single.path,
+          '${dir.path}/music_a.mp3',
+        );
+        await close(t);
+      });
+
+      testWidgets('one that will not download: Done tries again, then says '
+          'so, and the editor stays', (t) async {
+        library.failDownloads = 2;
+        await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
+        await addSong(t);
+        await doneAndWait(t);
+        expect(library.downloaded, hasLength(2), reason: 'tried again');
+        expect(
+          find.text(
+            "Couldn't download the song. Check your connection and tap "
+            'Done again.',
+          ),
+          findsOneWidget,
+        );
+        expect(engine.renders, isEmpty);
+        expect(handed, isEmpty);
+        expect(find.byType(VideoEditorPage), findsOneWidget);
+        await close(t);
+      });
     });
 
     testWidgets('the song\'s volume and start are what is saved', (t) async {
