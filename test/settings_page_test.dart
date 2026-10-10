@@ -36,6 +36,10 @@ import 'package:myapp/services/event_tracker.dart';
 List<Map<String, dynamic>> patches = [];
 bool refuse = false;
 
+/// Account deletions the app asked for, and whether the server does them.
+List<String> deletions = [];
+bool refuseDelete = false;
+
 /// Notification settings as the server keeps them, and the saves sent.
 Map<String, dynamic>? serverPrefs;
 List<Map<String, dynamic>> prefSaves = [];
@@ -43,6 +47,8 @@ List<Map<String, dynamic>> prefSaves = [];
 void fakeServer() {
   patches = [];
   refuse = false;
+  deletions = [];
+  refuseDelete = false;
   prefSaves = [];
   serverPrefs = {
     'userId': '1',
@@ -67,6 +73,12 @@ void fakeServer() {
       return p == null
           ? http.Response('down', 503)
           : http.Response(json.encode(p), 200);
+    }
+    if (req.method == 'DELETE' && req.url.path.endsWith('/users/1')) {
+      deletions.add(req.url.path);
+      return refuseDelete
+          ? http.Response('delete failed', 500)
+          : http.Response('{"deleted":true}', 200);
     }
     if (req.method == 'PATCH' && req.url.path.endsWith('/users/1')) {
       final body = json.decode(req.body) as Map<String, dynamic>;
@@ -239,6 +251,57 @@ void main() {
         SaveToPhone.instance.debugForget();
         expect(await t.runAsync(SaveToPhone.instance.isOn), isTrue);
       });
+    });
+
+    testWidgets('delete account: only once the username is typed, then it '
+        'is gone and you are signed out', (t) async {
+      final dp = await pump(t, page());
+      final row = find.byKey(const ValueKey('settings_delete_account'));
+      await t.ensureVisible(row);
+      await t.tap(row);
+      await settle(t);
+      expect(find.text('Delete your account?'), findsOneWidget);
+      expect(find.textContaining('cannot be undone'), findsOneWidget);
+      final confirm = find.byKey(const ValueKey('delete_account_confirm'));
+      TextButton button() => t.widget<TextButton>(confirm);
+      expect(button().onPressed, isNull, reason: 'not before the name');
+
+      await t.enterText(
+          find.byKey(const ValueKey('delete_account_username')), 'mayaa');
+      await t.pump();
+      expect(button().onPressed, isNull, reason: 'not a near miss');
+      await t.enterText(
+          find.byKey(const ValueKey('delete_account_username')), 'Maya');
+      await t.pump();
+      expect(button().onPressed, isNotNull);
+
+      await t.tap(confirm);
+      await settle(t);
+      expect(deletions, ['/api/v1/users/1']);
+      expect(dp.user, isNull, reason: 'signed out');
+      expect(find.text('Your account has been deleted.'), findsOneWidget);
+      await t.pump(const Duration(seconds: 5));
+    });
+
+    testWidgets('a delete the server refuses says so and keeps you signed '
+        'in', (t) async {
+      refuseDelete = true;
+      final dp = await pump(t, page());
+      final row = find.byKey(const ValueKey('settings_delete_account'));
+      await t.ensureVisible(row);
+      await t.tap(row);
+      await settle(t);
+      await t.enterText(
+          find.byKey(const ValueKey('delete_account_username')), 'maya');
+      await t.pump();
+      await t.tap(find.byKey(const ValueKey('delete_account_confirm')));
+      await settle(t);
+      expect(deletions, hasLength(1));
+      expect(dp.user, isNotNull);
+      expect(find.textContaining("Couldn't delete your account"),
+          findsOneWidget);
+      expect(find.byType(SettingsPage), findsOneWidget);
+      await t.pump(const Duration(seconds: 5));
     });
 
     testWidgets('log out asks first', (t) async {

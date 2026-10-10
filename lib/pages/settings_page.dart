@@ -11,6 +11,7 @@ import 'package:myapp/pages/two_factor_setup_page.dart';
 import 'package:myapp/pages/watch_history_page.dart';
 import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/providers/data_provider.dart';
+import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/save_to_phone.dart';
@@ -96,6 +97,51 @@ class _SettingsPageState extends State<SettingsPage>
     Navigator.of(context).popUntil((r) => r.isFirst);
     // ignore: use_build_context_synchronously
     auth.logout(context);
+  }
+
+  /// Delete the account, for good. App stores require it to be possible
+  /// from inside the app. Asks twice — the second time by typing the
+  /// username — because there is no getting it back.
+  Future<void> _deleteAccount() async {
+    final user = Provider.of<DataProvider>(context, listen: false).user;
+    if (user == null) return;
+    EventTracker.instance.trackTap(
+      target: 'delete_account_open',
+      pageName: pageName,
+    );
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (_) => _DeleteAccountDialog(username: user.username),
+    );
+    if (sure != true || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(const SnackBar(
+      behavior: SnackBarBehavior.floating,
+      content: Text('Deleting your account…'),
+    ));
+    final done = await ApiService.deleteAccount(user.id);
+    if (!mounted) return;
+    messenger.hideCurrentSnackBar();
+    if (!done) {
+      messenger.showSnackBar(const SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text("Couldn't delete your account. Check your connection "
+            'and try again.'),
+      ));
+      return;
+    }
+    EventTracker.instance.trackTap(
+      target: 'delete_account_done',
+      pageName: pageName,
+    );
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    // ignore: use_build_context_synchronously
+    auth.logout(context);
+    messenger.showSnackBar(const SnackBar(
+      behavior: SnackBarBehavior.floating,
+      content: Text('Your account has been deleted.'),
+    ));
   }
 
   static String _themeLabel(Map<String, dynamic> settings) {
@@ -318,10 +364,81 @@ class _SettingsPageState extends State<SettingsPage>
                 destructive: true,
                 onTap: _logout,
               ),
+              SettingsTile(
+                key: const ValueKey('settings_delete_account'),
+                icon: Icons.person_remove_rounded,
+                color: AppTheme.error,
+                title: 'Delete account',
+                destructive: true,
+                onTap: _deleteAccount,
+              ),
             ],
           ),
         ],
       ),
+    );
+  }
+}
+
+/// "Delete your account?", with the username to type before Delete works.
+/// Its own widget so the typing box lives exactly as long as the dialog,
+/// closing animation included.
+class _DeleteAccountDialog extends StatefulWidget {
+  final String username;
+  const _DeleteAccountDialog({required this.username});
+
+  @override
+  State<_DeleteAccountDialog> createState() => _DeleteAccountDialogState();
+}
+
+class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
+  final _typed = TextEditingController();
+
+  @override
+  void dispose() {
+    _typed.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final name = widget.username;
+    final matches = _typed.text.trim().toLowerCase() == name.toLowerCase();
+    return AlertDialog(
+      title: const Text('Delete your account?'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'This deletes @$name for good: your profile, your posts and '
+            'battles, your comments, likes, votes and followers. It cannot '
+            'be undone.',
+          ),
+          const SizedBox(height: 14),
+          Text('Type $name to confirm.'),
+          const SizedBox(height: 6),
+          TextField(
+            key: const ValueKey('delete_account_username'),
+            controller: _typed,
+            autocorrect: false,
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(hintText: name),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          key: const ValueKey('delete_account_confirm'),
+          style: TextButton.styleFrom(foregroundColor: AppTheme.error),
+          onPressed: matches ? () => Navigator.of(context).pop(true) : null,
+          child: const Text('Delete account'),
+        ),
+      ],
     );
   }
 }
