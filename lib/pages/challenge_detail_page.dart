@@ -499,6 +499,9 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
         builder: (_) => PhotoEditorPage(
           sourcePath: chosen.file.path,
           inGallery: !chosen.camera,
+          // A photo battle stays a photo against a photo: no song, which
+          // would make the answer a video.
+          allowMusic: false,
           onDone: (from, edited, _) => _sendAnswer(from, edited, photo: true),
         ),
       ),

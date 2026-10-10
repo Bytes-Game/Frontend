@@ -99,7 +99,9 @@ class CreateFlow {
         MaterialPageRoute(
           builder: (_) => ChallengeMetadataPage(
             processedSourcePath: edited,
-            photo: photo,
+            // A photo with a song comes back as a video: the photo, still,
+            // with the song under it (see PhotoEditorPage).
+            photo: photo && music == null,
             music: music,
           ),
         ),

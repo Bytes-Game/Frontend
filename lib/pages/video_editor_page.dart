@@ -2,14 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:material_ui/material_ui.dart' as mui;
 import 'package:pro_image_editor/pro_image_editor.dart';
 import 'package:pro_video_editor/pro_video_editor.dart' as pve;
 import 'package:video_player/video_player.dart';
 
-import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/config/constants.dart';
 import 'package:myapp/config/editor_setup.dart';
 import 'package:myapp/models/music_track.dart';
@@ -19,8 +16,12 @@ import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/leftover_files.dart';
 import 'package:myapp/services/music_library.dart';
 import 'package:myapp/services/save_to_phone.dart';
+import 'package:myapp/services/song_edit.dart';
 import 'package:myapp/services/video_edit_engine.dart';
 import 'package:myapp/services/video_edit_plan.dart';
+import 'package:myapp/widgets/editor_bottom_bar.dart';
+import 'package:myapp/widgets/editor_saving.dart';
+import 'package:myapp/widgets/song_sheet.dart';
 
 /// The video editor: the trim bar, crop and rotate, filters, brightness and
 /// colour, blur, text, emoji, drawing, the sound on or off, and a free song
@@ -141,12 +142,9 @@ class VideoEditorPageState extends State<VideoEditorPage> {
   static const _couldNotGetSong =
       "Couldn't download the song. Check your connection and tap Done again.";
 
-  /// Done came before the song finished downloading: the saving box says
-  /// so while it waits (see PickedMusic).
-  final _fetchingSong = ValueNotifier<bool>(false);
-
-  /// Completes when the person stops waiting for the song.
-  Completer<void>? _stopWaiting;
+  /// Done came before the song finished downloading: waits for it, with
+  /// the saving box saying so (see PickedMusic).
+  final _songWait = SongWait();
 
   /// The remake lost the sound the original had.
   bool _soundLost = false;
@@ -157,12 +155,12 @@ class VideoEditorPageState extends State<VideoEditorPage> {
   /// The free song under the video, if one was chosen.
   PickedMusic? _music;
 
-  /// How loud the song is, from 0 to 1. The video's own sound is on or off
-  /// (the sound button).
-  double _musicVolume = 0.8;
+  /// How the song sits under the video: its part, both volumes, fades.
+  SongEdit _song = SongEdit();
 
-  /// Where in the song the video starts.
-  Duration _musicStart = Duration.zero;
+  /// The song volume last sent to the player, so a fade only sends a new
+  /// one when it has moved enough to hear.
+  double _gainSent = -1;
 
   /// Plays the song under the video while editing.
   MusicPlayer? _musicPlayer;
@@ -215,8 +213,7 @@ class VideoEditorPageState extends State<VideoEditorPage> {
     }
 
     letGo('the song player', _musicPlayer?.dispose());
-    _stopWaiting?.complete();
-    _fetchingSong.dispose();
+    _songWait.dispose();
     unawaited(LeftoverFiles.instance.forget(_made.difference({_posted})));
     _player?.removeListener(_onTick);
     letGo('the video player', _player?.dispose());
@@ -360,6 +357,7 @@ class VideoEditorPageState extends State<VideoEditorPage> {
     final last = _lastAt;
     _lastAt = at;
     if (_seeking) return;
+    if (_playing && (_song.fadeIn || _song.fadeOut)) _followFade(at);
     final start = _span?.start ?? Duration.zero;
     final end = _span?.end ?? facts.duration;
     if (at >= end) {
@@ -389,11 +387,43 @@ class VideoEditorPageState extends State<VideoEditorPage> {
 
   // ── The song ──────────────────────────────────────────────────────────
 
-  /// Where in the song the video's moment [at] falls.
-  Duration _songAt(Duration at) {
+  /// How far into the kept part the video's moment [at] is.
+  Duration _into(Duration at) {
     final from = _span?.start ?? Duration.zero;
-    final into = at > from ? at - from : Duration.zero;
-    return _musicStart + into;
+    return at > from ? at - from : Duration.zero;
+  }
+
+  /// Where in the song the video's moment [at] falls.
+  Duration _songAt(Duration at) => _song.start + _into(at);
+
+  /// How long the post is: the kept part, never more than a post may be.
+  Duration get _keptLength {
+    final facts = _facts;
+    if (facts == null) return Duration.zero;
+    final from = _span?.start ?? Duration.zero;
+    final to = _span?.end ?? facts.duration;
+    final kept = to - from;
+    return kept > widget.maxLength ? widget.maxLength : kept;
+  }
+
+  /// The song's volume at the video's moment [at], fades included.
+  double _gainAt(Duration at) => _song.volumeAt(_into(at), _keptLength);
+
+  /// Sends the song's volume for [at] to the player, if it has moved enough
+  /// to hear: a fade is followed a step at a time as the video plays.
+  void _followFade(Duration at, {bool always = false}) {
+    final player = _musicPlayer;
+    if (player == null || _music == null) return;
+    final gain = _gainAt(at);
+    if (!always && (gain - _gainSent).abs() < 0.02) return;
+    _gainSent = gain;
+    unawaited(player.setVolume(gain));
+  }
+
+  /// The video's own sound at its set level, or silent when muted.
+  void _applyVideoVolume() {
+    final muted = !(_controller?.isAudioEnabled ?? true);
+    unawaited(_player?.setVolume(muted ? 0 : _song.videoVolume));
   }
 
   /// Keeps the song where the video is: playing from the same moment when
@@ -406,7 +436,8 @@ class VideoEditorPageState extends State<VideoEditorPage> {
     try {
       if (_playing) {
         await player.play(music.playable, from: _songAt(at), loop: true);
-        await player.setVolume(_musicVolume);
+        _gainSent = _gainAt(at);
+        await player.setVolume(_gainSent);
       } else {
         await player.pause();
       }
@@ -429,7 +460,8 @@ class VideoEditorPageState extends State<VideoEditorPage> {
       _musicPlayer ??= MusicPlayer.create();
       setState(() {
         _music = picked;
-        _musicStart = Duration.zero;
+        // A new song starts from its start; the volumes and fades stay.
+        _song.start = Duration.zero;
       });
       EventTracker.instance.track(
         eventType: 'editor_music_added',
@@ -442,238 +474,69 @@ class VideoEditorPageState extends State<VideoEditorPage> {
 
   Future<void> _removeMusic() async {
     await _musicPlayer?.stop();
-    if (mounted) setState(() => _music = null);
+    if (!mounted) return;
+    // The video's own level is set beside the song's, so it goes with it:
+    // nothing is left turned down where it can no longer be seen.
+    setState(() {
+      _music = null;
+      _song = SongEdit();
+    });
+    _applyVideoVolume();
   }
 
-  /// The song's volume and starting point, and a way to change or remove
-  /// it.
+  /// Plays the kept part from its start, so a change to the song is heard
+  /// from where it begins.
+  void _playFromTop() {
+    unawaited(_seekTo(_span?.start ?? Duration.zero));
+    if (!_playing) _controller?.play();
+  }
+
+  /// The song's settings: its part, both volumes, fades, and a way to
+  /// change or remove it (see showSongSheet).
   Future<void> _musicOptions() async {
     final music = _music;
-    if (music == null) return;
-    final length = music.track.duration;
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppTheme.surfaceDark,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheet) => SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  music.track.credit.line,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'Song volume',
-                  style: TextStyle(color: AppTheme.textMutedDark),
-                ),
-                Slider(
-                  key: const ValueKey('music_volume'),
-                  value: _musicVolume,
-                  min: 0.05,
-                  max: 1,
-                  onChanged: (v) {
-                    setSheet(() {});
-                    setState(() => _musicVolume = v);
-                    unawaited(_musicPlayer?.setVolume(v));
-                  },
-                ),
-                if (length > const Duration(seconds: 2)) ...[
-                  const Text(
-                    'Start the song from',
-                    style: TextStyle(color: AppTheme.textMutedDark),
-                  ),
-                  Slider(
-                    key: const ValueKey('music_start'),
-                    value: _musicStart.inMilliseconds
-                        .clamp(0, length.inMilliseconds)
-                        .toDouble(),
-                    max: length.inMilliseconds.toDouble(),
-                    onChanged: (v) {
-                      setSheet(() {});
-                      setState(
-                        () => _musicStart = Duration(milliseconds: v.round()),
-                      );
-                    },
-                    onChangeEnd: (_) => unawaited(
-                      _musicFollow(_player?.value.position ?? Duration.zero),
-                    ),
-                  ),
-                ],
-                Row(
-                  children: [
-                    TextButton(
-                      key: const ValueKey('music_change'),
-                      onPressed: () {
-                        Navigator.of(ctx).pop();
-                        unawaited(_chooseMusic());
-                      },
-                      child: const Text('Change song'),
-                    ),
-                    const Spacer(),
-                    TextButton(
-                      key: const ValueKey('music_remove'),
-                      onPressed: () {
-                        Navigator.of(ctx).pop();
-                        unawaited(_removeMusic());
-                      },
-                      child: const Text(
-                        'Remove song',
-                        style: TextStyle(color: AppTheme.error),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+    final facts = _facts;
+    if (music == null || facts == null) return;
+    final muted = !(_controller?.isAudioEnabled ?? true);
+    await showSongSheet(
+      context,
+      track: music.track,
+      edit: _song,
+      length: () => _keptLength,
+      // Not for a silent video, nor one whose sound is switched off with
+      // the speaker button: that button already says "none".
+      videoSound: facts.hasSound && !muted,
+      onVolume: () {
+        _applyVideoVolume();
+        _followFade(_player?.value.position ?? Duration.zero, always: true);
+      },
+      onPart: () {
+        debugPrint(
+          '[editor] the song now starts at ${_song.start.inMilliseconds}ms, '
+          'fade in ${_song.fadeIn}, fade out ${_song.fadeOut}',
+        );
+        _playFromTop();
+      },
+      onChangeSong: () => unawaited(_chooseMusic()),
+      onRemoveSong: () => unawaited(_removeMusic()),
     );
+    if (mounted) setState(() {});
   }
 
-  /// The editor's bottom row: its own tools, drawn the way it draws them,
-  /// with Music first, so a song is added where everything else is done to
-  /// the video.
+  /// The editor's bottom row, with Music first (see editorBottomBar).
   ReactiveWidget<Widget> _bottomBar(
     ProImageEditorState editor,
     Stream<void> rebuild,
     Key key,
-  ) {
-    return ReactiveWidget(
-      stream: rebuild,
-      builder: (context) {
-        final c = editor.configs;
-        // Out of the way while a text or emoji on the video is being moved,
-        // as the editor's own row is.
-        if (editor.hasSelectedLayers &&
-            c.layerInteraction.hideToolbarOnInteraction) {
-          return const SizedBox.shrink();
-        }
-        final colour = c.mainEditor.style.bottomBarColor;
-        Widget button(
-          String key,
-          String label,
-          IconData icon,
-          VoidCallback onPressed, {
-          Color? iconColour,
-        }) => FlatIconTextButton(
-          key: ValueKey(key),
-          label: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 72),
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 10, color: colour),
-            ),
-          ),
-          icon: Icon(icon, size: 22, color: iconColour ?? colour),
-          onPressed: onPressed,
-        );
-        final music = _music;
-        final buttons = <Widget>[
-          if (music == null)
-            button(
-              'editor_add_music',
-              'Music',
-              Icons.music_note_rounded,
-              _chooseMusic,
-            )
-          else
-            button(
-              'editor_music',
-              music.track.title,
-              Icons.music_note_rounded,
-              _musicOptions,
-              iconColour: AppTheme.primary,
-            ),
-          for (final tool in VideoEditorPage.tools)
-            switch (tool) {
-              SubEditorMode.cropRotate => button(
-                'open-crop-rotate-editor-btn',
-                c.i18n.cropRotateEditor.bottomNavigationBarText,
-                c.cropRotateEditor.icons.bottomNavBar,
-                editor.openCropRotateEditor,
-              ),
-              SubEditorMode.filter => button(
-                'open-filter-editor-btn',
-                c.i18n.filterEditor.bottomNavigationBarText,
-                c.filterEditor.icons.bottomNavBar,
-                editor.openFilterEditor,
-              ),
-              SubEditorMode.tune => button(
-                'open-tune-editor-btn',
-                c.i18n.tuneEditor.bottomNavigationBarText,
-                c.tuneEditor.icons.bottomNavBar,
-                () => editor.openTuneEditor(),
-              ),
-              SubEditorMode.text => button(
-                'open-text-editor-btn',
-                c.i18n.textEditor.bottomNavigationBarText,
-                c.textEditor.icons.bottomNavBar,
-                () => editor.openTextEditor(),
-              ),
-              SubEditorMode.emoji => button(
-                'open-emoji-editor-btn',
-                c.i18n.emojiEditor.bottomNavigationBarText,
-                c.emojiEditor.icons.bottomNavBar,
-                editor.openEmojiEditor,
-              ),
-              SubEditorMode.paint => button(
-                'open-paint-editor-btn',
-                c.i18n.paintEditor.bottomNavigationBarText,
-                c.paintEditor.icons.bottomNavBar,
-                editor.openPaintEditor,
-              ),
-              SubEditorMode.blur => button(
-                'open-blur-editor-btn',
-                c.i18n.blurEditor.bottomNavigationBarText,
-                c.blurEditor.icons.bottomNavBar,
-                editor.openBlurEditor,
-              ),
-              // Not offered here (see VideoEditorPage.tools).
-              SubEditorMode.sticker ||
-              SubEditorMode.audio ||
-              SubEditorMode.videoClips => const SizedBox.shrink(),
-            },
-        ];
-        return mui.Theme(
-          data: editorTheme,
-          child: mui.BottomAppBar(
-            key: key,
-            height: kBottomNavigationBarHeight,
-            color: c.mainEditor.style.bottomBarBackground,
-            padding: EdgeInsets.zero,
-            child: LayoutBuilder(
-              builder: (context, box) => SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    minWidth: math.max(0, box.maxWidth - 24),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: buttons,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
+  ) => editorBottomBar(
+    editor: editor,
+    rebuild: rebuild,
+    key: key,
+    tools: VideoEditorPage.tools,
+    song: _music?.track,
+    onAddMusic: _chooseMusic,
+    onMusic: _musicOptions,
+  );
 
   /// The colour matrices that change something: picking "no filter" can
   /// leave one that changes nothing, and that is not an edit.
@@ -739,26 +602,27 @@ class VideoEditorPageState extends State<VideoEditorPage> {
         case VideoSaveWay.cut:
           _finished = _keep(await _cut(plan, facts));
         case VideoSaveWay.remake:
-          final song = music == null ? null : await _songFile(music);
+          final song = music == null ? null : await _songWait.file(music);
           final out = await _engine.render(
             pve.VideoRenderData(
               id: _taskId,
               videoSegments: [
                 pve.VideoSegment(
                   video: pve.EditorVideo.file(widget.sourcePath),
+                  // The video's own sound, turned down under the song.
+                  volume: song != null && _song.videoVolume < 1
+                      ? _song.videoVolume
+                      : null,
                 ),
               ],
               enableAudio: !muted,
               audioTracks: [
                 if (song != null)
-                  pve.VideoAudioTrack(
-                    path: song,
-                    volume: _musicVolume,
-                    // A song shorter than the video starts again.
-                    loop: true,
-                    audioStartTime: _musicStart > Duration.zero
-                        ? _musicStart
-                        : null,
+                  _song.track(
+                    song,
+                    length:
+                        (plan.end ?? facts.duration) -
+                        (plan.start ?? Duration.zero),
                   ),
               ],
               imageLayers: p.layers.isNotEmpty
@@ -820,11 +684,11 @@ class VideoEditorPageState extends State<VideoEditorPage> {
       debugPrint('[editor] saving was stopped with Cancel');
       _finished = null;
       _saveStopped = true;
-    } on _StoppedWaiting {
+    } on SongWaitStopped {
       debugPrint('[editor] stopped waiting for the song');
       _finished = null;
       _saveStopped = true;
-    } on _SongUnavailable catch (e) {
+    } on SongUnavailable catch (e) {
       debugPrint('[editor] saving the edit failed: ${e.cause}');
       EventTracker.instance.trackError(
         surface: 'video_editor_page',
@@ -844,41 +708,6 @@ class VideoEditorPageState extends State<VideoEditorPage> {
       _finished = null;
       _saveFailed = true;
     }
-  }
-
-  /// The song's file, for the remake. Usually it has downloaded by now; if
-  /// Done came first, the saving box says so while this waits, and offers
-  /// to stop waiting.
-  Future<String> _songFile(PickedMusic music) async {
-    final here = music.path;
-    if (here != null) return here;
-    debugPrint('[editor] Done before the song finished downloading: waiting');
-    final clock = Stopwatch()..start();
-    final stop = _stopWaiting = Completer<void>();
-    _fetchingSong.value = true;
-    try {
-      final got = await Future.any<String?>([
-        music.file(),
-        stop.future.then((_) => null),
-      ]);
-      if (got == null) throw const _StoppedWaiting();
-      debugPrint(
-        '[editor] the song was ready after ${clock.elapsedMilliseconds}ms',
-      );
-      return got;
-    } on _StoppedWaiting {
-      rethrow;
-    } catch (e) {
-      throw _SongUnavailable(e);
-    } finally {
-      _stopWaiting = null;
-      if (mounted) _fetchingSong.value = false;
-    }
-  }
-
-  void _stopWaitingForSong() {
-    final stop = _stopWaiting;
-    if (stop != null && !stop.isCompleted) stop.complete();
   }
 
   /// Cut without remaking. On a phone that cannot (an iPhone), remade at
@@ -1040,11 +869,10 @@ class VideoEditorPageState extends State<VideoEditorPage> {
         // While Done saves: how far a remake has got, and a way to stop it.
         dialogConfigs: DialogConfigs(
           widgets: DialogWidgets(
-            loadingDialog: (message, configs) => _SavingBox(
+            loadingDialog: (message, configs) => EditorSavingBox(
               engine: _engine,
               taskId: _taskId,
-              fetchingSong: _fetchingSong,
-              onStopWaiting: _stopWaitingForSong,
+              songWait: _songWait,
             ),
           ),
         ),
@@ -1092,7 +920,8 @@ class VideoEditorPageState extends State<VideoEditorPage> {
             await player.pause();
             await _musicFollow(player.value.position);
           },
-          onMuteToggle: (muted) => player.setVolume(muted ? 0 : 1),
+          onMuteToggle: (muted) =>
+              player.setVolume(muted ? 0 : _song.videoVolume),
           onTrimSpanUpdate: (span) {
             final before = _span;
             _span = span;
@@ -1115,142 +944,6 @@ class VideoEditorPageState extends State<VideoEditorPage> {
           },
         ),
       ),
-    );
-  }
-}
-
-/// The person stopped waiting for the song to download.
-class _StoppedWaiting implements Exception {
-  const _StoppedWaiting();
-}
-
-/// The song could not be downloaded, even trying twice.
-class _SongUnavailable implements Exception {
-  final Object cause;
-  const _SongUnavailable(this.cause);
-}
-
-/// The "please wait" box while the video editor saves. A cut or the
-/// original is quick and shows only a spinner; a remake can take a while
-/// on a long video, so it shows how far it has got, and a Cancel. Before
-/// that, if the song is still downloading, it says so, with a Cancel too.
-class _SavingBox extends StatefulWidget {
-  final VideoEditEngine engine;
-  final String taskId;
-  final ValueListenable<bool> fetchingSong;
-  final VoidCallback onStopWaiting;
-
-  const _SavingBox({
-    required this.engine,
-    required this.taskId,
-    required this.fetchingSong,
-    required this.onStopWaiting,
-  });
-
-  @override
-  State<_SavingBox> createState() => _SavingBoxState();
-}
-
-class _SavingBoxState extends State<_SavingBox> {
-  StreamSubscription<double>? _sub;
-  double? _done;
-  bool _stopping = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _sub = widget.engine
-        .progress(widget.taskId)
-        .listen(
-          (p) {
-            if (mounted) setState(() => _done = p.clamp(0.0, 1.0));
-          },
-          onError: (Object e) {
-            // The box still says "Saving…"; only the number is missing.
-            debugPrint('[editor] no progress for the save: $e');
-          },
-        );
-  }
-
-  @override
-  void dispose() {
-    unawaited(_sub?.cancel());
-    super.dispose();
-  }
-
-  Future<void> _stop() async {
-    setState(() => _stopping = true);
-    try {
-      await widget.engine.cancel(widget.taskId);
-    } catch (e) {
-      debugPrint('[editor] could not stop the save: $e');
-      if (mounted) setState(() => _stopping = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => ValueListenableBuilder<bool>(
-    valueListenable: widget.fetchingSong,
-    builder: (context, fetching, _) => _box(fetching && _done == null),
-  );
-
-  Widget _box(bool fetchingSong) {
-    final done = _done;
-    return Stack(
-      children: [
-        const ModalBarrier(color: Colors.black54, dismissible: false),
-        Center(
-          child: Material(
-            key: const ValueKey('video_saving'),
-            color: const Color(0xFF1C1C1E),
-            borderRadius: BorderRadius.circular(16),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(24, 22, 24, 10),
-              child: SizedBox(
-                width: 220,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (done == null)
-                      const CircularProgressIndicator(color: Colors.white70)
-                    else
-                      LinearProgressIndicator(
-                        value: done,
-                        color: Colors.white,
-                        backgroundColor: Colors.white24,
-                      ),
-                    const SizedBox(height: 16),
-                    Text(
-                      fetchingSong
-                          ? 'Getting the song ready…'
-                          : done == null
-                          ? 'Saving…'
-                          : 'Saving your video… ${(done * 100).round()}%',
-                      key: const ValueKey('video_saving_words'),
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                    const SizedBox(height: 6),
-                    if (fetchingSong)
-                      TextButton(
-                        key: const ValueKey('video_saving_stop_song'),
-                        onPressed: widget.onStopWaiting,
-                        child: const Text('Cancel'),
-                      )
-                    else if (done != null)
-                      TextButton(
-                        key: const ValueKey('video_saving_cancel'),
-                        onPressed: _stopping ? null : _stop,
-                        child: const Text('Cancel'),
-                      )
-                    else
-                      const SizedBox(height: 12),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
     );
   }
 }
