@@ -44,6 +44,8 @@ class LeagueBadge extends StatelessWidget {
         return const [Color(0xFF00CED1), Color(0xFF008B8B)];
       case 'diamond':
         return const [Color(0xFFB9F2FF), Color(0xFF4169E1)];
+      case 'ace':
+        return const [Color(0xFFFF4D6D), Color(0xFFB4235A)];
       default:
         return [Colors.grey, Colors.grey.shade700];
     }
@@ -75,6 +77,8 @@ Color leagueWash(String league) {
       return const Color(0xFF3FA7B5);
     case 'diamond':
       return const Color(0xFF6E7BFF);
+    case 'ace':
+      return const Color(0xFFE0446A);
     default:
       return AppTheme.primary;
   }

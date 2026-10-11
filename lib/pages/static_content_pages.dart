@@ -162,9 +162,18 @@ class _HelpCenterPageState extends State<HelpCenterPage>
                 'feed can swipe left/right between the original and the '
                 'response, then tap the trophy to vote for their pick.'),
         _DocSection('What\'s a league?',
-            'Your league (Bronze through Diamond) reflects your battle '
-                'record. Win battles to climb, lose to drop. The league '
-                'badge shows next to your username everywhere.'),
+            'Everybody starts on 1,000 points in Bronze. Win a battle and '
+                'you gain points; lose and you drop some. Your league moves '
+                'with your points, up and down: Silver at 1,050, Gold at '
+                '1,150, Platinum at 1,300, Diamond at 1,500 and Ace at '
+                '1,750. Each league is further away than the last.'),
+        _DocSection('Who can I battle?',
+            'Anybody within 50 points of you, above or below — so battles '
+                'stay fair. As you get close to the next league, players '
+                'in it come within reach. Friends (people you follow who '
+                'follow you back) can battle you at any level. When you '
+                'can\'t answer a challenge, its Accept button is switched '
+                'off and tells you why.'),
         _DocSection('Why can\'t I edit my username?',
             'Username changes are rolling out — they need a uniqueness '
                 'check + audit log on the backend before we open them up. '

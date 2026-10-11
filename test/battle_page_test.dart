@@ -319,20 +319,25 @@ void main() {
     expect(find.text('Record'), findsOneWidget);
   });
 
-  group('a challenge you may not answer (too far from your level)', () {
-    const why = 'This challenge is from a Gold player. You\'re in Bronze, so '
-        'you can battle Bronze and Silver players, or friends at any level. '
-        'Win battles to move up.';
+  group('a challenge you may not answer (too many points apart)', () {
+    const why = 'This challenge is from a Gold player with 1,200 points. You '
+        'have 1,000 points, so you can battle players from 950 to 1,050 '
+        'points, or friends at any level. Win battles to climb.';
     setUp(() => refusal = why);
     tearDown(() => refusal = null);
 
-    testWidgets('no Accept button: the reason instead, and the seat says it '
-        'is not open to you', (t) async {
+    testWidgets('the Accept button is there but switched off, the reason is '
+        'under it, and the seat says it is not open to you', (t) async {
       await openPage(t, open: true);
-      expect(find.byKey(const ValueKey('accept_button')), findsNothing);
-      expect(find.byKey(const ValueKey('accept_refused')), findsOneWidget);
-      expect(find.text("You can't answer this one"), findsOneWidget);
-      expect(find.text(why), findsOneWidget);
+      final accept = find.byKey(const ValueKey('accept_button'));
+      expect(accept, findsOneWidget);
+      expect(t.widget<ButtonStyleButton>(accept).onPressed, isNull,
+          reason: 'switched off');
+      expect(t.widget<Text>(find.byKey(const ValueKey('accept_refused'))).data,
+          why);
+      await t.tap(accept, warnIfMissed: false);
+      await settle(t);
+      expect(find.text('Record'), findsNothing);
       expect(
         t.widget<Text>(find.byKey(const ValueKey('empty_seat_title'))).data,
         'Not open to you',
@@ -403,8 +408,13 @@ void main() {
   testWidgets('somebody else sees the owner\'s switch nowhere', (t) async {
     await openPage(t, open: true);
     expect(find.byKey(const ValueKey('battles_switch_2')), findsNothing);
-    // And an open challenge still offers to take it on, and to report it.
+    // And an open challenge still offers to take it on, switched on, and to
+    // report it.
     expect(find.byKey(const ValueKey('accept_button')), findsOneWidget);
+    expect(
+        t.widget<ButtonStyleButton>(find.byKey(const ValueKey('accept_button')))
+            .onPressed,
+        isNotNull);
     await t.tap(find.byKey(const ValueKey('detail_more')));
     await settle(t);
     expect(find.byKey(const ValueKey('report_')), findsOneWidget);

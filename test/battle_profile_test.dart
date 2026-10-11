@@ -127,8 +127,13 @@ void main() {
       expect(silver.next, 'Gold');
       expect(silver.pointsToNext, 70);
       expect(silver.progress, closeTo(0.3, 0.001));
-      final top = LeagueStep.of(1600, decided: 9);
-      expect(top.league, 'Diamond');
+      // Diamond is no longer the top: Ace is, 250 points further on.
+      final diamond = LeagueStep.of(1600, decided: 9);
+      expect(diamond.league, 'Diamond');
+      expect(diamond.next, 'Ace');
+      expect(diamond.pointsToNext, 150);
+      final top = LeagueStep.of(1750, decided: 30);
+      expect(top.league, 'Ace');
       expect(top.next, isNull);
       expect(top.progress, 1);
     });

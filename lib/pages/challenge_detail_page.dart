@@ -803,24 +803,19 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                           ),
                         ),
                       ],
+                      // Accept: on when you may answer, switched off when
+                      // you may not — too many points apart and not
+                      // friends — with the reason right under it.
                       if (c.status == 'open' &&
                           !isOwner &&
-                          c.openToBattles &&
-                          _whyNot.isNotEmpty) ...[
-                        const SizedBox(height: 16),
-                        _CannotAnswer(text: _whyNot),
-                      ],
-                      if (c.status == 'open' &&
-                          !isOwner &&
-                          c.openToBattles &&
-                          _whyNot.isEmpty) ...[
+                          c.openToBattles) ...[
                         const SizedBox(height: 16),
                         Builder(
                           builder: (btn) => SizedBox(
                             height: 52,
                             child: FilledButton.icon(
                               key: const ValueKey('accept_button'),
-                              onPressed: _accepting
+                              onPressed: _accepting || _whyNot.isNotEmpty
                                   ? null
                                   : () {
                                       final box = btn.findRenderObject()!
@@ -831,6 +826,8 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                               style: FilledButton.styleFrom(
                                 backgroundColor: AppTheme.primary,
                                 foregroundColor: Colors.white,
+                                disabledBackgroundColor: _raised,
+                                disabledForegroundColor: _muted,
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(16),
                                 ),
@@ -844,7 +841,9 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                                         color: Colors.white,
                                       ),
                                     )
-                                  : const Icon(Icons.bolt_rounded),
+                                  : Icon(_whyNot.isEmpty
+                                      ? Icons.bolt_rounded
+                                      : Icons.lock_outline_rounded),
                               label: const Text(
                                 'Accept challenge',
                                 style: TextStyle(
@@ -856,7 +855,19 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                           ),
                         ),
                         const SizedBox(height: 10),
-                        const MatchWarning(text: matchWarningAnswer),
+                        if (_whyNot.isNotEmpty)
+                          Text(
+                            _whyNot,
+                            key: const ValueKey('accept_refused'),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: _muted,
+                              fontSize: 13.5,
+                              height: 1.35,
+                            ),
+                          )
+                        else
+                          const MatchWarning(text: matchWarningAnswer),
                       ],
                       // —— Live score ——
                       // Genuine votes, likes, views and shares per side, how
@@ -1207,64 +1218,6 @@ class _VideoCard extends StatelessWidget {
           ),
         ),
       );
-}
-
-/// In place of "Accept challenge" when you may not answer: why, in the
-/// server's words, so nobody records a video only to be turned away.
-class _CannotAnswer extends StatelessWidget {
-  final String text;
-
-  const _CannotAnswer({required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      key: const ValueKey('accept_refused'),
-      padding: const EdgeInsets.fromLTRB(14, 14, 16, 14),
-      decoration: BoxDecoration(
-        color: _surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              color: _raised,
-            ),
-            child: const Icon(Icons.lock_outline_rounded,
-                color: Colors.white70, size: 18),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  "You can't answer this one",
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  text,
-                  style: const TextStyle(
-                      color: _muted, fontSize: 13.5, height: 1.35),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 /// The right-hand card on an open challenge: nobody has taken it yet.
