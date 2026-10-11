@@ -105,10 +105,14 @@ class UserModel {
   }
 
   /// Parse from backend JSON.
-  /// Backend sends `followers` (int) and `followingList` (array of IDs).
+  /// Backend sends `followers` (int), `following` (int) and `followingList`
+  /// (array of IDs). The list is left out for a private account you do not
+  /// follow, so the count comes from `following`; an older server sends only
+  /// the list, and the count is its length.
   factory UserModel.fromJson(Map<String, dynamic> json){
     final list =
         (json['followingList'] as List<dynamic>?)?.cast<String>() ?? [];
+    final following = json['following'];
     return UserModel(
       id: json['id'] ?? '',
       username: json['username'] ?? '',
@@ -117,7 +121,7 @@ class UserModel {
       losses: json['losses'] ?? 0 ,
       league: json['league'] ?? 'Unranked',
       followersCount: json['followers'] ?? 0,
-      followingCount: list.length,
+      followingCount: following is int ? following : list.length,
       followingList: list,
       bio: (json['bio'] as String?) ?? '',
       visibility: (json['visibility'] as String?) ?? 'public',
