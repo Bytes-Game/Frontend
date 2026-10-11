@@ -24,6 +24,7 @@ import 'package:myapp/pages/challenge_detail_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/widgets/create_burst.dart';
 
 /// When set, the open challenge is a normal post instead: not open to
 /// battles, with a caption and no opener.
@@ -31,6 +32,10 @@ bool closedPost = false;
 
 /// The owner's "Open to battles" switch: what each flip asked for.
 late List<bool> battlesSent;
+
+/// When set, the server says the viewer may not answer the open challenge,
+/// and this is why.
+String? refusal;
 
 Map<String, dynamic> challengeJson({required bool open, bool liked = false}) =>
     {
@@ -122,6 +127,8 @@ void fakeServer({required bool open, bool liked = false}) {
                   },
                 ],
           'votes': [],
+          'canAccept': refusal == null,
+          'leagueMessage': refusal ?? '',
         };
       } else if (p.endsWith('/comments')) {
         body = [
@@ -218,6 +225,7 @@ Future<void> openPage(
   bool liked = false,
   String me = '1',
   ThemeData? theme,
+  CreateChoice? acceptWith,
 }) async {
   t.view.physicalSize = const Size(400, 1400);
   t.view.devicePixelRatio = 1;
@@ -241,7 +249,10 @@ Future<void> openPage(
       value: dp,
       child: MaterialApp(
         theme: theme,
-        home: ChallengeDetailPage(challengeId: open ? '2' : '1'),
+        home: ChallengeDetailPage(
+          challengeId: open ? '2' : '1',
+          acceptWith: acceptWith,
+        ),
       ),
     ),
   );
@@ -306,6 +317,45 @@ void main() {
     await t.tap(find.byKey(const ValueKey('empty_seat')));
     await settle(t);
     expect(find.text('Record'), findsOneWidget);
+  });
+
+  group('a challenge you may not answer (too far from your level)', () {
+    const why = 'This challenge is from a Gold player. You\'re in Bronze, so '
+        'you can battle Bronze and Silver players, or friends at any level. '
+        'Win battles to move up.';
+    setUp(() => refusal = why);
+    tearDown(() => refusal = null);
+
+    testWidgets('no Accept button: the reason instead, and the seat says it '
+        'is not open to you', (t) async {
+      await openPage(t, open: true);
+      expect(find.byKey(const ValueKey('accept_button')), findsNothing);
+      expect(find.byKey(const ValueKey('accept_refused')), findsOneWidget);
+      expect(find.text("You can't answer this one"), findsOneWidget);
+      expect(find.text(why), findsOneWidget);
+      expect(
+        t.widget<Text>(find.byKey(const ValueKey('empty_seat_title'))).data,
+        'Not open to you',
+      );
+      expect(find.text('Your move'), findsNothing);
+      await t.tap(find.byKey(const ValueKey('empty_seat')));
+      await settle(t);
+      expect(find.text('Record'), findsNothing);
+    });
+
+    testWidgets('sent from a reel to answer straight away: the reason, not '
+        'the camera', (t) async {
+      await openPage(t, open: true, acceptWith: CreateChoice.photo);
+      expect(find.text('Answer with a photo'), findsNothing);
+      expect(find.widgetWithText(SnackBar, why), findsOneWidget);
+    });
+  });
+
+  testWidgets('sent from a reel to answer straight away, and allowed: it '
+      'goes straight to choosing', (t) async {
+    await openPage(t, open: true, acceptWith: CreateChoice.photo);
+    expect(find.text('Answer with a photo'), findsOneWidget);
+    expect(find.byKey(const ValueKey('accept_refused')), findsNothing);
   });
 
   group('a normal post, not open to battles', () {

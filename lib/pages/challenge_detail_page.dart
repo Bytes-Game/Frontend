@@ -72,6 +72,11 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
   /// [ChallengeDetailPage.acceptWith] runs once, not on every reload.
   bool _acceptStarted = false;
 
+  /// Why you may not answer this one, from the server, or '' when you may:
+  /// it is from a player too far from your level, or it is your own. Said
+  /// before you record, not after you have uploaded a whole video.
+  String _whyNot = '';
+
   /// The first comments, for the preview under the score.
   List<Map<String, dynamic>> _comments = [];
 
@@ -129,6 +134,12 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
         _loading = false;
         _liked = _challenge!.isLiked;
         _likes = _challenge!.likes;
+        _whyNot = data['canAccept'] == false
+            ? ((data['whyNot'] as String?) ?? '').trim()
+            : '';
+        if (data['canAccept'] == false && _whyNot.isEmpty) {
+          _whyNot = "You can't answer this challenge.";
+        }
       });
       _startAcceptIfAsked();
       _loadExtras();
@@ -175,6 +186,10 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
   /// the same steps as ever. A photo challenge is answered with a photo, so
   /// there is nothing to choose: straight to taking or choosing one.
   void _acceptFrom(Offset anchor) {
+    if (_whyNot.isNotEmpty) {
+      _toast(_whyNot);
+      return;
+    }
     if (_challenge?.isPhoto ?? false) {
       _onPickPhoto();
       return;
@@ -217,6 +232,14 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     final how = widget.acceptWith;
     if (how == null || _acceptStarted) return;
     _acceptStarted = true;
+    // Asked to record straight away from a reel, but not allowed: say why
+    // instead of opening the camera.
+    if (_whyNot.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _toast(_whyNot);
+      });
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) => _acceptWith(how));
   }
 
@@ -703,6 +726,7 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                         answer: isBattle ? _responses.first : null,
                         standings: _standings,
                         isOwner: isOwner,
+                        allowed: _whyNot.isEmpty,
                         onAccept: _acceptFrom,
                         onWatch: _watch,
                       ),
@@ -779,7 +803,17 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                           ),
                         ),
                       ],
-                      if (c.status == 'open' && !isOwner && c.openToBattles) ...[
+                      if (c.status == 'open' &&
+                          !isOwner &&
+                          c.openToBattles &&
+                          _whyNot.isNotEmpty) ...[
+                        const SizedBox(height: 16),
+                        _CannotAnswer(text: _whyNot),
+                      ],
+                      if (c.status == 'open' &&
+                          !isOwner &&
+                          c.openToBattles &&
+                          _whyNot.isEmpty) ...[
                         const SizedBox(height: 16),
                         Builder(
                           builder: (btn) => SizedBox(
@@ -887,6 +921,9 @@ class _Versus extends StatelessWidget {
   final ChallengeResponseModel? answer;
   final BattleStandings? standings;
   final bool isOwner;
+
+  /// Whether the viewer may take the empty seat. See _whyNot.
+  final bool allowed;
   final ValueChanged<Offset> onAccept;
   final void Function({required bool answer}) onWatch;
 
@@ -895,6 +932,7 @@ class _Versus extends StatelessWidget {
     required this.answer,
     required this.standings,
     required this.isOwner,
+    this.allowed = true,
     required this.onAccept,
     required this.onWatch,
   });
@@ -952,9 +990,14 @@ class _Versus extends StatelessWidget {
                   : _EmptySeat(
                       opponent: challenge.creatorUsername,
                       canTake: !isOwner &&
+                          allowed &&
                           challenge.status == 'open' &&
                           challenge.openToBattles,
                       closed: !challenge.openToBattles,
+                      notForYou: !isOwner &&
+                          !allowed &&
+                          challenge.status == 'open' &&
+                          challenge.openToBattles,
                       onTake: onAccept,
                     ),
             ),
@@ -1166,6 +1209,64 @@ class _VideoCard extends StatelessWidget {
       );
 }
 
+/// In place of "Accept challenge" when you may not answer: why, in the
+/// server's words, so nobody records a video only to be turned away.
+class _CannotAnswer extends StatelessWidget {
+  final String text;
+
+  const _CannotAnswer({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const ValueKey('accept_refused'),
+      padding: const EdgeInsets.fromLTRB(14, 14, 16, 14),
+      decoration: BoxDecoration(
+        color: _surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: _raised,
+            ),
+            child: const Icon(Icons.lock_outline_rounded,
+                color: Colors.white70, size: 18),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  "You can't answer this one",
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  text,
+                  style: const TextStyle(
+                      color: _muted, fontSize: 13.5, height: 1.35),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// The right-hand card on an open challenge: nobody has taken it yet.
 class _EmptySeat extends StatelessWidget {
   final String opponent;
@@ -1174,12 +1275,16 @@ class _EmptySeat extends StatelessWidget {
   /// A normal post: nobody can answer it, so the seat says so instead of
   /// waiting for a challenger who cannot come.
   final bool closed;
+
+  /// Open, but not to this viewer: the reason is under the score.
+  final bool notForYou;
   final ValueChanged<Offset> onTake;
 
   const _EmptySeat({
     required this.opponent,
     required this.canTake,
     this.closed = false,
+    this.notForYou = false,
     required this.onTake,
   });
 
@@ -1225,6 +1330,8 @@ class _EmptySeat extends StatelessWidget {
                         ? Icons.add_rounded
                         : closed
                         ? Icons.do_not_disturb_on_outlined
+                        : notForYou
+                        ? Icons.lock_outline_rounded
                         : Icons.hourglass_top_rounded,
                     color: canTake ? AppTheme.primary : _muted,
                     size: 28,
@@ -1236,6 +1343,8 @@ class _EmptySeat extends StatelessWidget {
                       ? 'Your move'
                       : closed
                       ? 'Not open to battles'
+                      : notForYou
+                      ? 'Not open to you'
                       : 'Waiting for a challenger',
                   key: const ValueKey('empty_seat_title'),
                   textAlign: TextAlign.center,
@@ -1251,6 +1360,8 @@ class _EmptySeat extends StatelessWidget {
                       ? 'Accept to take on $opponent'
                       : closed
                       ? 'A normal post. Nobody can answer it'
+                      : notForYou
+                      ? 'See why below'
                       : 'Anyone can accept it',
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: _muted, fontSize: 12.5),

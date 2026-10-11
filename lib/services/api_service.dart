@@ -808,6 +808,11 @@ class ApiService {
           'votes': (data['votes'] as List? ?? [])
               .map((j) => VoteSummary.fromJson(j))
               .toList(),
+          // Whether you may answer it, and if not, why, in words for you:
+          // your level, your own post, or a post nobody can answer. An
+          // older server sends neither, which means yes.
+          'canAccept': data['canAccept'] != false,
+          'whyNot': (data['leagueMessage'] as String?) ?? '',
         };
       }
       return null;
