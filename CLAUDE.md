@@ -92,3 +92,45 @@ If a test reads the source, strip the comment lines first.
 And watch for the reverse shape: a widget test that asserts something renders
 **nothing** will still pass if you break it so it renders nothing **forever**.
 When every test checks for absence, one of them has to check for presence.
+
+## Before release: what the owner still has to do
+
+**When the owner says they are about to release, give them this list,** in
+plain words, and check each item against the code first — some may already
+be done by then. Do not bring it up before they ask.
+
+1. **Change the Android app id.** It is still the template's
+   `com.example.devf` (`android/app/build.gradle.kts`, `applicationId` and
+   `namespace`). Google Play refuses any app whose id starts with
+   `com.example`, and the id can never change after the first upload, so pick
+   it carefully (for example `com.<yourname>.devf`). The iPhone id is the same
+   default (`PRODUCT_BUNDLE_IDENTIFIER` in `ios/Runner.xcodeproj`).
+   - Push notifications are tied to the id: register the new id as an app in
+     Firebase and use its new `FIREBASE_APP_ID`, or notifications stop.
+2. **Make the release signing key.** Without it, release builds are signed
+   with Flutter's shared debug key, and Google Play refuses those. The steps
+   are in the comment at the top of `android/app/build.gradle.kts`: make the
+   key once, write `android/key.properties`, keep both safe and out of git.
+   Losing the key means the app can never be updated on Play.
+3. **Help and privacy emails.** The Help and Privacy pages
+   (`lib/pages/static_content_pages.dart`) give support@devf.app and
+   privacy@devf.app. Make sure that domain is owned and those inboxes work,
+   or change the addresses.
+4. **Build with the real settings.** The release build needs these passed as
+   `--dart-define`s: `FIREBASE_API_KEY`, `FIREBASE_APP_ID`,
+   `FIREBASE_IOS_APP_ID`, `FIREBASE_PROJECT_ID`, `FIREBASE_SENDER_ID` (or push
+   notifications are off), and `SENTRY_DSN` (or crash reports go nowhere).
+   `API_BASE_URL` and `WS_BASE_URL` default to the Render server.
+5. **Version number.** `version:` in `pubspec.yaml` (now `1.0.0+1`). The
+   number after `+` must go up for every upload to the stores.
+6. **Put the server live first.** Deploy the server before, or together
+   with, the app build that needs it.
+7. **After the store listing exists:** set `APP_DOWNLOAD_URL` on Render to
+   the store link, so the shared profile and video web pages show a
+   "Get devf" button.
+8. **Optional, once there is a website:** build with
+   `--dart-define=SHARE_BASE_URL=https://<the site>` so shared links and QR
+   codes use it instead of the Render address.
+
+Not on this list on purpose: the admin password. The owner has said they
+will change it themselves and does not want reminding.
