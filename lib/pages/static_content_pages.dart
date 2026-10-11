@@ -172,7 +172,7 @@ class _HelpCenterPageState extends State<HelpCenterPage>
         _DocSection('Who can I battle?',
             'Players close to your points, so battles stay fair. How close '
                 'depends on your league: within 50 points in Bronze, 40 in '
-                'Silver, 30 in Gold, 20 in Platinum and 10 in Diamond and '
+                'Silver, 30 in Gold, 20 in Platinum, 10 in Diamond and 5 in '
                 'Ace. When two leagues meet, the higher one\'s rule counts. '
                 'As you get close to the next league, players in it come '
                 'within reach. Friends (people you follow who follow you '
