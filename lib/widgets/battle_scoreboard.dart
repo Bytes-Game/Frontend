@@ -223,11 +223,20 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
                 size: 22,
               ),
               const SizedBox(width: 8),
-              Text('Live score', style: tt.titleMedium),
+              // Shrinks before anything overflows on a narrow phone.
+              Flexible(
+                child: Text(
+                  'Live score',
+                  style: tt.titleMedium,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
               IconButton(
                 key: const ValueKey('battle_rules'),
                 tooltip: 'How the winner is decided',
-                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.all(6),
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                 icon: Icon(Icons.info_outline_rounded,
                     size: 18, color: cs.onSurface.withValues(alpha: 0.6)),
                 onPressed: () => showBattleRules(context),
