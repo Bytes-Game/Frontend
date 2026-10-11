@@ -1038,9 +1038,10 @@ void main() {
 
   testWidgets('too many points apart: Accept is switched off, and a tap says '
       'why instead of opening anything', (t) async {
-    const why = 'This challenge is from a Gold player with 1,200 points. You '
-        'have 1,000 points, so you can battle players from 950 to 1,050 '
-        'points, or friends at any level. Win battles to climb.';
+    const why = 'This challenge is from a Bronze player with 1,200 points, 200 '
+        'more than your 1,000. Bronze players battle within 50 points, so you '
+        "can't answer this one. Win battles to climb closer, or battle "
+        'friends at any level.';
     await openReel(t, {...short(), 'answerBlocked': why});
     final pill = find.byKey(const ValueKey('reel_accept'));
     expect(pill, findsOneWidget);

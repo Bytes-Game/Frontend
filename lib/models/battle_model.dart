@@ -457,18 +457,19 @@ class LeagueStep {
 
   const LeagueStep(this.league, this.next, this.progress, this.pointsToNext);
 
+  /// Every league is 1,000 points wide, from the 1,000 everybody starts on.
   static const _floors = <(String, int)>[
     ('Bronze', 0),
-    ('Silver', 1050),
-    ('Gold', 1150),
-    ('Platinum', 1300),
-    ('Diamond', 1500),
-    ('Ace', 1750),
+    ('Silver', 2000),
+    ('Gold', 3000),
+    ('Platinum', 4000),
+    ('Diamond', 5000),
+    ('Ace', 6000),
   ];
 
-  /// Bronze's progress is drawn from this rating, not from zero, so a new
-  /// player's bar means something.
-  static const _bronzeFloor = 900;
+  /// Bronze's progress is drawn from the starting points, not from zero, so
+  /// a new player's bar starts empty and fills on the way to Silver.
+  static const _bronzeFloor = 1000;
 
   factory LeagueStep.of(int rating, {required int decided}) {
     if (decided == 0) {

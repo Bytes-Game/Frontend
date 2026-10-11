@@ -31,11 +31,11 @@ UserModel user(String id, String name) => UserModel(
   followersCount: 12,
   followingCount: 4,
   league: 'Silver',
-  rating: 1080,
+  rating: 2080,
 );
 
 final summary = {
-  'rating': 1080,
+  'rating': 2080,
   'league': 'Silver',
   'wins': 3,
   'losses': 1,
@@ -121,18 +121,28 @@ void main() {
   group('the league ladder', () {
     test('matches the server\'s thresholds', () {
       expect(LeagueStep.of(1000, decided: 0).league, 'Unranked');
-      expect(LeagueStep.of(1000, decided: 1).league, 'Bronze');
-      final silver = LeagueStep.of(1080, decided: 4);
+      // A new player's bar starts empty: Bronze runs from the starting
+      // 1,000 points to Silver at 2,000.
+      final start = LeagueStep.of(1000, decided: 1);
+      expect(start.league, 'Bronze');
+      expect(start.next, 'Silver');
+      expect(start.pointsToNext, 1000);
+      expect(start.progress, 0);
+      // Every league is 1,000 points wide.
+      final silver = LeagueStep.of(2300, decided: 4);
       expect(silver.league, 'Silver');
       expect(silver.next, 'Gold');
-      expect(silver.pointsToNext, 70);
+      expect(silver.pointsToNext, 700);
       expect(silver.progress, closeTo(0.3, 0.001));
-      // Diamond is no longer the top: Ace is, 250 points further on.
-      final diamond = LeagueStep.of(1600, decided: 9);
+      expect(LeagueStep.of(1999, decided: 4).league, 'Bronze');
+      expect(LeagueStep.of(2000, decided: 4).league, 'Silver');
+      expect(LeagueStep.of(3000, decided: 4).league, 'Gold');
+      expect(LeagueStep.of(4000, decided: 4).league, 'Platinum');
+      final diamond = LeagueStep.of(5600, decided: 9);
       expect(diamond.league, 'Diamond');
       expect(diamond.next, 'Ace');
-      expect(diamond.pointsToNext, 150);
-      final top = LeagueStep.of(1750, decided: 30);
+      expect(diamond.pointsToNext, 400);
+      final top = LeagueStep.of(6000, decided: 30);
       expect(top.league, 'Ace');
       expect(top.next, isNull);
       expect(top.progress, 1);
@@ -154,11 +164,11 @@ void main() {
       await t.pumpAndSettle();
       expect(find.text('SILVER'), findsOneWidget);
       expect(
-        find.text('1080'),
+        find.text('2080'),
         findsOneWidget,
         reason: 'the rating counts up to its value',
       );
-      expect(find.text('70 points to Gold'), findsOneWidget);
+      expect(find.text('920 points to Gold'), findsOneWidget);
       expect(find.text('Wins'), findsOneWidget);
       expect(find.text('3'), findsOneWidget);
       expect(find.text('75%'), findsOneWidget);
@@ -310,7 +320,7 @@ void main() {
       expect(asked.single, contains('/api/v1/users/5/battles'));
       expect(find.text('@maya'), findsOneWidget);
       expect(find.text('SILVER'), findsOneWidget);
-      expect(find.text('1080'), findsOneWidget);
+      expect(find.text('2080'), findsOneWidget);
       expect(find.text('View profile'), findsOneWidget);
 
       // Dragging tilts it; letting go springs it back. Neither may throw.
@@ -413,12 +423,12 @@ void main() {
 
       // The record came from the server, and the tabs carry its counts.
       expect(asked.any((a) => a.contains('/users/5/battles?tab=live')), isTrue);
-      expect(find.text('Silver · 1080'), findsOneWidget);
+      expect(find.text('Silver · 2080'), findsOneWidget);
       expect(find.text('Won 3'), findsOneWidget);
       expect(find.text('Lost 1'), findsOneWidget);
       expect(find.text('Shorts'), findsOneWidget);
       // The record panel is on the page, and it and the intro slide in.
-      expect(find.text('70 points to Gold'), findsOneWidget);
+      expect(find.text('920 points to Gold'), findsOneWidget);
       expect(find.byType(ScrollReveal), findsNWidgets(2));
       // Another person's profile: no Liked or Saved.
       expect(find.text('Saved'), findsNothing);

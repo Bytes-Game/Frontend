@@ -320,9 +320,10 @@ void main() {
   });
 
   group('a challenge you may not answer (too many points apart)', () {
-    const why = 'This challenge is from a Gold player with 1,200 points. You '
-        'have 1,000 points, so you can battle players from 950 to 1,050 '
-        'points, or friends at any level. Win battles to climb.';
+    const why = 'This challenge is from a Bronze player with 1,200 points, 200 '
+        'more than your 1,000. Bronze players battle within 50 points, so you '
+        "can't answer this one. Win battles to climb closer, or battle "
+        'friends at any level.';
     setUp(() => refusal = why);
     tearDown(() => refusal = null);
 

@@ -162,18 +162,23 @@ class _HelpCenterPageState extends State<HelpCenterPage>
                 'feed can swipe left/right between the original and the '
                 'response, then tap the trophy to vote for their pick.'),
         _DocSection('What\'s a league?',
-            'Everybody starts on 1,000 points in Bronze. Win a battle and '
-                'you gain points; lose and you drop some. Your league moves '
-                'with your points, up and down: Silver at 1,050, Gold at '
-                '1,150, Platinum at 1,300, Diamond at 1,500 and Ace at '
-                '1,750. Each league is further away than the last.'),
+            'Everybody starts on 1,000 points in Bronze. Every league is '
+                '1,000 points: Silver starts at 2,000, Gold at 3,000, '
+                'Platinum at 4,000, Diamond at 5,000 and Ace at 6,000. Your '
+                'league moves with your points, up and down. Each league up '
+                'is harder: a win is worth less and a loss costs more. In '
+                'Bronze a win is +40 and a loss -10; in Ace a win is +15 and '
+                'a loss -35. A draw is half of each.'),
         _DocSection('Who can I battle?',
-            'Anybody within 50 points of you, above or below — so battles '
-                'stay fair. As you get close to the next league, players '
-                'in it come within reach. Friends (people you follow who '
-                'follow you back) can battle you at any level. When you '
-                'can\'t answer a challenge, its Accept button is switched '
-                'off and tells you why.'),
+            'Players close to your points, so battles stay fair. How close '
+                'depends on your league: within 50 points in Bronze, 40 in '
+                'Silver, 30 in Gold, 20 in Platinum and 10 in Diamond and '
+                'Ace. When two leagues meet, the higher one\'s rule counts. '
+                'As you get close to the next league, players in it come '
+                'within reach. Friends (people you follow who follow you '
+                'back) can battle you at any level. When you can\'t answer '
+                'a challenge, its Accept button is switched off and tells '
+                'you why.'),
         _DocSection('Why can\'t I edit my username?',
             'Username changes are rolling out — they need a uniqueness '
                 'check + audit log on the backend before we open them up. '
