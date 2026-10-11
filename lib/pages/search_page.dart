@@ -904,9 +904,11 @@ class _SearchPageState extends State<SearchPage>
           ),
           // People first: an account you looked at is usually the thing
           // you came back for.
-          for (final u in _recentAccounts.take(5))
+          for (final (i, u) in _recentAccounts.take(5).indexed)
             _HistoryRow(
               key: ValueKey('history_account_${u.id}'),
+              // Held: the same 3D card as a person in the results.
+              onLongPress: () => _peekProfile(u, i),
               leading: PhotoPeekHold(
                 username: u.username,
                 onTap: () => showPhotoPeek(context, u.username),
@@ -1453,6 +1455,10 @@ class _HistoryRow extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onRemove;
 
+  /// A hold on the row. A past account opens its 3D card; a past search has
+  /// none.
+  final VoidCallback? onLongPress;
+
   const _HistoryRow({
     super.key,
     required this.leading,
@@ -1461,6 +1467,7 @@ class _HistoryRow extends StatelessWidget {
     this.locked = false,
     required this.onTap,
     required this.onRemove,
+    this.onLongPress,
   });
 
   @override
@@ -1468,6 +1475,7 @@ class _HistoryRow extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     return InkWell(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 6, 4, 6),
         child: Row(

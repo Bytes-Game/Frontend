@@ -302,4 +302,25 @@ void main() {
       expect(find.byKey(const ValueKey('photo_peek')), findsNothing);
     });
   });
+
+  testWidgets('holding an account in the history opens its 3D card, the same '
+      'as one in the results', (t) async {
+    await openHistory(t);
+    expect(find.text('Maya Singh'), findsOneWidget);
+    final finger = await t.startGesture(t.getCenter(find.text('Maya Singh')));
+    await t.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+    await finger.up();
+    await settle(t);
+    expect(find.byType(ProfileCard3D), findsOneWidget);
+  });
+
+  testWidgets('holding a past search opens no card', (t) async {
+    await openHistory(t);
+    final finger = await t.startGesture(t.getCenter(find.text('dance')));
+    await t.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+    await finger.up();
+    await settle(t);
+    expect(find.text('dance'), findsOneWidget);
+    expect(find.byType(ProfileCard3D), findsNothing);
+  });
 }
