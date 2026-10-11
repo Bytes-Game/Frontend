@@ -38,26 +38,61 @@ class AuthProvider with ChangeNotifier {
   /// minute to wake, so an unreachable server is routine — and telling
   /// someone their password is wrong when the server simply never answered
   /// sends them off resetting a password that was fine.
-  Future<AuthFailure?> login(
+  Future<AuthResult?> login(
       BuildContext context, String username, String password) async {
     final result = await ApiService.login(username, password);
-    if (!result.ok) return result.failure ?? AuthFailure.unreachable;
+    if (!result.ok) {
+      return result.failure == null
+          ? const AuthResult.failed(AuthFailure.unreachable)
+          : result;
+    }
     // ignore: use_build_context_synchronously
     await _completeAuth(context, result.data!);
     return null;
   }
 
   /// Attempts signup. On success the user is authenticated immediately
-  /// (the backend response mirrors /login) and flagged for onboarding.
-  Future<AuthFailure?> signup(
-      BuildContext context, String username, String password) async {
-    final result = await ApiService.signup(username, password);
-    if (!result.ok) return result.failure ?? AuthFailure.unreachable;
+  /// (the backend response mirrors /login) and flagged for onboarding, and
+  /// this answers null. Otherwise it answers the refusal, with the box it
+  /// is about when the server said.
+  Future<AuthResult?> signup(BuildContext context, SignupDetails details) async {
+    final result = await ApiService.signup(details);
+    if (!result.ok) {
+      return result.failure == null
+          ? const AuthResult.failed(AuthFailure.unreachable)
+          : result;
+    }
     // ignore: use_build_context_synchronously
     await _completeAuth(context, result.data!);
     _needsOnboarding = true;
     notifyListeners();
     return null;
+  }
+
+  /// Set by [startNewAccount]: the sign-in screen opens sign-up straight
+  /// away the next time it appears.
+  bool _openSignupNext = false;
+
+  /// Whether the sign-in screen should open sign-up now. Answers true once.
+  bool takeOpenSignup() {
+    final open = _openSignupNext;
+    _openSignupNext = false;
+    return open;
+  }
+
+  /// "Create a new account" from Settings: sign out of this one, then the
+  /// sign-in screen opens sign-up.
+  void startNewAccount(BuildContext context) {
+    _openSignupNext = true;
+    logout(context);
+  }
+
+  /// After a password change: keep the fresh sign-in the server gave this
+  /// phone, so it stays signed in while every other phone is signed out.
+  Future<void> keepFreshSignIn(String token) async {
+    ApiService.authToken = token;
+    final stored = await SessionStore.loadFresh();
+    if (stored != null) await SessionStore.save(token, stored.userJson);
   }
 
   /// Marks the interest-picker step done (completed OR skipped).

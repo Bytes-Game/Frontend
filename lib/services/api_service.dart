@@ -258,13 +258,67 @@ enum AuthFailure {
 /// Outcome of a login or signup attempt: the session payload on success, or
 /// the reason it failed.
 class AuthResult {
-  const AuthResult.success(this.data) : failure = null;
-  const AuthResult.failed(this.failure) : data = null;
+  const AuthResult.success(this.data)
+      : failure = null,
+        field = null,
+        message = null;
+  const AuthResult.failed(this.failure, {this.field, this.message})
+      : data = null;
 
   final Map<String, dynamic>? data;
   final AuthFailure? failure;
 
+  /// Which box on the form the server's refusal is about (username, email,
+  /// password, birthDate, fullName, terms, currentPassword, newPassword),
+  /// when it said; [message] is what it said, in words for the person.
+  final String? field;
+  final String? message;
+
   bool get ok => data != null;
+}
+
+/// Everything the sign-up form sends.
+class SignupDetails {
+  const SignupDetails({
+    required this.username,
+    required this.password,
+    required this.email,
+    required this.birthDate,
+    required this.acceptTerms,
+    this.fullName = '',
+  });
+
+  final String username;
+  final String password;
+  final String fullName;
+  final String email;
+
+  /// YYYY-MM-DD.
+  final String birthDate;
+  final bool acceptTerms;
+
+  Map<String, dynamic> toJson() => {
+        'username': username,
+        'password': password,
+        'fullName': fullName,
+        'email': email,
+        'birthDate': birthDate,
+        'acceptTerms': acceptTerms,
+      };
+}
+
+/// The live username check's answer: whether the name is allowed at all,
+/// whether it is free, and if not, why.
+class UsernameCheck {
+  const UsernameCheck({
+    required this.valid,
+    required this.available,
+    this.reason,
+  });
+
+  final bool valid;
+  final bool available;
+  final String? reason;
 }
 
 class ApiService {
@@ -292,27 +346,50 @@ class ApiService {
     authToken = null;
   }
 
-  /// POST /signup → same shape as /login ({user, token, allUsers}).
-  /// Returns null on failure; [error] via the second element when the
-  /// server gave a usable message (taken username, weak password).
-  static Future<AuthResult> signup(String username, String password) async {
-    return _authenticate('$_base/signup', username, password);
+  /// POST /signup → same shape as /login ({user, token, allUsers}). A
+  /// refusal says which box it is about ([AuthResult.field]) and why.
+  static Future<AuthResult> signup(SignupDetails details) async {
+    return _post('$_base/signup', details.toJson());
   }
 
-  /// GET /signup/available — live availability for the signup form.
-  static Future<bool> isUsernameAvailable(String username) async {
+  /// GET /signup/available — the sign-up form's live username check. Not
+  /// knowing (no connection) answers "allowed, not known to be free", which
+  /// keeps the Create button off rather than pretending.
+  static Future<UsernameCheck> checkUsername(String username) async {
     try {
       final res = await _authHttp.get(Uri.parse(
           '$_base/signup/available?username=${Uri.encodeQueryComponent(username)}'));
       if (res.statusCode == 200) {
         final body = json.decode(res.body) as Map<String, dynamic>;
-        return body['available'] == true;
+        final reason = '${body['reason'] ?? ''}'.trim();
+        return UsernameCheck(
+          valid: body['valid'] == true,
+          available: body['available'] == true,
+          reason: reason.isEmpty ? null : reason,
+        );
       }
-      return false;
+      return const UsernameCheck(
+          valid: true,
+          available: false,
+          reason: "Couldn't check that name right now. Try again.");
     } catch (e) {
-      _unreadable('isUsernameAvailable', e);
-      return false;
+      _unreadable('checkUsername', e);
+      return const UsernameCheck(
+          valid: true,
+          available: false,
+          reason: "Couldn't check that name — check your connection.");
     }
+  }
+
+  /// POST /api/v1/auth/password — change the password. Every other phone
+  /// is signed out; this one gets a fresh sign-in, kept here, in
+  /// [AuthResult.data]['token'].
+  static Future<AuthResult> changePassword(
+      String currentPassword, String newPassword) async {
+    return _post('$_base/api/v1/auth/password', {
+      'currentPassword': currentPassword,
+      'newPassword': newPassword,
+    });
   }
 
   /// POST /api/v1/auth/refresh — mint a fresh token for the current
@@ -371,28 +448,55 @@ class ApiService {
   /// same distinction between "refused" and "never got an answer".
   static Future<AuthResult> _authenticate(
       String url, String username, String password) async {
+    return _post(url, {'username': username, 'password': password});
+  }
+
+  /// Posts [body] and reads the answer the way every sign-in-shaped call
+  /// needs: a token on success, kept for every request after; a refusal
+  /// with the box it is about when the server said; and "never answered"
+  /// told apart from "said no".
+  static Future<AuthResult> _post(String url, Map<String, dynamic> body) async {
     try {
       final res = await _authHttp.post(
         Uri.parse(url),
         headers: {'Content-Type': 'application/json'},
-        body: json.encode({'username': username, 'password': password}),
+        body: json.encode(body),
       );
-      // login answers 200, signup answers 201.
+      // login and a password change answer 200, signup answers 201.
       if (res.statusCode == 200 || res.statusCode == 201) {
         final data = json.decode(res.body) as Map<String, dynamic>;
         // Capture the session token so every subsequent request is authorized.
-        authToken = data['token'] as String?;
+        final token = data['token'] as String?;
+        if (token != null && token.isNotEmpty) authToken = token;
         return AuthResult.success(data);
       }
       // Only a 4xx from the server is a statement about the credentials.
       if (res.statusCode >= 400 && res.statusCode < 500) {
-        return const AuthResult.failed(AuthFailure.rejected);
+        String? field, message;
+        try {
+          final said = json.decode(res.body);
+          if (said is Map) {
+            field = said['field'] as String?;
+            message = said['error'] as String?;
+          }
+        } catch (_) {
+          // A plain-text refusal (an older server): no box to point at.
+        }
+        // Too many tries: the server's own words for it are for programs
+        // ("rate limited"), so the app says it for people.
+        if (res.statusCode == 429) {
+          field = null;
+          message = 'Too many tries. Please wait a few minutes and try '
+              'again.';
+        }
+        return AuthResult.failed(AuthFailure.rejected,
+            field: field, message: message);
       }
       // 5xx, a proxy error, or a Render cold-start holding page: the server is
       // unwell and has told us nothing about the password.
       return const AuthResult.failed(AuthFailure.serverError);
     } catch (e) {
-      _unreadable('_authenticate', e);
+      _unreadable('_post', e);
       // Timeout, DNS, connection refused, malformed body. Never evidence that
       // the credentials were wrong.
       return const AuthResult.failed(AuthFailure.unreachable);

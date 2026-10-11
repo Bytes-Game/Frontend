@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/pages/change_password_page.dart';
 import 'package:myapp/pages/free_up_space_page.dart';
 import 'package:myapp/pages/notification_settings_page.dart';
 import 'package:myapp/pages/preferences_pages.dart';
@@ -97,6 +98,37 @@ class _SettingsPageState extends State<SettingsPage>
     Navigator.of(context).popUntil((r) => r.isFirst);
     // ignore: use_build_context_synchronously
     auth.logout(context);
+  }
+
+  /// Make another account: say that this one is signed out first, then
+  /// the sign-in screen opens straight on to sign-up.
+  Future<void> _newAccount() async {
+    final user = Provider.of<DataProvider>(context, listen: false).user;
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Create a new account?'),
+        content: Text("You'll be logged out of @${user?.username ?? ''} "
+            'first. You can sign back in to it any time.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            key: const ValueKey('new_account_confirm'),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    EventTracker.instance.trackTap(target: 'new_account', pageName: pageName);
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    // ignore: use_build_context_synchronously
+    auth.startNewAccount(context);
   }
 
   /// Delete the account, for good. App stores require it to be possible
@@ -260,6 +292,13 @@ class _SettingsPageState extends State<SettingsPage>
                 value: user?.twoFactorEnabled == true ? 'On' : 'Off',
                 onTap: () => _open(const TwoFactorSetupPage()),
               ),
+              SettingsTile(
+                key: const ValueKey('settings_password'),
+                icon: Icons.key_rounded,
+                color: const Color(0xFFFF9F0A),
+                title: 'Change password',
+                onTap: () => _open(const ChangePasswordPage()),
+              ),
             ],
           ),
           SettingsGroup(
@@ -356,6 +395,13 @@ class _SettingsPageState extends State<SettingsPage>
           ),
           SettingsGroup(
             children: [
+              SettingsTile(
+                key: const ValueKey('settings_new_account'),
+                icon: Icons.person_add_alt_1_rounded,
+                color: AppTheme.primary,
+                title: 'Create a new account',
+                onTap: _newAccount,
+              ),
               SettingsTile(
                 key: const ValueKey('settings_logout'),
                 icon: Icons.logout_rounded,

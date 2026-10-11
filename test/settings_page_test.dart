@@ -15,6 +15,7 @@ import 'package:provider/provider.dart';
 
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/blocked_users_page.dart';
+import 'package:myapp/pages/change_password_page.dart';
 import 'package:myapp/pages/free_up_space_page.dart';
 import 'package:myapp/pages/notification_settings_page.dart';
 import 'package:myapp/pages/preferences_pages.dart';
@@ -148,6 +149,7 @@ void main() {
       'settings_history': WatchHistoryPage,
       'settings_privacy': PrivacyPage,
       'settings_2fa': TwoFactorSetupPage,
+      'settings_password': ChangePasswordPage,
       'settings_notifications': NotificationSettingsPage,
       'settings_appearance': AppearancePage,
       'settings_space': FreeUpSpacePage,
