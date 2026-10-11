@@ -743,20 +743,34 @@ class ApiService {
   /// file that came off the camera.
   static Future<List<ChallengeModel>> getUserChallenges(
       String userId, {int limit = 50, int offset = 0}) async {
-    if (userId.isEmpty) return const [];
+    final maps =
+        await getUserChallengeMaps(userId, limit: limit, offset: offset);
+    return maps == null
+        ? const []
+        : [for (final m in maps) ChallengeModel.fromJson(m)];
+  }
+
+  /// [getUserChallenges] exactly as the server sent each video, so your own
+  /// can be written down on the phone. Null when the server could not be
+  /// asked — not the same as somebody with no posts.
+  static Future<List<Map<String, dynamic>>?> getUserChallengeMaps(
+      String userId, {int limit = 50, int offset = 0}) async {
+    if (userId.isEmpty) return null;
     try {
       final res = await _authHttp.get(
         Uri.parse('$_base/api/v1/users/$userId/challenges'
             '?limit=$limit&offset=$offset'),
       );
       if (res.statusCode == 200) {
-        final data = json.decode(res.body) as List;
-        return data.map((j) => ChallengeModel.fromJson(j)).toList();
+        return [
+          for (final j in json.decode(res.body) as List)
+            if (j is Map<String, dynamic>) j,
+        ];
       }
-      return const [];
+      return null;
     } catch (e) {
       _unreadable('getUserChallenges', e);
-      return const [];
+      return null;
     }
   }
 
@@ -1532,6 +1546,54 @@ class ApiService {
       out.add(ch);
     }
     return out;
+  }
+
+  /// The Search grid's next batch: the best videos it does not hold yet.
+  ///
+  /// The grid names every video it already has, and the server answers with
+  /// the best of the rest — nothing at all once the grid holds every video
+  /// there is, which is where the grid stops. A POST, because a list of a few
+  /// hundred ids does not belong in an address. Nothing is counted as
+  /// watched, the same as the first batch.
+  ///
+  /// [ok] is false when the server could not be asked. That is not the end
+  /// of the grid, and the grid asks again on the next scroll.
+  static Future<({List<Map<String, dynamic>> items, bool ok})> getExploreMore(
+    String userId, {
+    required List<String> held,
+    int limit = 30,
+  }) async {
+    try {
+      final page = held.length ~/ limit + 1;
+      final url = '$_base/api/v1/feed/explore?userId=$userId&page=$page'
+          '&limit=$limit&markShown=false$_deviceFitQuery';
+      final res = await _authHttp
+          .post(
+            Uri.parse(url),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'exclude': [
+                for (final id in held)
+                  if (int.tryParse(id) != null) int.parse(id),
+              ],
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
+      if (res.statusCode != 200) return (items: <Map<String, dynamic>>[], ok: false);
+      final body = json.decode(res.body);
+      final out = <Map<String, dynamic>>[];
+      for (final raw in (body is Map ? body['items'] as List? : null) ?? const []) {
+        if (raw is! Map<String, dynamic> || raw['type'] != 'challenge') continue;
+        final ch = raw['challenge'];
+        if (ch is! Map<String, dynamic>) continue;
+        if ('${ch['videoUrl'] ?? ''}'.isEmpty) continue;
+        out.add(ch);
+      }
+      return (items: out, ok: true);
+    } catch (e) {
+      _unreadable('getExploreMore', e);
+      return (items: <Map<String, dynamic>>[], ok: false);
+    }
   }
 
   /// GET /api/v1/feed/explore — discovery-first, non-personalized feed.

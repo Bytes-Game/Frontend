@@ -3,7 +3,6 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/models/battle_model.dart';
@@ -23,6 +22,9 @@ import 'package:myapp/services/create_flow.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/profile_cache.dart';
+import 'package:myapp/services/profile_photo_flow.dart';
+import 'package:myapp/services/share_links.dart';
+import 'package:myapp/pages/share_card_page.dart';
 import 'package:myapp/services/upload_job_manager.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/chat_media_widgets.dart' show ChatPhotoViewer;
@@ -185,6 +187,25 @@ class _ProfilePageState extends State<ProfilePage>
       j.postedAs != null &&
       j.state.value.stage != UploadJobStage.done;
 
+  /// Your new photo is on its way up.
+  bool _photoBusy = false;
+
+  /// Tap on your own picture: take, choose or remove — and you stay on your
+  /// profile, watching the new photo arrive.
+  Future<void> _changePhoto() async {
+    if (_photoBusy) return;
+    EventTracker.instance.trackTap(
+      target: 'profile_photo_tap',
+      pageName: pageName,
+    );
+    await ProfilePhotoFlow.chooseAndChange(
+      context,
+      onBusy: (busy) {
+        if (mounted) setState(() => _photoBusy = busy);
+      },
+    );
+  }
+
   // ── Network ────────────────────────────────────────────────────────
 
   Future<void> _fetchSavedChallenges() async {
@@ -237,12 +258,17 @@ class _ProfilePageState extends State<ProfilePage>
 
   Future<void> _fetchMyChallenges() async {
     final uid = widget.user.id;
+    final own =
+        Provider.of<DataProvider>(context, listen: false).user?.id == uid;
     // Placeholders only when there is nothing kept to show meanwhile.
     if (ProfileCache.instance.shorts(uid) == null) {
       setState(() => _isLoadingMyChallenges = true);
     }
-    final list = await ApiService.getUserChallenges(uid);
+    final raw = await ApiService.getUserChallengeMaps(uid);
+    final list = [for (final m in raw ?? const []) ChallengeModel.fromJson(m)];
     ProfileCache.instance.keepShorts(uid, list);
+    // Your own, written down for an instant open next time the app starts.
+    if (own && raw != null) unawaited(ProfileCache.instance.keepOwn(uid, raw));
     if (mounted) {
       setState(() {
         _myChallenges = List.of(ProfileCache.instance.shorts(uid) ?? list);
@@ -379,17 +405,24 @@ class _ProfilePageState extends State<ProfilePage>
   /// clipboard. We use the clipboard rather than `share_plus` so we
   /// don't pull a new package in for one feature; once we ship
   /// share_plus for other surfaces this can be upgraded in place.
+  /// The share page: a QR code of this profile, its link, Copy and Save.
+  /// The link opens the profile on a web page anybody can see.
   Future<void> _shareProfile() async {
-    final url = 'https://devf.app/u/${widget.user.username}';
-    final text = '@${widget.user.username} on devf — $url';
-    await Clipboard.setData(ClipboardData(text: text));
-    if (!mounted) return;
     EventTracker.instance.trackTap(
-      target: 'profile_share_copy_link',
+      target: 'profile_share_open',
       pageName: pageName,
       params: {'profileUserId': widget.user.id},
     );
-    _toast('Profile link copied to clipboard');
+    final u = widget.user;
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => ShareCardPage(
+        link: ShareLinks.profile(u.username),
+        title: '@${u.username}',
+        subtitle: u.fullName,
+        photoOf: u.username,
+        what: 'profile',
+      ),
+    ));
   }
 
   void _openEditProfile() {
@@ -532,6 +565,9 @@ class _ProfilePageState extends State<ProfilePage>
               leading: widget.isEmbedded ? null : const BackButton(),
               // "Add bio" sits right under your name while you have none.
               onAddBio: isOwn ? _openEditProfile : null,
+              // Your own picture: tap to change it, right here.
+              onAvatarTap: isOwn ? _changePhoto : null,
+              photoBusy: _photoBusy,
               // Everything that used to be a row of buttons under the
               // stats lives up here as icons, so the page below is all
               // about the person.

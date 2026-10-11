@@ -4,6 +4,7 @@ import 'package:myapp/models/battle_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/league_badge.dart';
+import 'package:myapp/widgets/photo_peek.dart';
 
 /// The top of a profile, laid out the way a contact card is: the picture on
 /// the left, and beside it the name with the profile's tag, the handle and
@@ -31,6 +32,13 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
   /// Your own profile with no bio yet: shows "Add bio" under the name.
   final VoidCallback? onAddBio;
 
+  /// A tap on the picture. On your own profile: change it. Holding the
+  /// picture always shows it big, on anybody's profile.
+  final VoidCallback? onAvatarTap;
+
+  /// Your new photo is on its way up: a spinner over the picture.
+  final bool photoBusy;
+
   ArenaHeroHeader({
     required this.user,
     required this.record,
@@ -38,6 +46,8 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
     this.leading,
     this.actions = const [],
     this.onAddBio,
+    this.onAvatarTap,
+    this.photoBusy = false,
   });
 
   static const double barHeight = kToolbarHeight;
@@ -125,11 +135,67 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
               child: ColoredBox(color: fg.withValues(alpha: 0.15)),
             ),
           ),
-          // The picture, with a thin ring in the league's colour.
+          // The picture, with a thin ring in the league's colour. Hold it to
+          // see it big; on your own profile, tap it to change it.
           Positioned(
             left: cx - r,
             top: cy - r,
-            child: ArenaAvatar(name: user.username, size: r * 2, ring: wash),
+            child: PhotoPeekHold(
+              username: user.username,
+              onTap: onAvatarTap,
+              child: SizedBox(
+                width: r * 2,
+                height: r * 2,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    ArenaAvatar(name: user.username, size: r * 2, ring: wash),
+                    if (photoBusy)
+                      Positioned.fill(
+                        child: DecoratedBox(
+                          key: const ValueKey('profile_photo_busy'),
+                          decoration: const BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Color(0x88000000),
+                          ),
+                          child: Center(
+                            child: SizedBox(
+                              width: r * 0.6,
+                              height: r * 0.6,
+                              child: const CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    // Your own: a small camera, so it is plain that a tap
+                    // changes it. Gone as the header closes.
+                    if (onAvatarTap != null && !photoBusy)
+                      Positioned(
+                        right: -2,
+                        bottom: -2,
+                        child: Opacity(
+                          opacity: wordsOpacity,
+                          child: Container(
+                            key: const ValueKey('profile_photo_change_badge'),
+                            width: 24,
+                            height: 24,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: const Color(0xFF0A84FF),
+                              border: Border.all(color: page, width: 2),
+                            ),
+                            child: const Icon(Icons.photo_camera_rounded,
+                                size: 12, color: Colors.white),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
           ),
           // Beside the picture: name, handle and league, bio or "Add bio".
           Positioned(
@@ -304,5 +370,7 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
       old.topInset != topInset ||
       old.actions != actions ||
       old.leading != leading ||
-      old.onAddBio != onAddBio;
+      old.onAddBio != onAddBio ||
+      old.onAvatarTap != onAvatarTap ||
+      old.photoBusy != photoBusy;
 }

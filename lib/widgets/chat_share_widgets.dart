@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/pages/share_card_page.dart';
+import 'package:myapp/services/share_links.dart';
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
@@ -526,10 +528,14 @@ class _ShareSheetState extends State<ShareSheet> {
     );
   }
 
+  /// The video's own page, which plays it for anybody — not the raw file
+  /// it used to copy, a bare download with nothing about who made it.
   void _copyLink() {
     final c = widget.challenge;
     Clipboard.setData(
-      ClipboardData(text: '${c.title} by @${c.creatorUsername}\n${c.videoUrl}'),
+      ClipboardData(
+        text: '${c.title} by @${c.creatorUsername}\n${ShareLinks.video(c.id)}',
+      ),
     );
     Navigator.of(context).pop();
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
@@ -539,6 +545,22 @@ class _ShareSheetState extends State<ShareSheet> {
         duration: Duration(seconds: 2),
       ),
     );
+  }
+
+  /// The share page for this video: its QR code and link.
+  void _openQr() {
+    final c = widget.challenge;
+    final nav = Navigator.of(context);
+    nav.pop();
+    nav.push(MaterialPageRoute(
+      builder: (_) => ShareCardPage(
+        link: ShareLinks.video(c.id),
+        title: c.title.isEmpty ? 'A video by @${c.creatorUsername}' : c.title,
+        subtitle: 'by @${c.creatorUsername}',
+        photoOf: c.creatorUsername,
+        what: 'video',
+      ),
+    ));
   }
 
   @override
@@ -686,6 +708,13 @@ class _ShareSheetState extends State<ShareSheet> {
                     icon: Icons.link_rounded,
                     label: 'Copy link',
                     onTap: _copyLink,
+                  ),
+                  const SizedBox(width: 18),
+                  _Action(
+                    key: const ValueKey('share_qr_code'),
+                    icon: Icons.qr_code_2_rounded,
+                    label: 'QR code',
+                    onTap: _openQr,
                   ),
                 ],
               ),

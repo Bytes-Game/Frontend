@@ -127,6 +127,16 @@ class ExploreGridCache {
   /// source would make it load again.
   final Map<String, String> _posterFiles = {};
 
+  /// Pictures another screen kept on the phone last run (your profile's
+  /// grid), shown from there by every grid tile the same way. Only before
+  /// the tiles draw: see [_posterFiles].
+  void addKeptPosters(Map<String, String> urlToPath) =>
+      _posterFiles.addAll(urlToPath);
+
+  /// The address [url]'s picture is kept under, so another screen keeping
+  /// its own grid names its files the same way.
+  static String posterFileName(String url) => '${_hash(url)}.img';
+
   /// No list, or one older than [maxAge].
   bool get isStale {
     final at = _fetchedAt;
@@ -176,6 +186,58 @@ class ExploreGridCache {
       if (identical(_inFlight, request)) _inFlight = null;
     }).ignore();
     return request;
+  }
+
+  /// The list the server last said holds every video. Coming back to Search
+  /// on that same list does not ask again; any new list starts over.
+  List<ChallengeModel>? _endedWith;
+
+  /// Whether [list] is the one the server said holds every video.
+  bool reachedEnd(List<ChallengeModel> list) =>
+      list.isNotEmpty && identical(list, _endedWith);
+
+  /// The next batch for a grid holding [held]: the best videos it does not
+  /// have yet, added to the end.
+  ///
+  /// [end] is true when the server had nothing left to add: the grid holds
+  /// every video there is, and it simply stops there. A request that failed
+  /// is not the end — [added] is 0 and [end] false, and the grid asks again.
+  ///
+  /// When [held] is the list kept here, the longer list is kept instead, so
+  /// coming back to Search shows the grid as far down as it was scrolled.
+  Future<({List<ChallengeModel> list, int added, bool end})> more(
+    String userId,
+    List<ChallengeModel> held,
+  ) async {
+    final generation = _generation;
+    final answer = await ApiService.getExploreMore(
+      userId,
+      held: [for (final c in held) c.id],
+    );
+    if (!answer.ok) {
+      debugPrint('[search_page] grid: could not fetch the next videos; '
+          'asking again on the next scroll');
+      return (list: held, added: 0, end: false);
+    }
+    final have = {for (final c in held) c.id};
+    final added = <ChallengeModel>[];
+    for (final m in answer.items) {
+      final c = ChallengeModel.fromJson(m);
+      if (c.id.isNotEmpty && have.add(c.id)) added.add(c);
+    }
+    if (added.isEmpty) {
+      debugPrint('[search_page] grid: every video is in it '
+          '(${held.length}); it stops here');
+      if (generation == _generation && identical(held, _items)) {
+        _endedWith = held;
+      }
+      return (list: held, added: 0, end: true);
+    }
+    final list = List<ChallengeModel>.unmodifiable([...held, ...added]);
+    if (generation == _generation && identical(held, _items)) _items = list;
+    debugPrint('[search_page] grid: ${added.length} more videos, '
+        '${list.length} in all');
+    return (list: list, added: added.length, end: false);
   }
 
   /// The list, and the videos exactly as the server sent them so they can
@@ -234,6 +296,7 @@ class ExploreGridCache {
   /// written down on the phone goes too.
   void clear() {
     _generation++;
+    _endedWith = null;
     _items = const [];
     _fetchedAt = null;
     _inFlight = null;
@@ -354,6 +417,9 @@ class ExploreGridCache {
     return h.toRadixString(16).padLeft(8, '0');
   }
 
+  /// Fetches one picture to keep on the phone; null when it could not.
+  static Future<Uint8List?> fetchPicture(String url) => _download(url);
+
   static Future<Uint8List?> _download(String url) async {
     try {
       final res =
@@ -375,6 +441,7 @@ class ExploreGridCache {
   @visibleForTesting
   void debugReset() {
     _generation++;
+    _endedWith = null;
     _items = const [];
     _fetchedAt = null;
     _inFlight = null;

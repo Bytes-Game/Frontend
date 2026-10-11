@@ -178,9 +178,10 @@ class _VideoAboutRowState extends State<VideoAboutRow> {
           : 'Written by AI from what is said and shown in the video. It can '
               'be wrong.';
     } else if (a.topics.isNotEmpty) {
-      text = 'Looks like: ${a.topics.take(5).join(', ')}.';
-      note = 'AI could not sum this one up, so these are its best words for '
-          'it. They can be wrong.';
+      // Said plainly, the way the sentence is: what it is about, not how
+      // sure anybody is. The note below already says AI wrote it.
+      text = 'This video is about ${listInWords(a.topics.take(5).toList())}.';
+      note = 'Written by AI from what happens in the video. It can be wrong.';
     } else if (!a.looked) {
       text = 'This video is still being looked at.';
       note = 'Check back in a few minutes.';
@@ -211,4 +212,12 @@ class _VideoAboutRowState extends State<VideoAboutRow> {
       ),
     );
   }
+}
+
+/// "a", "a and b", "a, b and c".
+@visibleForTesting
+String listInWords(List<String> words) {
+  final w = [for (final x in words) x.trim()]..removeWhere((x) => x.isEmpty);
+  if (w.length <= 1) return w.join();
+  return '${w.sublist(0, w.length - 1).join(', ')} and ${w.last}';
 }

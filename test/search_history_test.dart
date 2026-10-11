@@ -6,6 +6,7 @@
 
 import 'dart:convert';
 
+import 'package:flutter/gestures.dart' show kLongPressTimeout;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -20,6 +21,7 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
+import 'package:myapp/widgets/profile_card_3d.dart';
 
 http.Response jsonBody(Object o, [int status = 200]) => http.Response.bytes(
   utf8.encode(json.encode(o)),
@@ -245,5 +247,59 @@ void main() {
     await openHistory(t);
     expect(find.text('Recent'), findsOneWidget);
     expect(find.text('Trending'), findsNothing);
+  });
+
+  group("a person's picture in the results", () {
+    Future<void> searchLeo(WidgetTester t) async {
+      await openHistory(t);
+      await t.enterText(find.byType(TextField), 'le');
+      await t.pump(const Duration(milliseconds: 600));
+      await settle(t);
+      expect(find.byKey(const ValueKey('photo_hold_leo')), findsOneWidget);
+    }
+
+    Future<void> hold(WidgetTester t, Finder f) async {
+      final finger = await t.startGesture(t.getCenter(f));
+      await t.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+      await t.pump(const Duration(milliseconds: 300));
+      await finger.up();
+    }
+
+    testWidgets('a tap on the picture shows the photo big; a tap closes it',
+        (t) async {
+      await searchLeo(t);
+      await t.tap(find.byKey(const ValueKey('photo_hold_leo')));
+      await settle(t);
+      expect(find.byKey(const ValueKey('photo_peek')), findsOneWidget);
+      expect(find.byType(ProfilePage), findsNothing,
+          reason: 'the picture is not the way into the profile');
+      expect(find.byType(ProfileCard3D), findsNothing);
+      await t.tap(find.byKey(const ValueKey('photo_peek_close')));
+      await settle(t);
+      expect(find.byKey(const ValueKey('photo_peek')), findsNothing);
+    });
+
+    testWidgets('holding anywhere else on the row: the 3D card, as before',
+        (t) async {
+      await searchLeo(t);
+      await hold(t, find.text('Silver'));
+      await settle(t);
+      expect(find.byType(ProfileCard3D), findsOneWidget);
+      expect(find.byKey(const ValueKey('photo_peek')), findsNothing);
+    });
+
+    testWidgets('holding the picture shows the photo, not the 3D card',
+        (t) async {
+      await searchLeo(t);
+      final finger = await t.startGesture(
+          t.getCenter(find.byKey(const ValueKey('photo_hold_leo'))));
+      await t.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(find.byKey(const ValueKey('photo_peek')), findsOneWidget);
+      expect(find.byType(ProfileCard3D), findsNothing);
+      await finger.up();
+      await settle(t);
+      expect(find.byKey(const ValueKey('photo_peek')), findsNothing);
+    });
   });
 }

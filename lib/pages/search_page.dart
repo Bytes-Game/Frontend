@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:provider/provider.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import 'package:video_player/video_player.dart';
@@ -12,6 +13,7 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
+import 'package:myapp/widgets/photo_peek.dart';
 import 'package:myapp/widgets/profile_card_3d.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/pages/search_reels_viewer_page.dart';
@@ -71,6 +73,24 @@ class _SearchPageState extends State<SearchPage>
   /// The grid's scroll position, so a list that arrives late can tell
   /// whether it may replace the one on screen. See _loadExploreChallenges.
   final _gridScroll = ScrollController();
+
+  /// Fetching the grid's next batch right now. One at a time.
+  bool _moreLoading = false;
+
+  /// The grid holds every video there is. It just stops: no message, the
+  /// list simply does not scroll any further. A new list starts again.
+  bool _gridEnded = false;
+
+  /// Running after a next-batch request failed: a dead connection is not
+  /// asked again on every frame of a scroll. When it fires the grid tries
+  /// again by itself, scrolled or not.
+  Timer? _moreRetry;
+
+  /// How far ahead of the bottom of the screen the next batch is asked for,
+  /// in screens. Far enough that it has usually arrived, pictures and all,
+  /// before anybody scrolls down to it — so the grid feels like it was
+  /// always there.
+  static const double _loadAheadScreens = 3;
   bool _loading = false;
   bool _hasSearched = false;
 
@@ -159,8 +179,61 @@ class _SearchPageState extends State<SearchPage>
       '[search_page] opened with ${_exploreChallenges.length} videos '
       'already in hand${cache.isStale ? '; fetching a fresh list' : ''}',
     );
+    _gridEnded = cache.reachedEnd(_exploreChallenges);
     if (cache.isStale) _loadExploreChallenges();
     _loadSearchSuggestions();
+    _gridScroll.addListener(_onGridScroll);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onGridScroll());
+  }
+
+  /// Near enough to the bottom of what is loaded: fetch the next batch.
+  void _onGridScroll() {
+    if (!mounted || !_gridScroll.hasClients) return;
+    final pos = _gridScroll.position;
+    if (!pos.hasContentDimensions || !pos.hasViewportDimension) return;
+    if (pos.extentAfter < pos.viewportDimension * _loadAheadScreens) {
+      _loadMoreExplore();
+    }
+  }
+
+  /// The grid's next batch, added to the end. Nothing is said when there is
+  /// no more: the grid just stops scrolling there.
+  Future<void> _loadMoreExplore() async {
+    if (_moreLoading || _gridEnded || _exploreChallenges.isEmpty) return;
+    if (_moreRetry?.isActive ?? false) return;
+    final userId =
+        Provider.of<DataProvider>(context, listen: false).user?.id ?? '';
+    final held = _exploreChallenges;
+    setState(() => _moreLoading = true);
+    final r = await ExploreGridCache.instance.more(userId, held);
+    if (!mounted) return;
+    final added = r.list.skip(held.length).toList();
+    setState(() {
+      _moreLoading = false;
+      // Pulled down for a new list meanwhile: this batch belonged to the
+      // old one.
+      if (!identical(held, _exploreChallenges)) return;
+      _exploreChallenges = r.list;
+      if (r.end) _gridEnded = true;
+      if (r.added == 0 && !r.end) {
+        _moreRetry = Timer(const Duration(seconds: 4), _onGridScroll);
+      }
+    });
+    // Their pictures now, before anybody scrolls down to them.
+    for (final c in added) {
+      final url = c.thumbnailUrl;
+      if (url == null || url.isEmpty) continue;
+      unawaited(precacheImage(
+        ExploreGridCache.posterImage(url),
+        context,
+        onError: (e, _) =>
+            debugPrint('[search_page] picture prefetch failed: $e'),
+      ));
+    }
+    // Still not three screens ahead (a tall phone, a short batch): again.
+    if (r.added > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _onGridScroll());
+    }
   }
 
   /// Leave search: empty the bar, drop the results, put the keyboard away.
@@ -366,6 +439,8 @@ class _SearchPageState extends State<SearchPage>
     widget.tappedAgain?.removeListener(_onTappedAgain);
     _stopWaitingToUncover();
     _previewCoord.dispose();
+    _moreRetry?.cancel();
+    _gridScroll.removeListener(_onGridScroll);
     _gridScroll.dispose();
     _tabCtrl.dispose();
     _searchCtrl.dispose();
@@ -409,8 +484,11 @@ class _SearchPageState extends State<SearchPage>
       final atTop = !_gridScroll.hasClients || _gridScroll.offset < 8;
       if (refresh || _exploreChallenges.isEmpty || atTop) {
         _exploreChallenges = list;
+        _gridEnded = false;
+        _moreRetry?.cancel();
       }
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onGridScroll());
   }
 
   void _onSearchChanged(String query) {
@@ -730,10 +808,14 @@ class _SearchPageState extends State<SearchPage>
       child: CustomScrollView(
         controller: _gridScroll,
         physics: const AlwaysScrollableScrollPhysics(),
+        // Tiles a screen and a half below are built already, so their
+        // pictures are loading before they scroll into view. Only pictures:
+        // a tile opens a player only when it is on screen and its turn.
+        scrollCacheExtent: const ScrollCacheExtent.viewport(1.5),
         slivers: [
           // Straight onto the videos: no title, no rows above them.
           SliverPadding(
-            padding: const EdgeInsets.only(bottom: 24),
+            padding: EdgeInsets.only(bottom: _moreLoading ? 0 : 24),
             sliver: SliverGrid(
               gridDelegate: _gridDelegate,
               delegate: SliverChildBuilderDelegate(
@@ -749,6 +831,22 @@ class _SearchPageState extends State<SearchPage>
               ),
             ),
           ),
+          // Only while the next batch is on its way and somebody has caught
+          // up with it. Never a message at the end: the grid just stops.
+          if (_moreLoading)
+            const SliverToBoxAdapter(
+              child: SizedBox(
+                key: ValueKey('grid_more_loading'),
+                height: 56,
+                child: Center(
+                  child: SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -809,7 +907,11 @@ class _SearchPageState extends State<SearchPage>
           for (final u in _recentAccounts.take(5))
             _HistoryRow(
               key: ValueKey('history_account_${u.id}'),
-              leading: ArenaAvatar(name: u.username, size: 36),
+              leading: PhotoPeekHold(
+                username: u.username,
+                onTap: () => showPhotoPeek(context, u.username),
+                child: ArenaAvatar(name: u.username, size: 36),
+              ),
               title: u.fullName.isNotEmpty ? u.fullName : u.username,
               subtitle: u.fullName.isNotEmpty
                   ? '@${u.username} · ${u.league}'
@@ -1138,6 +1240,16 @@ class _SearchPageState extends State<SearchPage>
     );
   }
 
+  /// A tap on a person's picture: their photo, big.
+  void _viewPhoto(UserModel user, int position) {
+    EventTracker.instance.trackTap(
+      target: 'search_profile_photo',
+      pageName: 'search_page',
+      params: {'profileUserId': user.id, 'position': position},
+    );
+    showPhotoPeek(context, user.username);
+  }
+
   /// Hold on a person to see their battle card in 3D: league, rating,
   /// record, and a breakdown on the back. "View profile" opens the page.
   void _peekProfile(UserModel user, int position) {
@@ -1179,7 +1291,14 @@ class _SearchPageState extends State<SearchPage>
         padding: const EdgeInsets.fromLTRB(16, 8, 12, 8),
         child: Row(
           children: [
-            ArenaAvatar(name: user.username, size: 44),
+            // The picture is its own thing, the way Instagram does it: a tap
+            // shows the photo big, and holding it shows it while held. The
+            // 3D card is for a hold anywhere else on the row.
+            PhotoPeekHold(
+              username: user.username,
+              onTap: () => _viewPhoto(user, position),
+              child: ArenaAvatar(name: user.username, size: 44),
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(

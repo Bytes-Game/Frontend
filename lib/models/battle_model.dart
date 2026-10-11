@@ -38,6 +38,12 @@ class BattleSide {
   final int likes;
   final int views;
   final int shares;
+
+  /// The likes, views and shares that decide a tie on votes: the same
+  /// filters as the counted votes. The server ranks on these.
+  final int countedLikes;
+  final int countedViews;
+  final int countedShares;
   final int rank;
   final bool leading;
 
@@ -53,6 +59,9 @@ class BattleSide {
     this.likes = 0,
     this.views = 0,
     this.shares = 0,
+    this.countedLikes = 0,
+    this.countedViews = 0,
+    this.countedShares = 0,
     this.rank = 0,
     this.leading = false,
   });
@@ -72,10 +81,29 @@ class BattleSide {
     likes: _toInt(j['likes']),
     views: _toInt(j['views']),
     shares: _toInt(j['shares']),
+    countedLikes: _toInt(j['countedLikes'] ?? j['likes']),
+    countedViews: _toInt(j['countedViews'] ?? j['views']),
+    countedShares: _toInt(j['countedShares'] ?? j['shares']),
     rank: _toInt(j['rank']),
     leading: j['leading'] == true,
   );
 }
+
+/// How a battle is decided, in the words the app shows. One copy, so the
+/// battle page and anything else that explains it say the same thing — and
+/// it is the server's rule (betterSide in battles.go), in order.
+const String battleRuleText =
+    'Most votes wins.\n\n'
+    'If the votes are level, most likes wins. Then most views, then most '
+    'shares.\n\n'
+    'If all four are level when voting closes, the battle is a draw. A draw '
+    'counts on both records, and moves both ratings a little towards each '
+    'other.\n\n'
+    'Only genuine votes count towards the winner: not the two players\' own, '
+    'not from accounts made after the battle started, and not from people '
+    'who never watched. A vote from a very new account counts half.\n\n'
+    'If nobody votes, likes, watches or shares at all, there is no result '
+    'and nobody\'s record changes.';
 
 /// The live count of one battle.
 class BattleStandings {
@@ -132,6 +160,65 @@ class BattleStandings {
   /// Some votes did not count, so the score that decides the battle is not
   /// the one on show.
   bool get countedDiffers => sides.any((s) => s.countedVotes != s.votes);
+
+  /// The side on top, or null when it is level on top or nobody has
+  /// anything yet.
+  BattleSide? get onTop {
+    final top = sides.where((x) => x.rank == 1).toList();
+    if (top.length != 1 || !top.first.leading) return null;
+    return top.first;
+  }
+
+  /// Level on top with something on the board: a draw if it ended now.
+  bool get levelOnTop {
+    final top = sides.where((x) => x.rank == 1).toList();
+    return top.length > 1 && top.first.leading;
+  }
+
+  /// Why it stands as it does when votes alone do not say: level on votes
+  /// and ahead on likes, or level on everything. Empty when the votes
+  /// decide it, or there is nothing on the board.
+  ///
+  /// Without this, two sides on the same number of votes showed one of them
+  /// with the "ahead" mark and nothing saying why.
+  String get tieBreakNote {
+    if (levelOnTop) {
+      return resolved
+          ? 'Level on votes, likes, views and shares.'
+          : 'Level on votes, likes, views and shares. A draw if it ended now.';
+    }
+    final lead = onTop;
+    if (lead == null) return '';
+    BattleSide? next;
+    for (final x in sides) {
+      if (identical(x, lead)) continue;
+      if (next == null || x.rank < next.rank) next = x;
+    }
+    if (next == null || lead.countedVotes != next.countedVotes) return '';
+    final String on;
+    if (lead.countedLikes != next.countedLikes) {
+      on = 'likes';
+    } else if (lead.countedViews != next.countedViews) {
+      on = 'views';
+    } else {
+      on = 'shares';
+    }
+    return resolved
+        ? 'Level on votes. ${lead.username} won on $on.'
+        : 'Level on votes. ${lead.username} is ahead on $on.';
+  }
+
+  /// A few words for a small score label: who won, a draw, no result —
+  /// and never "won" before the result is in.
+  String get shortState {
+    if (resolved) {
+      final lead = onTop;
+      if (lead != null) return '${lead.username} won';
+      return levelOnTop ? 'Draw' : 'No result';
+    }
+    if (over) return 'Counting';
+    return '';
+  }
 
   /// This count with votes moved on screen before the server has them:
   /// [delta] by side — "creator", or an answer's id.

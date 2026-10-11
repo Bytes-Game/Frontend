@@ -12,6 +12,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart' show kLongPressTimeout;
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -677,6 +678,115 @@ void main() {
     });
   });
 
+  group('Your picture on your profile', () {
+    final editorCrop = ProfilePhotoFlow.crop;
+    setUp(() {
+      photos.next = File('${dir.path}/picked.jpg')..writeAsBytesSync(tinyJpeg);
+      ProfilePhotoFlow.crop = (context, photo) async => tinyJpeg;
+    });
+    tearDown(() => ProfilePhotoFlow.crop = editorCrop);
+
+    Future<DataProvider> openProfile(WidgetTester t, UserModel whose) async {
+      final dp = DataProvider();
+      await t.binding.setSurfaceSize(const Size(400, 1000));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      const temp = MethodChannel('plugins.flutter.io/path_provider');
+      t.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        temp,
+        (call) async => dir.path,
+      );
+      addTearDown(
+        () => t.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          temp,
+          null,
+        ),
+      );
+      // Embedded, as on the Profile tab: inside the app's own Scaffold.
+      await t.pumpWidget(app(
+          Scaffold(body: ProfilePage(user: whose, isEmbedded: true)),
+          dp: dp));
+      await settle(t);
+      return dp;
+    }
+
+    testWidgets('tap your own picture: change it right there, and you are '
+        'still on your profile when the new photo arrives', (t) async {
+      final dp = await openProfile(t, person('1', 'me'));
+      expect(find.byKey(const ValueKey('profile_photo_change_badge')),
+          findsOneWidget, reason: 'it shows a tap changes it');
+      await t.tap(find.byKey(const ValueKey('photo_hold_me')));
+      await settle(t);
+      expect(find.byKey(const ValueKey('profile_photo_gallery')),
+          findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('profile_photo_gallery')));
+      await work(t);
+
+      final saved = sentTo('PATCH', '/api/v1/users/1');
+      expect(saved, hasLength(1));
+      expect(json.decode(saved.single.$3)['avatarUrl'], myPhoto);
+      expect(dp.user!.avatarUrl, myPhoto);
+      // Back on the profile, not some other page, with the photo in place.
+      expect(find.byType(ProfilePage), findsOneWidget);
+      expect(find.byType(EditProfilePage), findsNothing);
+      expect(photoOf('me'), findsWidgets);
+      expect(find.text('Profile photo updated'), findsOneWidget);
+      await finish(t);
+    });
+
+    testWidgets('hold a picture to see it big; let go and it goes — and on '
+        "somebody else's, a tap changes nothing", (t) async {
+      accounts['maya'] = person('5', 'maya');
+      await openProfile(t, person('5', 'maya'));
+      expect(find.byKey(const ValueKey('profile_photo_change_badge')),
+          findsNothing);
+
+      final hold = find.byKey(const ValueKey('photo_hold_maya'));
+      final finger = await t.startGesture(t.getCenter(hold));
+      await t.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+      await t.pump(const Duration(milliseconds: 250));
+      expect(find.byKey(const ValueKey('photo_peek')), findsOneWidget);
+      await finger.up();
+      for (var i = 0; i < 5; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+      expect(find.byKey(const ValueKey('photo_peek')), findsNothing);
+
+      await t.tap(hold);
+      await settle(t);
+      expect(find.byKey(const ValueKey('profile_photo_gallery')), findsNothing);
+      expect(find.byType(ProfilePage), findsOneWidget);
+      await finish(t);
+    });
+
+    testWidgets('the tick on the framing screen closes it', (t) async {
+      // The real framing screen needs a picture decoder the tests do not
+      // have, so: the screen hands its close to closeCrop (read from the
+      // code, comments out), and closeCrop closes it.
+      expect(code('lib/services/profile_photo_flow.dart'),
+          contains('onCloseEditor: (_) => closeCrop(route)'));
+      await t.pumpWidget(MaterialApp(home: Builder(
+        builder: (context) => TextButton(
+          onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+            builder: (route) => Scaffold(
+              body: TextButton(
+                onPressed: () => ProfilePhotoFlow.closeCrop(route),
+                child: const Text('tick'),
+              ),
+            ),
+          )),
+          child: const Text('open'),
+        ),
+      )));
+      await t.tap(find.text('open'));
+      await t.pumpAndSettle();
+      expect(find.text('tick'), findsOneWidget);
+      await t.tap(find.text('tick'));
+      await t.pumpAndSettle();
+      expect(find.text('tick'), findsNothing);
+      expect(find.text('open'), findsOneWidget);
+    });
+  });
+
   group('Profile tag', () {
     testWidgets('pick one and Save: the server is told, and it shows on the '
         'profile', (t) async {
@@ -823,7 +933,9 @@ void main() {
       await openCaption(t);
       await t.tap(find.byKey(const ValueKey('video_about_ask')));
       await settle(t);
-      expect(find.text('Looks like: cooking, pasta.'), findsOneWidget);
+      expect(find.text('This video is about cooking and pasta.'),
+          findsOneWidget);
+      expect(find.textContaining('Looks like'), findsNothing);
     });
 
     testWidgets('a failed read says so and can be tried again', (t) async {

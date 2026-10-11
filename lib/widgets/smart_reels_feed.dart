@@ -6284,10 +6284,10 @@ class _ScorePill extends StatelessWidget {
       v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
 
   static String _left(BattleStandings st) {
-    if (st.over) {
-      final lead = st.sides.where((s) => s.leading).toList();
-      return lead.length == 1 ? '${lead.first.username} won' : 'Final';
-    }
+    // Who won, a draw, or no result — and "Counting" between voting closing
+    // and the result being in, never "won" for whoever happened to be ahead.
+    final state = st.shortState;
+    if (state.isNotEmpty) return state;
     final end = st.endsAt;
     if (end == null) return 'Live';
     final d = end.difference(DateTime.now());

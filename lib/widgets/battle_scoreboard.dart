@@ -224,6 +224,14 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
               ),
               const SizedBox(width: 8),
               Text('Live score', style: tt.titleMedium),
+              IconButton(
+                key: const ValueKey('battle_rules'),
+                tooltip: 'How the winner is decided',
+                visualDensity: VisualDensity.compact,
+                icon: Icon(Icons.info_outline_rounded,
+                    size: 18, color: cs.onSurface.withValues(alpha: 0.6)),
+                onPressed: () => showBattleRules(context),
+              ),
               const Spacer(),
               _clock(s, cs, tt),
             ],
@@ -260,6 +268,18 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
                       )
                     : null,
               ),
+          // Votes level and somebody ahead on likes, or level on
+          // everything: say so, or the "ahead" mark looks like a mistake.
+          if (!s.notStarted && s.tieBreakNote.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(
+              s.tieBreakNote,
+              key: const ValueKey('tie_break_note'),
+              style: tt.bodySmall?.copyWith(
+                color: cs.onSurface.withValues(alpha: 0.75),
+              ),
+            ),
+          ],
           if (s.resolved) ...[
             const SizedBox(height: 4),
             Text(_verdict(s), style: tt.titleSmall),
@@ -326,10 +346,10 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
   }
 
   String _verdict(BattleStandings s) {
-    final top = s.sides.where((x) => x.rank == 1).toList();
-    if (top.isEmpty || !top.first.leading) return 'No result: nobody voted.';
-    if (top.length > 1) return "It's a draw.";
-    return '${top.first.username} won.';
+    final lead = s.onTop;
+    if (lead != null) return '${lead.username} won.';
+    if (s.levelOnTop) return "It's a draw.";
+    return 'No result: nobody voted.';
   }
 
   void _showRemoved(BattleStandings s) {
@@ -380,6 +400,38 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
 }
 
 /// "3d 4h", "5h 12m", "12m", "under a minute".
+/// The rule, in plain words: how a winner is picked and when it is a draw.
+Future<void> showBattleRules(BuildContext context) {
+  return showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    // Scrolls on a small phone rather than cutting the rule off.
+    isScrollControlled: true,
+    builder: (ctx) => ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(ctx).size.height * 0.8,
+      ),
+      child: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          child: Column(
+            key: const ValueKey('battle_rules_sheet'),
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('How the winner is decided',
+                  style: Theme.of(ctx).textTheme.titleLarge),
+              const SizedBox(height: 12),
+              Text(battleRuleText,
+                  style: Theme.of(ctx).textTheme.bodyMedium),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 String timeLeft(Duration d) {
   if (d.inMinutes < 1) return 'under a minute';
   if (d.inHours < 1) return '${d.inMinutes}m';
