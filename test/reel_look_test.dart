@@ -1036,6 +1036,43 @@ void main() {
     await closeReel(t);
   });
 
+  testWidgets('too many points apart: Accept is switched off, and a tap says '
+      'why instead of opening anything', (t) async {
+    const why = 'This challenge is from a Gold player with 1,200 points. You '
+        'have 1,000 points, so you can battle players from 950 to 1,050 '
+        'points, or friends at any level. Win battles to climb.';
+    await openReel(t, {...short(), 'answerBlocked': why});
+    final pill = find.byKey(const ValueKey('reel_accept'));
+    expect(pill, findsOneWidget);
+    expect(find.descendant(of: pill, matching: find.byIcon(Icons.lock_outline_rounded)),
+        findsOneWidget,
+        reason: 'it shows switched off');
+    await t.tap(find.text('Accept challenge'));
+    for (var i = 0; i < 6; i++) {
+      await t.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.text('Record'), findsNothing);
+    expect(find.text('Upload'), findsNothing);
+    expect(find.widgetWithText(SnackBar, why), findsOneWidget);
+    await closeReel(t);
+  });
+
+  test('a video read from the server keeps why it cannot be answered', () {
+    final c = ChallengeModel.fromJson({...short(), 'answerBlocked': 'too far'});
+    expect(c.answerBlocked, 'too far');
+    expect(ChallengeModel.fromJson(short()).answerBlocked, '');
+  });
+
+  testWidgets('within reach: Accept is switched on', (t) async {
+    await openReel(t, short());
+    expect(
+        find.descendant(
+            of: find.byKey(const ValueKey('reel_accept')),
+            matching: find.byIcon(Icons.bolt_rounded)),
+        findsOneWidget);
+    await closeReel(t);
+  });
+
   test('choosing Record or Upload goes on to accept, on the battle page', () {
     String code(String path) => File(
       path,

@@ -147,6 +147,12 @@ class AppTheme {
           end: Alignment.bottomRight,
           colors: [Color(0xFF67E8F9), Color(0xFF8B5CF6)],
         );
+      case 'ace':
+        return const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFFFF4D6D), Color(0xFFFFB020)],
+        );
       default:
         return gradientPrimary;
     }
@@ -166,6 +172,8 @@ class AppTheme {
       case 'diamond':
       case 'dianond':
         return const Color(0xFF67E8F9);
+      case 'ace':
+        return const Color(0xFFFF4D6D);
       default:
         return primary;
     }

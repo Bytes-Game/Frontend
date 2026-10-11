@@ -55,6 +55,11 @@ class ChallengeModel {
   /// Not final: the owner can change it from the battle page, which
   /// updates the post it is showing in place.
   bool openToBattles;
+
+  /// Why the person reading may not answer it — too many points apart, and
+  /// not friends — or '' when they may. The Accept button is switched off
+  /// when this is set. Not final: a refresh brings the server's newer word.
+  String answerBlocked;
   final int likes;
   final int views;
   /// Live count of comments on this challenge. Populated by the backend's
@@ -138,6 +143,7 @@ class ChallengeModel {
   this.visibleTo = const [],
   required this.status,
   this.openToBattles = true,
+  this.answerBlocked = '',
   required this.likes,
   required this.views,
   this.commentCount = 0,
@@ -212,6 +218,7 @@ class ChallengeModel {
           [],
       status: json['status'] ?? 'open',
       openToBattles: json['closedToBattles'] != true,
+      answerBlocked: (json['answerBlocked'] as String?) ?? '',
       likes: json['likes'] ?? 0,
       views: json['views'] ?? 0,
       commentCount: json['commentCount'] ?? 0,

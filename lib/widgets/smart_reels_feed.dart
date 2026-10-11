@@ -2509,6 +2509,15 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     if (index < 0 || index >= _items.length) return;
     final item = _items[index];
     if (item is! _ReelItem || item.id.isEmpty) return;
+    // Switched off: say why, and nothing opens.
+    if (item.answerBlocked.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        key: const ValueKey('reel_accept_blocked_reason'),
+        content: Text(item.answerBlocked),
+        behavior: SnackBarBehavior.floating,
+      ));
+      return;
+    }
     EventTracker.instance.trackTap(
       target: 'reel_accept_challenge',
       pageName: 'home_page',
@@ -2611,6 +2620,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
         ..isSaved = c.isSaved
         // Its owner may have opened it to battles there, or closed it.
         ..openToBattles = c.openToBattles
+        ..answerBlocked = c.answerBlocked
         ..views = c.views;
       // The answer's likes, if it is still the answer this reel shows.
       if (c.topResponseId.isNotEmpty &&
@@ -3173,6 +3183,11 @@ class _ReelItem implements _FeedEntry {
   /// challenge". The owner can change it from the post's page.
   bool openToBattles = true;
 
+  /// Why the person watching may not answer it (too many points apart, not
+  /// friends), or '' when they may. The Accept button shows switched off
+  /// when set, and a tap says why instead of opening the camera.
+  String answerBlocked = '';
+
   /// The free song under each side's video, with its credit; null for
   /// none.
   final MusicCredit? music;
@@ -3508,6 +3523,7 @@ class _ReelItem implements _FeedEntry {
         isRepeat: c['repeat'] as bool? ?? false,
       )
         ..openToBattles = c['closedToBattles'] != true
+        ..answerBlocked = (c['answerBlocked'] as String?) ?? ''
         ..isSaved = c['isSaved'] == true
         ..hasVoted = c['hasVoted'] == true
         ..votedFor = c['votedFor']?.toString() ?? ''
@@ -3590,6 +3606,7 @@ class _ReelItem implements _FeedEntry {
       isLiked: c.isLiked,
     )
       ..openToBattles = c.openToBattles
+      ..answerBlocked = c.answerBlocked
       ..isSaved = c.isSaved
       ..hasVoted = c.hasVoted
       ..votedFor = c.votedFor
@@ -3626,6 +3643,7 @@ class _ReelItem implements _FeedEntry {
     isLiked: c.isLiked,
   )
     ..openToBattles = c.openToBattles
+    ..answerBlocked = c.answerBlocked
     ..isSaved = c.isSaved
     ..hasVoted = c.hasVoted
     ..votedFor = c.votedFor
@@ -5233,9 +5251,15 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                 else if (item.openToBattles)
                   Builder(
                     builder: (pill) => _GlassPill(
-                      icon: Icons.bolt_rounded,
+                      key: const ValueKey('reel_accept'),
+                      icon: item.answerBlocked.isEmpty
+                          ? Icons.bolt_rounded
+                          : Icons.lock_outline_rounded,
                       label: 'Accept challenge',
-                      accent: true,
+                      accent: item.answerBlocked.isEmpty,
+                      // Too many points apart: shown switched off; a tap
+                      // says why.
+                      off: item.answerBlocked.isNotEmpty,
                       onTap: () {
                         final box = pill.findRenderObject()! as RenderBox;
                         widget.onAccept(
@@ -6463,11 +6487,16 @@ class _GlassPill extends StatelessWidget {
   /// screen that asks you to do something.
   final bool accent;
 
+  /// Switched off: dimmed, and no arrow. Still tappable, so it can say why.
+  final bool off;
+
   const _GlassPill({
+    super.key,
     required this.icon,
     required this.label,
     required this.onTap,
     this.accent = false,
+    this.off = false,
   });
 
   @override
@@ -6494,7 +6523,8 @@ class _GlassPill extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(icon, size: 16, color: Colors.white),
+                  Icon(icon,
+                      size: 16, color: off ? Colors.white54 : Colors.white),
                   const SizedBox(width: 6),
                   // Shortens rather than running out of the pill with
                   // large text.
@@ -6503,19 +6533,21 @@ class _GlassPill extends StatelessWidget {
                       label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
+                      style: TextStyle(
+                        color: off ? Colors.white54 : Colors.white,
                         fontSize: 13.5,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
-                  const SizedBox(width: 2),
-                  const Icon(
-                    Icons.chevron_right_rounded,
-                    size: 18,
-                    color: Colors.white70,
-                  ),
+                  if (!off) ...[
+                    const SizedBox(width: 2),
+                    const Icon(
+                      Icons.chevron_right_rounded,
+                      size: 18,
+                      color: Colors.white70,
+                    ),
+                  ],
                 ],
               ),
             ),

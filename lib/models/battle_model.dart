@@ -463,6 +463,7 @@ class LeagueStep {
     ('Gold', 1150),
     ('Platinum', 1300),
     ('Diamond', 1500),
+    ('Ace', 1750),
   ];
 
   /// Bronze's progress is drawn from this rating, not from zero, so a new
