@@ -12,6 +12,7 @@
 // real device, to the person who owns the account, with the correct password.
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -103,18 +104,26 @@ void main() {
   });
 
   group('signup', () {
+    SignupDetails details(String name) => SignupDetails(
+          username: name,
+          password: 'sunset42',
+          email: '$name@example.com',
+          birthDate: '2000-05-01',
+          acceptTerms: true,
+        );
+
     test('201 is success', () async {
       ApiService.useClient(MockClient(
           (_) async => http.Response('{"token":"t","user":{"id":2}}', 201)));
 
-      expect((await ApiService.signup('new', 'pw')).ok, isTrue);
+      expect((await ApiService.signup(details('new'))).ok, isTrue);
     });
 
     test('409 taken is rejected, not a network problem', () async {
       ApiService.useClient(
           MockClient((_) async => http.Response('taken', 409)));
 
-      expect((await ApiService.signup('taken', 'pw')).failure,
+      expect((await ApiService.signup(details('taken'))).failure,
           AuthFailure.rejected);
     });
 
@@ -124,10 +133,44 @@ void main() {
         throw TimeoutException('timed out');
       }));
 
-      expect((await ApiService.signup('new', 'pw')).failure,
+      expect((await ApiService.signup(details('new'))).failure,
           AuthFailure.unreachable,
           reason: 'telling someone their chosen name is taken when the '
               'server never answered is the same lie in a different shape');
+    });
+
+    test('a refusal says which box it is about, and sends every detail',
+        () async {
+      late Map<String, dynamic> sent;
+      ApiService.useClient(MockClient((req) async {
+        sent = json.decode(req.body) as Map<String, dynamic>;
+        return http.Response(
+            '{"field":"email","error":"An account already uses this email."}',
+            409);
+      }));
+
+      final r = await ApiService.signup(details('maya'));
+      expect(r.failure, AuthFailure.rejected);
+      expect(r.field, 'email');
+      expect(r.message, 'An account already uses this email.');
+      expect(sent, {
+        'username': 'maya',
+        'password': 'sunset42',
+        'fullName': '',
+        'email': 'maya@example.com',
+        'birthDate': '2000-05-01',
+        'acceptTerms': true,
+      });
+    });
+
+    test('too many tries is said as that, not as a wrong detail', () async {
+      ApiService.useClient(MockClient((_) async =>
+          http.Response('{"error":"rate limited","action":"signup"}', 429)));
+
+      final r = await ApiService.signup(details('maya'));
+      expect(r.failure, AuthFailure.rejected);
+      expect(r.field, isNull);
+      expect(r.message, startsWith('Too many tries'));
     });
   });
 }

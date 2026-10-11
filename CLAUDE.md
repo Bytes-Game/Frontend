@@ -114,8 +114,10 @@ be done by then. Do not bring it up before they ask.
    Losing the key means the app can never be updated on Play.
 3. **Help and privacy emails.** The Help and Privacy pages
    (`lib/pages/static_content_pages.dart`) give support@devf.app and
-   privacy@devf.app. Make sure that domain is owned and those inboxes work,
-   or change the addresses.
+   privacy@devf.app, and the sign-in screen's "Forgot password?" tells
+   people to email support@devf.app to get back in
+   (`lib/screens/login_screen.dart`). Make sure that domain is owned and
+   those inboxes work, or change the addresses.
 4. **Build with the real settings.** The release build needs these passed as
    `--dart-define`s: `FIREBASE_API_KEY`, `FIREBASE_APP_ID`,
    `FIREBASE_IOS_APP_ID`, `FIREBASE_PROJECT_ID`, `FIREBASE_SENDER_ID` (or push

@@ -34,15 +34,24 @@ class _TermsOfServicePageState extends State<TermsOfServicePage>
   Widget build(BuildContext context) {
     return _StaticDocScaffold(
       title: 'Terms of Service',
-      lastUpdated: 'May 2026',
+      lastUpdated: 'October 2026',
       sections: const [
         _DocSection('Welcome',
             'By using devf you agree to these terms. If you do not '
                 'agree, please stop using the app.'),
+        _DocSection('Who can join',
+            'You must be 13 or older to have an account. Give your real '
+                'date of birth and an email address you use.'),
         _DocSection('Your account',
             'You\'re responsible for the security of your account, '
                 'the content you post, and the behavior you exhibit '
                 'on the platform.'),
+        _DocSection('Play fair',
+            'One account per person per email. Don\'t make fake '
+                'accounts, and don\'t buy or swap votes, likes, views, '
+                'shares or followers. Votes and engagement that look '
+                'bought don\'t count, and accounts caught doing it lose '
+                'rating.'),
         _DocSection('Content rules',
             'Don\'t post content that is illegal, harassing, sexually '
                 'explicit, violent, or violates someone else\'s '
@@ -87,14 +96,20 @@ class _PrivacyPolicyPageState extends State<PrivacyPolicyPage>
   Widget build(BuildContext context) {
     return _StaticDocScaffold(
       title: 'Privacy Policy',
-      lastUpdated: 'May 2026',
+      lastUpdated: 'October 2026',
       sections: const [
         _DocSection('What we collect',
-            'Account info (username, full name, optional bio), '
-                'content you post (videos, comments, likes, votes), '
-                'and usage telemetry (which reels you watch, how long, '
-                'tap events). We do NOT collect your phone number or '
-                'email at sign-up today.'),
+            'Account info (username, name, email, date of birth, '
+                'optional bio and photo), content you post (videos, '
+                'comments, likes, votes), and usage telemetry (which '
+                'reels you watch, how long, tap events). We do not '
+                'collect your phone number.'),
+        _DocSection('Your email and date of birth',
+            'These stay private: they are never shown on your profile or '
+                'to other people. Your email lets you sign in, keeps it to '
+                'one account per person, and is how we can reach you about '
+                'your account. Your date of birth is only used to make '
+                'sure you are 13 or older.'),
         _DocSection('Why we collect it',
             'Telemetry powers the recommendation engine that picks '
                 'reels for your For You feed. Content + engagement '
@@ -106,10 +121,11 @@ class _PrivacyPolicyPageState extends State<PrivacyPolicyPage>
                 '(Render for hosting, Cloudflare R2 for video storage) '
                 'who only see what they need to deliver the service.'),
         _DocSection('Your controls',
-            'You can: edit your profile, delete posts (cascades through '
-                'all responses/votes), clear watch history, block users, '
-                'and turn on two-step verification. Account deletion is '
-                'planned.'),
+            'You can: edit your profile, make your account private, '
+                'delete posts (cascades through all responses/votes), '
+                'clear watch history, block users, change your password, '
+                'turn on two-step verification, and delete your account '
+                'in Settings.'),
         _DocSection('Retention',
             'Watch events older than 30 days are aggregated into your '
                 'user profile and the raw rows are eligible for deletion. '
