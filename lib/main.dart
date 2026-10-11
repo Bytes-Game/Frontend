@@ -19,6 +19,7 @@ import 'package:myapp/services/own_uploads.dart';
 import 'package:myapp/services/link_speed_store.dart';
 import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
+import 'package:myapp/services/profile_cache.dart';
 import 'package:myapp/services/chat_cache.dart';
 import 'package:myapp/services/next_up_store.dart';
 import 'package:myapp/services/video_cache_service.dart';
@@ -182,6 +183,10 @@ Future<void> main() async {
   // videos instead of waiting for the server.
   // ignore: discarded_futures
   ExploreGridCache.instance.restore();
+  // And your own profile's videos and their pictures, so opening your
+  // profile right after the app opens shows them at once.
+  // ignore: discarded_futures
+  ProfileCache.instance.restore();
   // And the chats, so Messages opens on them at once.
   // ignore: discarded_futures
   ChatCache.instance.restore();

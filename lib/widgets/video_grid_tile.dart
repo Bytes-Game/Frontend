@@ -63,8 +63,8 @@ class VideoGridTile extends StatelessWidget {
       onTap: onTap,
       onLongPress: onLongPress,
       pressedScale: 0.97,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+      // Square corners: the tiles meet, as on the Search grid.
+      child: ClipRect(
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -312,12 +312,18 @@ String compactCount(int n) {
   return '$n';
 }
 
-/// The Search page's grid: three columns of tall tiles.
+/// The gap between tiles: a hairline, the same as the Search grid.
+const double videoGridGap = 1;
+
+/// Every profile-style grid: three columns of tall, square-cornered tiles
+/// edge to edge, with only a hairline between them — the way the Search
+/// grid and Instagram's profile grid look. It used to have 6-point gaps, a
+/// 12-point margin and rounded corners, which the owner asked to go.
 const SliverGridDelegate videoGridDelegate =
     SliverGridDelegateWithFixedCrossAxisCount(
       crossAxisCount: 3,
-      mainAxisSpacing: 6,
-      crossAxisSpacing: 6,
+      mainAxisSpacing: videoGridGap,
+      crossAxisSpacing: videoGridGap,
       childAspectRatio: 0.66,
     );
 
@@ -342,7 +348,7 @@ class VideoGridPlaceholder extends StatelessWidget {
         itemCount: 9,
         itemBuilder: (_, _) => const SkeletonBone(
           height: double.infinity,
-          borderRadius: AppTheme.radiusMd,
+          borderRadius: 0,
         ),
       ),
     );
@@ -409,8 +415,8 @@ class _PreloadVideoStartsState extends State<PreloadVideoStarts> {
   Widget build(BuildContext context) => widget.child;
 }
 
-/// Room at the bottom for the tab bar.
-const EdgeInsets videoGridPadding = EdgeInsets.fromLTRB(12, 4, 12, 96);
+/// Edge to edge across the screen, with room at the bottom for the tab bar.
+const EdgeInsets videoGridPadding = EdgeInsets.fromLTRB(0, videoGridGap, 0, 96);
 
 /// Open [videos] full screen at [index], and scroll through exactly those,
 /// in that order — nothing from the recommendations mixed in.

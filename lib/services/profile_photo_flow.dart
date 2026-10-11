@@ -4,12 +4,15 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pro_image_editor/pro_image_editor.dart';
+import 'package:provider/provider.dart';
 
 import 'package:myapp/config/editor_setup.dart';
 import 'package:myapp/models/user_model.dart';
+import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/chat_media.dart';
 import 'package:myapp/services/media_upload_service.dart';
+import 'package:myapp/widgets/arena_ui.dart';
 
 /// What changing the profile photo came to.
 class PhotoChange {
@@ -80,6 +83,93 @@ class ProfilePhotoFlow {
     return _save(me, up.defaultVideoUrl);
   }
 
+  /// Closes the crop screen. A seam, so a test can see that the tick
+  /// leads somewhere.
+  @visibleForTesting
+  static void closeCrop(BuildContext route) {
+    final nav = Navigator.of(route);
+    if (nav.canPop()) nav.pop();
+  }
+
+  /// The whole of changing your photo from one tap — on your profile's
+  /// picture, or on Edit profile: take one, choose one, or remove it; then
+  /// it is framed, uploaded and on screen everywhere, and a few words say
+  /// how it went. [onBusy] is told while it uploads, for a spinner.
+  static Future<void> chooseAndChange(
+    BuildContext context, {
+    ValueChanged<bool>? onBusy,
+  }) async {
+    final dp = Provider.of<DataProvider>(context, listen: false);
+    final me = dp.user;
+    if (me == null) return;
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              key: const ValueKey('profile_photo_camera'),
+              leading: const Icon(Icons.photo_camera_rounded, color: kAccent),
+              title: const Text('Take a photo'),
+              onTap: () => Navigator.pop(ctx, 'camera'),
+            ),
+            ListTile(
+              key: const ValueKey('profile_photo_gallery'),
+              leading: const Icon(Icons.photo_library_rounded, color: kAccent),
+              title: const Text('Choose from your photos'),
+              onTap: () => Navigator.pop(ctx, 'gallery'),
+            ),
+            if (me.avatarUrl.isNotEmpty)
+              ListTile(
+                key: const ValueKey('profile_photo_remove'),
+                leading: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: Colors.red,
+                ),
+                title: const Text(
+                  'Remove current picture',
+                  style: TextStyle(color: Colors.red),
+                ),
+                onTap: () => Navigator.pop(ctx, 'remove'),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !context.mounted) return;
+    onBusy?.call(true);
+    final PhotoChange change;
+    try {
+      change = choice == 'remove'
+          ? await remove(me)
+          : await ProfilePhotoFlow.change(context, me,
+              camera: choice == 'camera');
+    } finally {
+      onBusy?.call(false);
+    }
+    final updated = change.user;
+    final say = context.mounted ? ScaffoldMessenger.maybeOf(context) : null;
+    if (updated != null) {
+      // Only the photo is taken from the answer: anything else on the
+      // profile (an Edit profile form half filled in) stays as it is.
+      final now = dp.user ?? me;
+      dp.setUser(now.copyWith(avatarUrl: updated.avatarUrl));
+      say?.showSnackBar(SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(updated.avatarUrl.isEmpty
+            ? 'Profile photo removed'
+            : 'Profile photo updated'),
+      ));
+    } else if (change.problem.isNotEmpty) {
+      say?.showSnackBar(SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(change.problem),
+      ));
+    }
+  }
+
   /// Take the profile photo away; the initial shows again.
   static Future<PhotoChange> remove(UserModel me) => _save(me, '');
 
@@ -104,7 +194,7 @@ class ProfilePhotoFlow {
     Uint8List? out;
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => CropRotateEditor.file(
+        builder: (route) => CropRotateEditor.file(
           photo,
           initConfigs: CropRotateEditorInitConfigs(
             theme: editorTheme,
@@ -127,6 +217,12 @@ class ProfilePhotoFlow {
             ),
             callbacks: ProImageEditorCallbacks(
               onImageEditingComplete: (bytes) async => out = bytes,
+              // The tick, and the X. The editor hands the picture over and
+              // then asks to be closed — and with nothing here to close it,
+              // the tick left you sitting on the crop screen with your
+              // photo already chosen. Now it goes, and you are back where
+              // you started, watching your new photo arrive.
+              onCloseEditor: (_) => closeCrop(route),
             ),
           ),
         ),

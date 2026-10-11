@@ -142,68 +142,20 @@ class _EditProfilePageState extends State<EditProfilePage>
     Navigator.of(context).pop(true);
   }
 
-  /// Take a photo, choose one, or remove the one there is.
+  /// Take a photo, choose one, or remove the one there is — the same steps
+  /// as tapping the picture on your profile.
   Future<void> _editPhoto() async {
-    final dp = Provider.of<DataProvider>(context, listen: false);
-    final me = dp.user;
-    if (me == null || _photoBusy) return;
+    if (_photoBusy) return;
     EventTracker.instance.trackTap(
       target: 'edit_profile_photo',
       pageName: pageName,
     );
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              key: const ValueKey('profile_photo_camera'),
-              leading: const Icon(Icons.photo_camera_rounded, color: kAccent),
-              title: const Text('Take a photo'),
-              onTap: () => Navigator.pop(ctx, 'camera'),
-            ),
-            ListTile(
-              key: const ValueKey('profile_photo_gallery'),
-              leading: const Icon(Icons.photo_library_rounded, color: kAccent),
-              title: const Text('Choose from your photos'),
-              onTap: () => Navigator.pop(ctx, 'gallery'),
-            ),
-            if (me.avatarUrl.isNotEmpty)
-              ListTile(
-                key: const ValueKey('profile_photo_remove'),
-                leading: const Icon(
-                  Icons.delete_outline_rounded,
-                  color: Colors.red,
-                ),
-                title: const Text(
-                  'Remove current picture',
-                  style: TextStyle(color: Colors.red),
-                ),
-                onTap: () => Navigator.pop(ctx, 'remove'),
-              ),
-          ],
-        ),
-      ),
+    await ProfilePhotoFlow.chooseAndChange(
+      context,
+      onBusy: (busy) {
+        if (mounted) setState(() => _photoBusy = busy);
+      },
     );
-    if (choice == null || !mounted) return;
-    setState(() => _photoBusy = true);
-    final change = choice == 'remove'
-        ? await ProfilePhotoFlow.remove(me)
-        : await ProfilePhotoFlow.change(context, me, camera: choice == 'camera');
-    if (!mounted) return;
-    setState(() => _photoBusy = false);
-    final updated = change.user;
-    if (updated != null) {
-      // Keeps the form's unsaved edits: only the photo is taken from it.
-      dp.setUser(me.copyWith(avatarUrl: updated.avatarUrl));
-      _toast(updated.avatarUrl.isEmpty
-          ? 'Profile photo removed'
-          : 'Profile photo updated');
-    } else if (change.problem.isNotEmpty) {
-      _toast(change.problem);
-    }
   }
 
   /// What the profile is about: one word from [profileTags], or none.

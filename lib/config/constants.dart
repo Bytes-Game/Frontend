@@ -39,6 +39,16 @@ class AppConstants {
     defaultValue: 'https://gobackend-9nd8.onrender.com',
   );
 
+  /// Where shared links point: the public profile and video pages
+  /// (public_pages.go on the server), and what the share page's QR code
+  /// holds. The server's own address until the app has a website of its
+  /// own; then `--dart-define=SHARE_BASE_URL=https://...` and every link and
+  /// code points there. No trailing slash.
+  static const String shareBaseUrl = String.fromEnvironment(
+    'SHARE_BASE_URL',
+    defaultValue: apiBaseUrl,
+  );
+
   /// WebSocket base URL — same backend, `ws`/`wss` scheme.
   ///
   /// Override with `--dart-define=WS_BASE_URL=...`. Kept as its own setting

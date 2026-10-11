@@ -363,4 +363,116 @@ void main() {
     );
     expect(json.decode(sent.single.body)['battleDays'], 14);
   });
+
+  group('level on votes', () {
+    Map<String, dynamic> level({
+      required bool resolved,
+      int mayaLikes = 9,
+      int leoLikes = 4,
+      int mayaRank = 1,
+      int leoRank = 2,
+    }) {
+      final st = standings(
+        endsAt: resolved ? '2026-09-27T10:00:00Z' : '2099-10-04T10:00:00Z',
+        resolved: resolved,
+      );
+      final sides = st['participants'] as List;
+      for (final p in sides.cast<Map<String, dynamic>>()) {
+        p['votes'] = 3;
+        p['countedVotes'] = 3;
+        p['removedVotes'] = 0;
+      }
+      sides[0]['countedLikes'] = mayaLikes;
+      sides[0]['likes'] = mayaLikes;
+      sides[1]['countedLikes'] = leoLikes;
+      sides[1]['likes'] = leoLikes;
+      sides[0]['rank'] = mayaRank;
+      sides[1]['rank'] = leoRank;
+      sides[0]['leading'] = mayaRank == 1;
+      sides[1]['leading'] = leoRank == 1;
+      st['removed'] = <String, int>{};
+      return st;
+    }
+
+    testWidgets('ahead on likes: it says so, so the mark is not a mystery',
+        (tester) async {
+      answer = (_) => http.Response(json.encode(level(resolved: false)), 200);
+      await pump(tester, viewer: '9');
+      expect(find.text('maya'), findsOneWidget);
+      expect(find.text('Level on votes. maya is ahead on likes.'),
+          findsOneWidget);
+    });
+
+    testWidgets('level on everything: a draw if it ended now',
+        (tester) async {
+      answer = (_) => http.Response(
+          json.encode(level(resolved: false, leoLikes: 9, leoRank: 1)), 200);
+      await pump(tester, viewer: '9');
+      expect(find.text('maya'), findsOneWidget);
+      expect(find.textContaining('A draw if it ended now.'), findsOneWidget);
+    });
+
+    testWidgets('level on everything when it closed: a draw, and why',
+        (tester) async {
+      answer = (_) => http.Response(
+          json.encode(level(resolved: true, leoLikes: 9, leoRank: 1)), 200);
+      await pump(tester, viewer: '9');
+      expect(find.text("It's a draw."), findsOneWidget);
+      expect(find.text('Level on votes, likes, views and shares.'),
+          findsOneWidget);
+    });
+
+    testWidgets('more votes: no note, the votes say it', (tester) async {
+      answer = (_) => http.Response(
+        json.encode(standings(endsAt: '2099-10-04T10:00:00Z')),
+        200,
+      );
+      await pump(tester, viewer: '9');
+      expect(find.text('maya'), findsOneWidget);
+      expect(find.byKey(const ValueKey('tie_break_note')), findsNothing);
+    });
+  });
+
+  testWidgets('the rule is one tap away, in plain words', (tester) async {
+    answer = (_) => http.Response(
+      json.encode(standings(endsAt: '2099-10-04T10:00:00Z')),
+      200,
+    );
+    await pump(tester, viewer: '9');
+    await tester.tap(find.byKey(const ValueKey('battle_rules')));
+    await tester.pumpAndSettle();
+    expect(find.text('How the winner is decided'), findsOneWidget);
+    expect(find.textContaining('Most votes wins.'), findsOneWidget);
+    expect(find.textContaining('the battle is a draw'), findsOneWidget);
+  });
+
+  group('the short label on a reel', () {
+    BattleStandings st({required bool resolved, required String endsAt,
+        int leoRank = 2}) {
+      final j = standings(endsAt: endsAt, resolved: resolved);
+      final sides = j['participants'] as List;
+      sides[1]['rank'] = leoRank;
+      sides[1]['leading'] = leoRank == 1;
+      return BattleStandings.fromJson(j);
+    }
+
+    test('never says "won" before the result is in', () {
+      expect(st(resolved: false, endsAt: '2026-01-01T00:00:00Z').shortState,
+          'Counting');
+      expect(st(resolved: true, endsAt: '2026-01-01T00:00:00Z').shortState,
+          'maya won');
+      expect(st(resolved: true, endsAt: '2026-01-01T00:00:00Z', leoRank: 1)
+          .shortState, 'Draw');
+      expect(st(resolved: false, endsAt: '2099-01-01T00:00:00Z').shortState,
+          '');
+    });
+
+    test('the reel uses it', () {
+      final code = File('lib/widgets/smart_reels_feed.dart')
+          .readAsLinesSync()
+          .where((l) => !l.trimLeft().startsWith('//'))
+          .join('\n');
+      expect(code, contains('st.shortState'));
+    });
+  });
 }

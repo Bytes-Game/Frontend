@@ -63,6 +63,11 @@ void fakeServer() {
   ApiService.useClient(
     MockClient((req) async {
       final p = req.url.path;
+      // The grid's next batch (a POST naming what it holds) is not a new
+      // list. This server has no more, so it says so: an empty answer.
+      if (p.contains('/feed/explore') && req.method == 'POST') {
+        return jsonBody({'items': []});
+      }
       if (p.contains('/feed/explore')) {
         exploreAsks++;
         lastExploreAsk = req.url;
