@@ -41,6 +41,11 @@ bool refuse = false;
 List<String> deletions = [];
 bool refuseDelete = false;
 
+/// What the server says to a delete: when the account goes for good, as a
+/// server with the 30-day wait answers. Null for an older server, which
+/// deleted at once and said only "deleted".
+String? deleteOn = '2026-11-30T10:00:00Z';
+
 /// Notification settings as the server keeps them, and the saves sent.
 Map<String, dynamic>? serverPrefs;
 List<Map<String, dynamic>> prefSaves = [];
@@ -50,6 +55,7 @@ void fakeServer() {
   refuse = false;
   deletions = [];
   refuseDelete = false;
+  deleteOn = '2026-11-30T10:00:00Z';
   prefSaves = [];
   serverPrefs = {
     'userId': '1',
@@ -79,7 +85,8 @@ void fakeServer() {
       deletions.add(req.url.path);
       return refuseDelete
           ? http.Response('delete failed', 500)
-          : http.Response('{"deleted":true}', 200);
+          : http.Response(
+              json.encode({'deleted': true, 'deleteOn': ?deleteOn}), 200);
     }
     if (req.method == 'PATCH' && req.url.path.endsWith('/users/1')) {
       final body = json.decode(req.body) as Map<String, dynamic>;
@@ -256,14 +263,17 @@ void main() {
     });
 
     testWidgets('delete account: only once the username is typed, then it '
-        'is gone and you are signed out', (t) async {
+        'waits 30 days and you are signed out', (t) async {
       final dp = await pump(t, page());
       final row = find.byKey(const ValueKey('settings_delete_account'));
       await t.ensureVisible(row);
       await t.tap(row);
       await settle(t);
       expect(find.text('Delete your account?'), findsOneWidget);
-      expect(find.textContaining('cannot be undone'), findsOneWidget);
+      expect(find.textContaining('After 30 days it is deleted for good'),
+          findsOneWidget);
+      expect(find.textContaining('Sign in before then to keep it'),
+          findsOneWidget);
       final confirm = find.byKey(const ValueKey('delete_account_confirm'));
       TextButton button() => t.widget<TextButton>(confirm);
       expect(button().onPressed, isNull, reason: 'not before the name');
@@ -281,8 +291,29 @@ void main() {
       await settle(t);
       expect(deletions, ['/api/v1/users/1']);
       expect(dp.user, isNull, reason: 'signed out');
+      expect(
+          find.textContaining('Your account will be deleted on 30 November '
+              '2026. Sign in before then to keep it.'),
+          findsOneWidget);
+      await t.pump(const Duration(seconds: 10));
+    });
+
+    testWidgets('an older server that deletes at once: signed out, and told '
+        'it is gone', (t) async {
+      deleteOn = null;
+      final dp = await pump(t, page());
+      final row = find.byKey(const ValueKey('settings_delete_account'));
+      await t.ensureVisible(row);
+      await t.tap(row);
+      await settle(t);
+      await t.enterText(
+          find.byKey(const ValueKey('delete_account_username')), 'maya');
+      await t.pump();
+      await t.tap(find.byKey(const ValueKey('delete_account_confirm')));
+      await settle(t);
+      expect(dp.user, isNull, reason: 'signed out');
       expect(find.text('Your account has been deleted.'), findsOneWidget);
-      await t.pump(const Duration(seconds: 5));
+      await t.pump(const Duration(seconds: 10));
     });
 
     testWidgets('a delete the server refuses says so and keeps you signed '

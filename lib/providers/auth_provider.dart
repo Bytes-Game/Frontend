@@ -38,9 +38,14 @@ class AuthProvider with ChangeNotifier {
   /// minute to wake, so an unreachable server is routine — and telling
   /// someone their password is wrong when the server simply never answered
   /// sends them off resetting a password that was fine.
+  ///
+  /// [keepAccount] is for an account waiting to be deleted, once the person
+  /// has chosen to keep it (see [AuthFailure.deletionPending]).
   Future<AuthResult?> login(
-      BuildContext context, String username, String password) async {
-    final result = await ApiService.login(username, password);
+      BuildContext context, String username, String password,
+      {bool keepAccount = false}) async {
+    final result =
+        await ApiService.login(username, password, keepAccount: keepAccount);
     if (!result.ok) {
       return result.failure == null
           ? const AuthResult.failed(AuthFailure.unreachable)
