@@ -184,10 +184,12 @@ class _HelpCenterPageState extends State<HelpCenterPage>
                 'back) can battle you at any level. When you can\'t answer '
                 'a challenge, its Accept button is switched off and tells '
                 'you why.'),
-        _DocSection('Why can\'t I edit my username?',
-            'Username changes are rolling out — they need a uniqueness '
-                'check + audit log on the backend before we open them up. '
-                'You can update your full name and bio today.'),
+        _DocSection('How do I change my username?',
+            'Profile → Edit profile → Username → Change. You can change it '
+                'once every 30 days. Your old username becomes free for '
+                'anyone to take, and links to your profile with it stop '
+                'working. Any other phone signed in to your account is '
+                'signed out.'),
         _DocSection('How do I report inappropriate content?',
             'Tap the share icon → Report on any post. The report goes '
                 'into the moderation queue.'),

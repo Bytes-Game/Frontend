@@ -11,6 +11,22 @@ import 'package:myapp/services/session_store.dart' show jwtUsername;
 /// Connection status exposed as a stream so the UI can show a dot.
 enum WebSocketStatus { connected, disconnected, connecting }
 
+/// Keeps [ws] filed under the signed-in account's name as it is now: after
+/// a username change, [account] (the app's DataProvider) has the account
+/// under its new name, and the connection moves to it
+/// ([WebSocketService.useUsername]). Returns the listener, for
+/// `account.removeListener` when the connection goes.
+VoidCallback followUsername(
+    WebSocketService ws, Listenable account, String? Function() name) {
+  void follow() {
+    final now = name() ?? '';
+    if (now.isNotEmpty) ws.useUsername(now);
+  }
+
+  account.addListener(follow);
+  return follow;
+}
+
 /// Manages a single persistent WebSocket connection to the Go backend.
 ///
 /// Responsibilities:
@@ -22,7 +38,10 @@ enum WebSocketStatus { connected, disconnected, connecting }
 /// `Provider<WebSocketService>.value` in the widget tree.
 class WebSocketService {
   final String _baseUrl;
-  final String _username;
+
+  /// The signed-in account's name: the socket is filed under it on the
+  /// server. Changes only through [useUsername].
+  String _username;
   WebSocketChannel? _channel;
   Timer? _reconnectTimer;
   bool _isDisposed = false;
@@ -128,14 +147,37 @@ class WebSocketService {
     // actually dead.
     channel.ready.then((_) {
       if (_isDisposed || _statusCtrl.isClosed) return;
+      // Replaced while it was opening (useUsername): not ours any more.
+      if (!identical(channel, _channel)) {
+        channel.sink.close();
+        return;
+      }
       _open = true;
       _reconnectDelayStep = 0; // a real connection resets the backoff
       _statusCtrl.add(WebSocketStatus.connected);
       developer.log('WS: Connected', name: 'ws');
       _listen();
     }).catchError((Object e) {
-      _handleDrop('handshake failed: $e');
+      if (identical(channel, _channel)) _handleDrop('handshake failed: $e');
     });
+  }
+
+  /// Moves this connection to the account's new name after a username
+  /// change. The server closed the one under the old name and refuses that
+  /// name from now on, so this opens a new one under the new name. Every
+  /// stream stays the same, so everything listening — chats, calls, the
+  /// notifications — keeps listening.
+  void useUsername(String username) {
+    if (_isDisposed || username.isEmpty || username == _username) return;
+    developer.log('WS: the account is now $username, reconnecting', name: 'ws');
+    _username = username;
+    _reconnectTimer?.cancel();
+    _reconnectDelayStep = 0;
+    final old = _channel;
+    _channel = null;
+    _open = false;
+    old?.sink.close();
+    connect();
   }
 
   /// Retire this service without scheduling a retry. Used when retrying is
@@ -160,7 +202,8 @@ class WebSocketService {
   }
 
   void _listen() {
-    _channel?.stream.listen(
+    final channel = _channel;
+    channel?.stream.listen(
       (msg) {
         final Object? data;
         try {
@@ -173,8 +216,14 @@ class WebSocketService {
         }
         if (data is Map<String, dynamic>) _dispatch(data);
       },
-      onDone: () => _handleDrop('closed by peer'),
-      onError: (Object error) => _handleDrop('stream error: $error'),
+      // A connection replaced by useUsername ends quietly: the new one is
+      // already on its way, and a reconnect from here would open a second.
+      onDone: () {
+        if (identical(channel, _channel)) _handleDrop('closed by peer');
+      },
+      onError: (Object error) {
+        if (identical(channel, _channel)) _handleDrop('stream error: $error');
+      },
     );
   }
 
@@ -189,6 +238,11 @@ class WebSocketService {
   /// from the server. For tests, and for nothing else.
   @visibleForTesting
   void debugReceive(Map<String, dynamic> data) => _dispatch(data);
+
+  /// Whether a reconnect is waiting to happen. For tests: after
+  /// [useUsername], none may be — it would open a second connection.
+  @visibleForTesting
+  bool get debugReconnectPending => _reconnectTimer?.isActive ?? false;
 
   /// Sends one live signal — "typing", or part of setting up a call — to
   /// the server, which passes it on to the person in its "to". False when

@@ -100,6 +100,18 @@ class AuthProvider with ChangeNotifier {
     if (stored != null) await SessionStore.save(token, stored.userJson);
   }
 
+  /// After a username change: keep the fresh sign-in the server gave this
+  /// phone, and the account under its new name. Every other phone was
+  /// signed out: their sign-ins carry the old name. The new name reaching
+  /// [DataProvider] is what moves the live connection over to it (see
+  /// WebSocketService.useUsername).
+  Future<void> keepRenamedAccount(
+      DataProvider dp, String token, Map<String, dynamic> userJson) async {
+    ApiService.authToken = token;
+    await SessionStore.save(token, userJson);
+    dp.setUser(UserModel.fromJson(userJson));
+  }
+
   /// Marks the interest-picker step done (completed OR skipped).
   void completeOnboarding() {
     _needsOnboarding = false;

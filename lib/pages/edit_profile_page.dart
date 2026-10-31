@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/config/profile_tags.dart';
+import 'package:myapp/pages/change_username_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
@@ -19,10 +20,8 @@ import 'package:myapp/widgets/league_badge.dart';
 /// Wired end-to-end to `PATCH /api/v1/users/{id}` — the Save button
 /// pushes the dirty fields (fullName, bio, visibility, tag) to the backend,
 /// merges the returned user into [DataProvider], and pops the page
-/// with a success toast. Username is locked behind a "request change"
-/// affordance because username collisions are a hosting-uniqueness
-/// problem we don't want to introduce here without the rename audit
-/// log on the backend side.
+/// with a success toast. The username changes on its own page, once every
+/// 30 days ([ChangeUsernamePage]).
 class EditProfilePage extends StatefulWidget {
   const EditProfilePage({super.key});
 
@@ -78,6 +77,14 @@ class _EditProfilePageState extends State<EditProfilePage>
             : 'public') ||
         _tag != (user?.profileTag ?? '');
     if (dirty != _dirty) setState(() => _dirty = dirty);
+  }
+
+  void _changeUsername() {
+    EventTracker.instance
+        .trackTap(target: 'edit_username_change', pageName: pageName);
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => const ChangeUsernamePage(),
+    ));
   }
 
   Future<void> _onSave() async {
@@ -338,9 +345,8 @@ class _EditProfilePageState extends State<EditProfilePage>
             ),
             const SizedBox(height: AppTheme.space8),
 
-            // Your username, shown but not editable. It used to have a
-            // Change button that only said "coming soon" in developer
-            // words; usernames cannot be changed, so it says that plainly.
+            // Your username. It changes on its own page, once every 30
+            // days, the way TikTok allows it.
             ListTile(
               key: const ValueKey('edit_username'),
               contentPadding: EdgeInsets.zero,
@@ -351,10 +357,12 @@ class _EditProfilePageState extends State<EditProfilePage>
                   color: cs.onSurfaceVariant,
                 ),
               ),
-              trailing: Text(
-                "Can't be changed",
-                style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+              trailing: TextButton(
+                key: const ValueKey('edit_username_change'),
+                onPressed: _changeUsername,
+                child: const Text('Change'),
               ),
+              onTap: _changeUsername,
             ),
 
             // League badge row — read-only because league is derived

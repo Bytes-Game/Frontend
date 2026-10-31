@@ -4,6 +4,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/config/username_rules.dart';
 import 'package:myapp/pages/static_content_pages.dart';
 import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/services/api_service.dart';
@@ -50,7 +51,6 @@ class _SignupScreenState extends State<SignupScreen> {
   final Map<String, String> _serverSays = {};
   String? _error;
 
-  static final _usernameRe = RegExp(r'^[a-z0-9_.]{3,20}$');
   static final _emailRe = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
 
   @override
@@ -61,21 +61,6 @@ class _SignupScreenState extends State<SignupScreen> {
     _email.dispose();
     _password.dispose();
     super.dispose();
-  }
-
-  /// What is wrong with the username as typed, before asking the server.
-  static String? usernameProblem(String name) {
-    if (name.isEmpty) return null;
-    if (!_usernameRe.hasMatch(name)) {
-      return 'Use 3 to 20 characters: letters, numbers, _ and . only.';
-    }
-    if (name.startsWith('.') || name.endsWith('.') || name.contains('..')) {
-      return "Can't start or end with a dot, or have two dots in a row.";
-    }
-    if (!name.contains(RegExp(r'[a-z]'))) {
-      return 'Needs at least one letter.';
-    }
-    return null;
   }
 
   void _onUsername(String raw) {
