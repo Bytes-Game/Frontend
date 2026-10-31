@@ -212,8 +212,12 @@ class _SignupScreenState extends State<SignupScreen> {
   }
 
   String _messageFor(AuthFailure failure) => switch (failure) {
-        AuthFailure.rejected => "Couldn't create the account. Check the "
-            'details above and try again.',
+        // Sign-up never meets an account waiting to be deleted — its name
+        // just reads as taken — so that reads as a refusal too.
+        AuthFailure.rejected ||
+        AuthFailure.deletionPending =>
+          "Couldn't create the account. Check the "
+              'details above and try again.',
         AuthFailure.unreachable => "Couldn't reach the server. It may be "
             'waking up — wait a few seconds and try again.',
         AuthFailure.serverError => 'The server had a problem. Please try '

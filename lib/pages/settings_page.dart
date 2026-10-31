@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/config/dates.dart';
 import 'package:myapp/pages/change_password_page.dart';
 import 'package:myapp/pages/free_up_space_page.dart';
 import 'package:myapp/pages/notification_settings_page.dart';
@@ -151,10 +152,10 @@ class _SettingsPageState extends State<SettingsPage>
       behavior: SnackBarBehavior.floating,
       content: Text('Deleting your account…'),
     ));
-    final done = await ApiService.deleteAccount(user.id);
+    final result = await ApiService.deleteAccount(user.id);
     if (!mounted) return;
     messenger.hideCurrentSnackBar();
-    if (!done) {
+    if (!result.done) {
       messenger.showSnackBar(const SnackBar(
         behavior: SnackBarBehavior.floating,
         content: Text("Couldn't delete your account. Check your connection "
@@ -170,9 +171,14 @@ class _SettingsPageState extends State<SettingsPage>
     Navigator.of(context).popUntil((r) => r.isFirst);
     // ignore: use_build_context_synchronously
     auth.logout(context);
-    messenger.showSnackBar(const SnackBar(
+    final on = result.deleteOn;
+    messenger.showSnackBar(SnackBar(
       behavior: SnackBarBehavior.floating,
-      content: Text('Your account has been deleted.'),
+      duration: const Duration(seconds: 8),
+      content: Text(on == null
+          ? 'Your account has been deleted.'
+          : 'Your account will be deleted on '
+              '${dateInWords(on.toLocal())}. Sign in before then to keep it.'),
     ));
   }
 
@@ -457,9 +463,12 @@ class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'This deletes @$name for good: your profile, your posts and '
-            'battles, your comments, likes, votes and followers. It cannot '
-            'be undone.',
+            '@$name will be hidden from everyone straight away and signed '
+            'out on every phone. Battles you are in now end with no result.'
+            '\n\n'
+            'After 30 days it is deleted for good: your profile, your posts '
+            'and battles, your comments, likes, votes and followers. Sign in '
+            'before then to keep it.',
           ),
           const SizedBox(height: 14),
           Text('Type $name to confirm.'),

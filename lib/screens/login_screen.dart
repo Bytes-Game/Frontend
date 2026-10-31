@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/config/dates.dart';
 import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/screens/signup_screen.dart';
 import 'package:myapp/services/api_service.dart';
@@ -62,13 +63,25 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     final auth = Provider.of<AuthProvider>(context, listen: false);
-    final failure = await auth.login(context, user, pass);
+    var failure = await auth.login(context, user, pass);
+
+    // The account asked to be deleted and is waiting out its 30 days. Ask:
+    // only the person's own tap keeps it.
+    if (mounted && failure?.failure == AuthFailure.deletionPending) {
+      final keep = await _askToKeep(failure!.deleteOn);
+      if (!mounted) return;
+      if (keep == true) {
+        // ignore: use_build_context_synchronously
+        failure = await auth.login(context, user, pass, keepAccount: true);
+      }
+    }
 
     if (!mounted) return;
-    if (failure != null) {
+    final why = failure;
+    if (why != null) {
       setState(() {
         _isLoading = false;
-        _error = _messageFor(failure);
+        _error = _messageFor(why);
       });
     }
   }
@@ -89,7 +102,42 @@ class _LoginScreenState extends State<LoginScreen> {
       case AuthFailure.serverError:
         return 'The server had a problem. Your details are probably fine — '
             'please try again in a moment.';
+      case AuthFailure.deletionPending:
+        return 'This account is waiting to be deleted. Sign in again and '
+            'choose "Keep my account" to stop that.';
     }
+  }
+
+  /// "Keep your account?" for an account waiting to be deleted. True when
+  /// they choose to keep it.
+  Future<bool?> _askToKeep(DateTime? deleteOn) {
+    final when =
+        deleteOn == null ? 'soon' : 'on ${dateInWords(deleteOn.toLocal())}';
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const ValueKey('keep_account_dialog'),
+        title: const Text('Keep your account?'),
+        content: Text(
+          'You asked for this account to be deleted. It will be deleted for '
+          'good $when.\n\n'
+          'Keep it to sign in and get everything back: your profile, posts, '
+          'followers and messages. Battles that were going on when you left '
+          'stay cancelled.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Not now'),
+          ),
+          FilledButton(
+            key: const ValueKey('keep_account'),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Keep my account'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _forgotPassword() {

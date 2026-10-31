@@ -62,7 +62,9 @@ class _TermsOfServicePageState extends State<TermsOfServicePage>
                 'grant devf a license to host, display, and distribute '
                 'it within the app and its public surfaces.'),
         _DocSection('Termination',
-            'You can delete your account at any time. We may suspend '
+            'You can delete your account at any time. It is hidden '
+                'straight away and deleted for good after 30 days; '
+                'signing in before then keeps it. We may suspend '
                 'or terminate accounts that break these terms or '
                 'present a safety risk.'),
         _DocSection('Disclaimer',
@@ -129,7 +131,10 @@ class _PrivacyPolicyPageState extends State<PrivacyPolicyPage>
         _DocSection('Retention',
             'Watch events older than 30 days are aggregated into your '
                 'user profile and the raw rows are eligible for deletion. '
-                'Content stays until you delete it.'),
+                'Content stays until you delete it. When you delete your '
+                'account it is hidden from everyone at once, and it and '
+                'everything in it are deleted for good 30 days later, '
+                'unless you sign in again and keep it.'),
         _DocSection('Contact',
             'Privacy questions: privacy@devf.app.'),
       ],

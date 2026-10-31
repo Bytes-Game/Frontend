@@ -23,6 +23,7 @@ import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/chat_cache.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
+import 'package:myapp/services/next_up_store.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/video_player_service.dart';
@@ -134,6 +135,24 @@ bool firstIsBattle = false;
 /// How many videos the feed serves.
 int feedLength = 2;
 
+/// For You comes in two pages: 1 and 2 first, then 3 and 4.
+bool twoPages = false;
+
+/// Holds the first request for page 2 — the page still on its way when a
+/// refresh starts.
+Completer<void>? holdFirstPage2;
+int page2Asks = 0;
+
+/// Every refresh the server is asked for fails, the way a server still
+/// waking up does.
+bool failRefresh = false;
+
+/// The app opened on videos kept from last time, and the server sits on the
+/// fresh page asked for behind them until this completes — then fails, as a
+/// server still waking up does. Every later For You page comes at once.
+Completer<void>? holdKeptPage;
+int forYouCount = 0;
+
 bool isRefresh(Uri u) => u.queryParameters['refresh'] == 'true';
 
 void main() {
@@ -159,12 +178,53 @@ void main() {
     ExploreGridCache.instance.debugReset();
     firstIsBattle = false;
     feedLength = 2;
+    twoPages = false;
+    holdFirstPage2 = null;
+    page2Asks = 0;
+    failRefresh = false;
+    holdKeptPage = null;
+    forYouCount = 0;
     ApiService.useClient(
       MockClient((req) async {
         if (req.url.path.endsWith('/feed/smart')) {
           forYouAsks.add(req.url);
           final hold = holdFeed;
           if (hold != null) await hold.future;
+          if (failRefresh && isRefresh(req.url)) {
+            return http.Response('waking up', 503);
+          }
+          final kept = holdKeptPage;
+          if (kept != null) {
+            if (forYouCount++ == 0) {
+              await kept.future;
+              return http.Response('waking up', 503);
+            }
+            // The refresh: one new video, and one that was kept.
+            return http.Response(
+              json.encode({
+                'items': [
+                  {'type': 'challenge', 'challenge': _challenge('1')},
+                  {'type': 'challenge', 'challenge': _challenge('k2')},
+                ],
+                'hasMore': false,
+              }),
+              200,
+            );
+          }
+          if (twoPages) {
+            final second = req.url.queryParameters['page'] == '2';
+            if (second && page2Asks++ == 0) await holdFirstPage2?.future;
+            return http.Response(
+              json.encode({
+                'items': [
+                  for (final id in second ? ['3', '4'] : ['1', '2'])
+                    {'type': 'challenge', 'challenge': _challenge(id)},
+                ],
+                'hasMore': !second,
+              }),
+              200,
+            );
+          }
         }
         if (req.url.path.contains('/chat/messages/')) chatMessageAsks++;
         if (req.url.path.endsWith('/feed/explore')) {
@@ -222,7 +282,10 @@ void main() {
   }
 
   /// The real shell, opened on Home with its first video playing.
-  Future<void> openHome(WidgetTester t) async {
+  Future<void> openHome(
+    WidgetTester t, {
+    String first = 'https://x/c1.mp4',
+  }) async {
     final queued = <VoidCallback>[];
     final before = VideoPlayerService.deferRelease;
     VideoPlayerService.deferRelease = queued.add;
@@ -250,9 +313,7 @@ void main() {
       ),
     );
     await frames(t, 20);
-    expect(platform.sounding, {
-      'https://x/c1.mp4',
-    }, reason: 'the first video never started');
+    expect(platform.sounding, {first}, reason: 'the first video never started');
   }
 
   Future<void> close(WidgetTester t) async {
@@ -561,6 +622,134 @@ void main() {
       expect(platform.sounding, {'https://x/c1.mp4'});
       await close(t);
     });
+  });
+
+  group('a refresh never ends on an empty "Retry" screen', () {
+    /// How many entries the list of videos holds.
+    int listed(WidgetTester t) =>
+        (t.widget<PageView>(videos).childrenDelegate
+                as SliverChildBuilderDelegate)
+            .childCount!;
+
+    testWidgets('a pull while a page is still on its way asks for its own '
+        'page — and the late one is left out when it comes', (t) async {
+      // What a device log showed: a pull five seconds after opening, while
+      // the page asked for at opening was still waiting on a server waking
+      // up. The refresh was turned away and ended at once on "Retry".
+      twoPages = true;
+      holdFirstPage2 = Completer<void>();
+      await openHome(t);
+      // Down to the second video asks for page 2, which the server holds.
+      await t.drag(videos, const Offset(0, -700));
+      await frames(t, 8);
+      expect(page2Asks, 1, reason: 'page 2 was never asked for');
+      await t.drag(videos, const Offset(0, 700));
+      await frames(t, 8);
+      final before = refreshes();
+      await t.dragFrom(const Offset(200, 420), const Offset(0, 200));
+      await frames(t, 12);
+      expect(refreshes(), before + 1, reason: 'the refresh asked for nothing');
+      expect(find.text('Retry'), findsNothing,
+          reason: 'the refresh ended on the empty Retry screen');
+      expect(shown(t), 0.0);
+      expect(platform.sounding, {'https://x/c1.mp4'});
+      // Down again: the fresh list's page 2 comes. Then the old one does.
+      await t.drag(videos, const Offset(0, -700));
+      await frames(t, 8);
+      holdFirstPage2!.complete();
+      await frames(t, 8);
+      expect(listed(t), 4,
+          reason: "the old list's page 2 was added to the new list as well");
+      await close(t);
+    });
+
+    testWidgets('a pull right after opening on the kept videos, while the '
+        'server still sits on the page behind them', (t) async {
+      // The run in the device log, as it happened: opened on the videos
+      // kept from last time, pulled five seconds in, and the page asked for
+      // at opening failed half a minute later.
+      final dir = Directory.systemTemp.createTempSync('home_refresh_kept');
+      addTearDown(() {
+        NextUpStore.instance.debugReset();
+        dir.deleteSync(recursive: true);
+      });
+      NextUpStore.directory = () async => dir;
+      NextUpStore.download = (url) async => null;
+      Map<String, dynamic> keptVideo(String id) => {
+        'type': 'challenge',
+        'challenge': _challenge(id),
+      };
+      await t.runAsync(() async {
+        await NextUpStore.instance.save('1', [keptVideo('k1'), keptVideo('k2')]);
+        NextUpStore.instance.debugReset();
+        await NextUpStore.instance.load();
+      });
+      holdKeptPage = Completer<void>();
+      await openHome(t, first: 'https://x/ck1.mp4');
+      expect(forYouCount, 1, reason: 'the page behind the kept videos');
+
+      await t.dragFrom(const Offset(200, 420), const Offset(0, 200));
+      await frames(t, 12);
+      expect(find.text('Retry'), findsNothing,
+          reason: 'the refresh ended on the empty Retry screen');
+      expect(platform.sounding, {'https://x/c1.mp4'},
+          reason: 'the fresh page is on screen');
+      expect(listed(t), 2,
+          reason: 'a video that had been kept was left out of the refresh');
+
+      // The page asked for at opening fails at last. Nothing more is asked
+      // for it, and nothing is added: that list has gone.
+      holdKeptPage!.complete();
+      await frames(t, 40);
+      expect(listed(t), 2);
+      expect(forYouCount, 2, reason: 'it kept asking for the page behind the '
+          'kept videos after they had been refreshed away');
+      expect(find.text('Retry'), findsNothing);
+      await close(t);
+    });
+
+    testWidgets('a refresh the server does not answer puts the videos back, '
+        'and says so', (t) async {
+      await openHome(t);
+      failRefresh = true;
+      await t.dragFrom(const Offset(200, 420), const Offset(0, 200));
+      await frames(t, 12);
+      expect(find.text('Retry'), findsNothing,
+          reason: 'an empty screen where the videos were a moment ago');
+      expect(
+        find.text(
+          "Couldn't refresh — the server didn't answer. Try again in a moment.",
+        ),
+        findsOneWidget,
+      );
+      expect(shown(t), 0.0);
+      expect(platform.sounding, {'https://x/c1.mp4'},
+          reason: 'the video from before plays again');
+      // And once the server is up, a pull works.
+      failRefresh = false;
+      await frames(t, 30);
+      final before = refreshes();
+      await t.dragFrom(const Offset(200, 420), const Offset(0, 200));
+      await frames(t, 12);
+      expect(refreshes(), before + 1);
+      expect(platform.sounding, {'https://x/c1.mp4'});
+      await close(t);
+    });
+  });
+
+  testWidgets('tapping Home on the second video when the server does not '
+      'answer: still on the second video, playing it', (t) async {
+    await openHome(t);
+    await t.drag(videos, const Offset(0, -700));
+    await frames(t, 8);
+    expect(platform.sounding, {'https://x/c2.mp4'});
+    failRefresh = true;
+    await t.tap(find.text('Home'));
+    await frames(t, 14);
+    expect(find.text('Retry'), findsNothing);
+    expect(shown(t), 1.0, reason: 'sent to the first video, with nothing new');
+    expect(platform.sounding, {'https://x/c2.mp4'});
+    await close(t);
   });
 
   testWidgets('pulling down on the second video goes back to the first, '

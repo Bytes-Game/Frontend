@@ -32,6 +32,10 @@ late Map<String, List<Map<String, dynamic>>> sent;
 /// What the server answers a sign-up: null for "made it".
 http.Response? signupAnswer;
 
+/// The account signing in asked to be deleted and is waiting out its 30
+/// days: the server says so until the person chooses to keep it.
+bool waitingToBeDeleted = false;
+
 /// The usernames the server says are taken or reserved, and why.
 const Map<String, String> notFree = {
   'taken_one': 'That username is taken.',
@@ -41,6 +45,7 @@ const Map<String, String> notFree = {
 void fakeServer() {
   sent = {};
   signupAnswer = null;
+  waitingToBeDeleted = false;
   ApiService.useClient(MockClient((req) async {
     final path = req.url.path;
     if (req.body.isNotEmpty) {
@@ -78,6 +83,19 @@ void fakeServer() {
       final body = json.decode(req.body) as Map<String, dynamic>;
       if (body['password'] != 'sunset42') {
         return http.Response('Invalid username or password', 401);
+      }
+      if (waitingToBeDeleted) {
+        if (body['keepAccount'] != true) {
+          return http.Response(
+              json.encode({
+                'error': 'This account will be deleted on 30 November 2026. '
+                    'Keep it to sign in.',
+                'deletionPending': true,
+                'deleteOn': '2026-11-30T10:00:00Z',
+              }),
+              409);
+        }
+        waitingToBeDeleted = false;
       }
       return http.Response(
           json.encode({
@@ -315,6 +333,38 @@ void main() {
     await t.enterText(find.byKey(const ValueKey('login_password')), 'sunset42');
     await tapKey(t, 'login_submit');
     expect(sent['/login']!.last['username'], 'maya@example.com');
+    expect(auth.isAuthenticated, isTrue);
+    expect(find.text('the app'), findsOneWidget);
+    stopReporter();
+  });
+
+  testWidgets('an account waiting to be deleted: asked, and kept only when '
+      'the person chooses to', (t) async {
+    waitingToBeDeleted = true;
+    final auth = await openApp(t);
+    await t.enterText(find.byKey(const ValueKey('login_username')), 'maya');
+    await t.enterText(find.byKey(const ValueKey('login_password')), 'sunset42');
+    await tapKey(t, 'login_submit');
+
+    // Asked, with the date, and not signed in.
+    expect(find.byKey(const ValueKey('keep_account_dialog')), findsOneWidget);
+    expect(find.textContaining('30 November 2026'), findsOneWidget);
+    expect(auth.isAuthenticated, isFalse);
+    expect(sent['/login']!.single.containsKey('keepAccount'), isFalse,
+        reason: 'the first sign-in must not keep the account on its own');
+
+    // "Not now": nothing kept, and the screen says what to do.
+    await t.tap(find.text('Not now'));
+    await settle(t);
+    expect(auth.isAuthenticated, isFalse);
+    expect(sent['/login']!.length, 1);
+    expect(find.textContaining('waiting to be deleted'), findsOneWidget);
+
+    // Asked again, and this time kept.
+    await tapKey(t, 'login_submit');
+    expect(find.byKey(const ValueKey('keep_account_dialog')), findsOneWidget);
+    await tapKey(t, 'keep_account');
+    expect(sent['/login']!.last['keepAccount'], isTrue);
     expect(auth.isAuthenticated, isTrue);
     expect(find.text('the app'), findsOneWidget);
     stopReporter();

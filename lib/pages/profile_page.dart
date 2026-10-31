@@ -90,6 +90,10 @@ class _ProfilePageState extends State<ProfilePage>
   /// staying put until the page was opened again.
   bool _followedWhenRead = false;
 
+  /// The server says this account is not there: deleted, or waiting to be.
+  /// The copy the app opened it from may be older than that.
+  bool _gone = false;
+
   // ── Tabs ───────────────────────────────────────────────────────────
   late final TabController _tabs;
 
@@ -515,8 +519,13 @@ class _ProfilePageState extends State<ProfilePage>
   /// Someone else's profile: their follower and following numbers as the
   /// server has them now.
   Future<void> _fetchFreshUser() async {
-    final u = await ApiService.getUserByUsername(widget.user.username);
+    final look = await ApiService.lookUpUser(widget.user.username);
+    final u = look.user;
     if (!mounted) return;
+    if (look.gone) {
+      setState(() => _gone = true);
+      return;
+    }
     if (u == null || u.id != widget.user.id) {
       debugPrint('[profile] could not read ${widget.user.username} again; '
           'showing the numbers the app already had');
@@ -535,6 +544,24 @@ class _ProfilePageState extends State<ProfilePage>
   Widget build(BuildContext context) {
     final dp = Provider.of<DataProvider>(context);
     final isOwn = dp.user?.id == widget.user.id;
+    // Opened from an older copy, but the account has gone — deleted, or
+    // waiting to be. Shown as gone, as TikTok shows it; nothing of theirs.
+    // Only ever set on somebody else's profile (see _fetchFreshUser).
+    if (_gone) {
+      return Scaffold(
+        key: const ValueKey('profile_unavailable'),
+        appBar: widget.isEmbedded ? null : AppBar(),
+        body: const Center(
+          child: Padding(
+            padding: EdgeInsets.all(32),
+            child: Text(
+              "This account isn't available.\nIt may have been deleted.",
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ),
+      );
+    }
     final isFollowing = dp.following.contains(widget.user.id);
     // Pushed as its own page, the arena runs up under the status bar and
     // leaves room for it; inside the main tabs a SafeArea already has.

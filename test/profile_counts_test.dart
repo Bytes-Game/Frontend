@@ -33,11 +33,16 @@ UserModel staleMaya() => UserModel(
 /// What the server says about maya now; null when it cannot be reached.
 Map<String, dynamic>? mayaNow;
 
+/// The server says there is no such account any more: deleted, or waiting
+/// to be deleted.
+bool mayaGone = false;
+
 /// Follows and unfollows the server was sent.
 List<String> sent = [];
 
 void fakeServer() {
   sent = [];
+  mayaGone = false;
   mayaNow = {
     'id': '5',
     'username': 'maya',
@@ -47,6 +52,7 @@ void fakeServer() {
   ApiService.useClient(MockClient((req) async {
     final p = req.url.path;
     if (p.endsWith('/users/maya')) {
+      if (mayaGone) return http.Response('User not found', 404);
       final now = mayaNow;
       return now == null
           ? http.Response('down', 503)
@@ -103,6 +109,23 @@ Future<void> settle(WidgetTester t) async {
 void main() {
   setUp(fakeServer);
   tearDown(() => ApiService.useClient(http.Client()));
+
+  testWidgets('an account that has gone since the app\'s copy was made shows '
+      'as unavailable, with nothing of theirs', (t) async {
+    mayaGone = true;
+    await openProfile(t, staleMaya());
+    expect(find.byKey(const ValueKey('profile_unavailable')), findsOneWidget);
+    expect(find.textContaining("This account isn't available"), findsOneWidget);
+    expect(find.byKey(const ValueKey('stat_Followers')), findsNothing);
+  });
+
+  testWidgets('a server that cannot be reached is not "gone": the copy the '
+      'app had stays', (t) async {
+    mayaNow = null; // 503
+    await openProfile(t, staleMaya());
+    expect(find.byKey(const ValueKey('profile_unavailable')), findsNothing);
+    expect(stat(t, 'Followers'), '12');
+  });
 
   testWidgets('someone else\'s profile shows the server\'s numbers, not the '
       'old copy', (t) async {

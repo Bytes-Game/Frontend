@@ -253,6 +253,12 @@ enum AuthFailure {
   /// The server answered with an error of its own (5xx). Also says nothing
   /// about the credentials.
   serverError,
+
+  /// The password was right, but this account asked to be deleted and is
+  /// waiting out its 30 days. The person can choose to keep it: signing in
+  /// again with keepAccount brings everything back. [AuthResult.deleteOn]
+  /// says when it will go.
+  deletionPending,
 }
 
 /// Outcome of a login or signup attempt: the session payload on success, or
@@ -261,8 +267,10 @@ class AuthResult {
   const AuthResult.success(this.data)
       : failure = null,
         field = null,
-        message = null;
-  const AuthResult.failed(this.failure, {this.field, this.message})
+        message = null,
+        deleteOn = null;
+  const AuthResult.failed(this.failure,
+      {this.field, this.message, this.deleteOn})
       : data = null;
 
   final Map<String, dynamic>? data;
@@ -274,7 +282,19 @@ class AuthResult {
   final String? field;
   final String? message;
 
+  /// For [AuthFailure.deletionPending]: when the account will be deleted for
+  /// good, unless it is kept.
+  final DateTime? deleteOn;
+
   bool get ok => data != null;
+}
+
+/// What asking to delete an account came to. See [ApiService.deleteAccount].
+class AccountDeletion {
+  const AccountDeletion({required this.done, this.deleteOn});
+
+  final bool done;
+  final DateTime? deleteOn;
 }
 
 /// Everything the sign-up form sends.
@@ -440,15 +460,16 @@ class ApiService {
   // —— Auth —————————————————————————————————————————————————————————————
 
   /// POST /login →{ user:{...}, token: "...", allUsers: [...] }
-  static Future<AuthResult> login(String username, String password) async {
-    return _authenticate('$_base/login', username, password);
-  }
-
-  /// Shared by [login] and [signup] — both post credentials and both need the
-  /// same distinction between "refused" and "never got an answer".
-  static Future<AuthResult> _authenticate(
-      String url, String username, String password) async {
-    return _post(url, {'username': username, 'password': password});
+  ///
+  /// [keepAccount] only after the person was told their account is waiting
+  /// to be deleted and chose to keep it — never on their behalf.
+  static Future<AuthResult> login(String username, String password,
+      {bool keepAccount = false}) async {
+    return _post('$_base/login', {
+      'username': username,
+      'password': password,
+      if (keepAccount) 'keepAccount': true,
+    });
   }
 
   /// Posts [body] and reads the answer the way every sign-in-shaped call
@@ -473,14 +494,24 @@ class ApiService {
       // Only a 4xx from the server is a statement about the credentials.
       if (res.statusCode >= 400 && res.statusCode < 500) {
         String? field, message;
+        DateTime? deleteOn;
+        var deletionPending = false;
         try {
           final said = json.decode(res.body);
           if (said is Map) {
             field = said['field'] as String?;
             message = said['error'] as String?;
+            deletionPending = said['deletionPending'] == true;
+            deleteOn = DateTime.tryParse('${said['deleteOn'] ?? ''}');
           }
         } catch (_) {
           // A plain-text refusal (an older server): no box to point at.
+        }
+        // The password was right; the account is waiting to be deleted and
+        // can be kept.
+        if (deletionPending) {
+          return AuthResult.failed(AuthFailure.deletionPending,
+              message: message, deleteOn: deleteOn);
         }
         // Too many tries: the server's own words for it are for programs
         // ("rate limited"), so the app says it for people.
@@ -566,7 +597,14 @@ class ApiService {
 
   /// GET /api/v1/users/{username} → a single user, or null if not found.
   /// Used to resolve a username to its id before hitting id-keyed endpoints.
-  static Future<UserModel?> getUserByUsername(String username) async {
+  static Future<UserModel?> getUserByUsername(String username) async =>
+      (await lookUpUser(username)).user;
+
+  /// The same, telling "no such account" ([gone]: the server said 404 — it
+  /// was deleted, or is waiting to be) apart from "could not ask" (both
+  /// null and false).
+  static Future<({UserModel? user, bool gone})> lookUpUser(
+      String username) async {
     try {
       final res = await _authHttp.get(
           Uri.parse('$_base/api/v1/users/${Uri.encodeComponent(username)}'));
@@ -575,12 +613,12 @@ class ApiService {
           json.decode(res.body) as Map<String, dynamic>,
         );
         AvatarBook.instance.learnUser(user);
-        return user;
+        return (user: user, gone: false);
       }
-      return null;
+      return (user: null, gone: res.statusCode == 404);
     } catch (e) {
       _unreadable('getUserByUsername', e);
-      return null;
+      return (user: null, gone: false);
     }
   }
 
@@ -2824,21 +2862,34 @@ class ApiService {
 
   // ─── Blocks ─────────────────────────────────────────────────────────
 
-  /// DELETE /api/v1/users/{id} — deletes the signed-in person's account
-  /// and everything in it, for good: profile, posts and battles, comments,
-  /// likes, votes, followers. True once the server has done it.
-  static Future<bool> deleteAccount(String userId) async {
+  /// DELETE /api/v1/users/{id} — asks for the signed-in person's account to
+  /// be deleted. It is hidden from everybody at once and deleted for good 30
+  /// days later, unless they sign in again and keep it.
+  ///
+  /// [AccountDeletion.done] once the server has taken the request;
+  /// [AccountDeletion.deleteOn] is when it goes for good (null from an older
+  /// server, which deleted it straight away).
+  static Future<AccountDeletion> deleteAccount(String userId) async {
     try {
       final res = await _authHttp
           .delete(Uri.parse('$_base/api/v1/users/$userId'))
           .timeout(const Duration(seconds: 60));
-      if (res.statusCode == 200) return true;
+      if (res.statusCode == 200) {
+        DateTime? on;
+        try {
+          final said = json.decode(res.body);
+          if (said is Map) on = DateTime.tryParse('${said['deleteOn'] ?? ''}');
+        } catch (_) {
+          // Done all the same; only the date is missing.
+        }
+        return AccountDeletion(done: true, deleteOn: on);
+      }
       debugPrint('[account] deleting the account answered '
           '${res.statusCode}: ${res.body.trim()}');
     } catch (e) {
       _unreadable('deleteAccount', e);
     }
-    return false;
+    return const AccountDeletion(done: false);
   }
 
   /// POST /api/v1/blocks — block another user.
