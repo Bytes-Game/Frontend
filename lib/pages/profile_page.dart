@@ -546,7 +546,8 @@ class _ProfilePageState extends State<ProfilePage>
     final isOwn = dp.user?.id == widget.user.id;
     // Opened from an older copy, but the account has gone — deleted, or
     // waiting to be. Shown as gone, as TikTok shows it; nothing of theirs.
-    if (_gone && !isOwn) {
+    // Only ever set on somebody else's profile (see _fetchFreshUser).
+    if (_gone) {
       return Scaffold(
         key: const ValueKey('profile_unavailable'),
         appBar: widget.isEmbedded ? null : AppBar(),
