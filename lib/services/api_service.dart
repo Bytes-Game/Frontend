@@ -82,6 +82,12 @@ class _AuthHttp {
           .patch(url, headers: _merge(headers), body: body, encoding: encoding)
           .timeout(_requestTimeout));
 
+  Future<http.Response> put(Uri url,
+          {Map<String, String>? headers, Object? body, Encoding? encoding}) =>
+      _say('PUT', url, () => ApiService.httpClient
+          .put(url, headers: _merge(headers), body: body, encoding: encoding)
+          .timeout(_requestTimeout));
+
   Future<http.Response> delete(Uri url,
           {Map<String, String>? headers, Object? body, Encoding? encoding}) =>
       _say('DELETE', url, () => ApiService.httpClient
@@ -341,6 +347,57 @@ class UsernameCheck {
   final String? reason;
 }
 
+/// Whether the signed-in account may change its username now
+/// ([nextChangeAt] null), or from when.
+class UsernameStatus {
+  const UsernameStatus({required this.username, this.nextChangeAt});
+
+  final String username;
+  final DateTime? nextChangeAt;
+}
+
+/// How a username change went. [changed] carries the account under its new
+/// name and the fresh sign-in the server gave this phone: the change signed
+/// out every sign-in made before it, this one's included.
+class UsernameChange {
+  const UsernameChange.changed(
+      {required Map<String, dynamic> this.user,
+      required String this.token,
+      this.nextChangeAt})
+      : message = null,
+        tooSoon = false,
+        reachedServer = true;
+
+  const UsernameChange.refused(String this.message,
+      {this.tooSoon = false, this.nextChangeAt})
+      : user = null,
+        token = null,
+        reachedServer = true;
+
+  const UsernameChange.unreachable()
+      : user = null,
+        token = null,
+        message = null,
+        tooSoon = false,
+        nextChangeAt = null,
+        reachedServer = false;
+
+  final Map<String, dynamic>? user;
+  final String? token;
+
+  /// Why not, in the server's words for the person.
+  final String? message;
+
+  /// Changed less than 30 days ago; [nextChangeAt] says when it may again.
+  final bool tooSoon;
+  final DateTime? nextChangeAt;
+
+  /// False: the server could not be reached, so nothing is known.
+  final bool reachedServer;
+
+  bool get changed => user != null && token != null;
+}
+
 class ApiService {
   ApiService._();
 
@@ -398,6 +455,73 @@ class ApiService {
           valid: true,
           available: false,
           reason: "Couldn't check that name — check your connection.");
+    }
+  }
+
+  /// GET /api/v1/users/{id}/username — whether the account may change its
+  /// username now, and if not, from when. Null when the server could not
+  /// be asked.
+  static Future<UsernameStatus?> usernameStatus(String userId) async {
+    try {
+      final res = await _authHttp
+          .get(Uri.parse('$_base/api/v1/users/$userId/username'));
+      if (res.statusCode != 200) return null;
+      final body = json.decode(res.body) as Map<String, dynamic>;
+      return UsernameStatus(
+        username: '${body['username'] ?? ''}',
+        nextChangeAt: DateTime.tryParse('${body['nextChangeAt'] ?? ''}'),
+      );
+    } catch (e) {
+      _unreadable('usernameStatus', e);
+      return null;
+    }
+  }
+
+  /// PUT /api/v1/users/{id}/username — change the username, once every 30
+  /// days. On success the server signs out every sign-in made before, this
+  /// phone's too, and hands back a fresh one with the account.
+  static Future<UsernameChange> changeUsername(
+      String userId, String username) async {
+    try {
+      final res = await _authHttp.put(
+        Uri.parse('$_base/api/v1/users/$userId/username'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'username': username}),
+      );
+      Map<String, dynamic> body = const {};
+      try {
+        final said = json.decode(res.body);
+        if (said is Map<String, dynamic>) body = said;
+      } catch (_) {
+        // Not JSON: a proxy page or a plain-text error. Said below.
+      }
+      final next = DateTime.tryParse('${body['nextChangeAt'] ?? ''}');
+      if (res.statusCode == 200 &&
+          body['user'] is Map<String, dynamic> &&
+          '${body['token'] ?? ''}'.isNotEmpty) {
+        return UsernameChange.changed(
+          user: body['user'] as Map<String, dynamic>,
+          token: '${body['token']}',
+          nextChangeAt: next,
+        );
+      }
+      if (res.statusCode == 429) {
+        return const UsernameChange.refused(
+            "You've tried a lot of names. Wait a while, then try again.");
+      }
+      if (res.statusCode >= 400 && res.statusCode < 500) {
+        final said = '${body['error'] ?? ''}'.trim();
+        return UsernameChange.refused(
+          said.isNotEmpty ? said : "Couldn't change your username.",
+          tooSoon: body['tooSoon'] == true,
+          nextChangeAt: next,
+        );
+      }
+      _unreadable('changeUsername', 'status ${res.statusCode}');
+      return const UsernameChange.unreachable();
+    } catch (e) {
+      _unreadable('changeUsername', e);
+      return const UsernameChange.unreachable();
     }
   }
 

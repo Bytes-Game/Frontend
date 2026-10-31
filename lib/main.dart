@@ -424,6 +424,8 @@ class _WebSocketWrapperState extends State<_WebSocketWrapper>
     with WidgetsBindingObserver {
   late WebSocketService _ws;
   late CallService _calls;
+  late DataProvider _dp;
+  late VoidCallback _followingUsername;
   final _sounds = AssetCallSounds();
 
   @override
@@ -436,8 +438,12 @@ class _WebSocketWrapperState extends State<_WebSocketWrapper>
     WidgetsBinding.instance.addObserver(this);
 
     final dp = Provider.of<DataProvider>(context, listen: false);
+    _dp = dp;
     final username = dp.user?.username ?? '';
     _ws = WebSocketService(AppConstants.wsBaseUrl, username);
+    // A username change gives the account a new name; the connection moves
+    // to it, keeping every listener (see WebSocketService.useUsername).
+    _followingUsername = followUsername(_ws, dp, () => dp.user?.username);
     _calls = CallService(
       events: _ws.events,
       send: _ws.send,
@@ -475,6 +481,7 @@ class _WebSocketWrapperState extends State<_WebSocketWrapper>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _dp.removeListener(_followingUsername);
     _calls.dispose();
     _ws.dispose();
     super.dispose();
