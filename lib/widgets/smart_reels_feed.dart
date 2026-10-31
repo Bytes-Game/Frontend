@@ -27,6 +27,7 @@ import 'package:myapp/services/feed_paging.dart';
 import 'package:myapp/services/network_quality_service.dart';
 import 'package:myapp/services/next_up_store.dart';
 import 'package:myapp/services/own_uploads.dart';
+import 'package:myapp/services/page_cover_observer.dart';
 import 'package:myapp/services/playback_reporter.dart';
 import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/video_cache_service.dart';
@@ -296,7 +297,7 @@ class SmartReelsFeed extends StatefulWidget {
 }
 
 class _SmartReelsFeedState extends State<SmartReelsFeed>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, RouteAware {
   // Pagination state — matches backend SmartFeedHandler contract. _items is
   // polymorphic: most entries are _ReelItem (videos), but the backend now
   // interleaves _AccountsCard tiles every ~8 items. Use `is` checks at the
@@ -566,9 +567,89 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     _doManualRefresh(why: 'home_tab_tap');
   }
 
+  // ─── Another page on top ─────────────────────────────────────────────
+  //
+  // ════════════════════════════════════════════════════════════════════════
+  // THE VIDEO KEPT PLAYING UNDER THE NOTIFICATIONS PAGE
+  // ════════════════════════════════════════════════════════════════════════
+  //
+  // A page opened on top of the feed leaves the feed where it is, alive
+  // underneath, and its video carried on — with sound — behind the bell's
+  // notifications page. Stopping it was left to each button that opens a
+  // page, and only some did (the + button, Accept, a call). The bell did
+  // not, nor the battle page opened from a reel, nor a phone notification
+  // opening a page from anywhere.
+  //
+  // So the feed now hears it for itself (PageCoverObserver): when a page
+  // opens on top of this one, from anywhere — a button, a phone
+  // notification, a name tapped in the who-liked sheet — and when it goes
+  // again. Whatever opened it, the video stops, and when the page goes it
+  // starts again — if it was playing, never one somebody had stopped
+  // themselves.
+  //
+  // Only PAGES. A sheet or a menu over the reel (comments, share) keeps it
+  // playing, the way it always has.
+
+  /// The page this feed is on, while the navigator reports to it.
+  PageRoute<dynamic>? _route;
+
+  /// Another page is on top of this feed. Nothing starts playing while it
+  /// is — see [_heldBack].
+  bool _covered = false;
+
+  /// What to do when the page on top goes away: start the video that was
+  /// playing when it opened, or one that was about to start.
+  VoidCallback? _startWhenUncovered;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is! PageRoute<dynamic> || identical(route, _route)) return;
+    if (_route != null) PageCoverObserver.instance.unsubscribe(this);
+    _route = route;
+    PageCoverObserver.instance.subscribe(this, route);
+  }
+
+  /// A page opened on top of this feed.
+  @override
+  void didPushNext() {
+    _covered = true;
+    final player = VideoPlayerService.instance;
+    // Only the feed whose video is on screen: Home keeps one per tab.
+    if (!player.isOnScreenFor(this)) return;
+    if (player.activeIsPlaying) _startWhenUncovered = _watchAgain;
+    debugPrint('[reel] feed ${widget.kind.name}: a page opened on top; '
+        'video stopped${_startWhenUncovered == null ? '' : ' until it closes'}');
+    player.pauseAll();
+    _detachPlaybackListener();
+    _flushCurrentItemEvent(isSkip: false);
+  }
+
+  /// The page on top of this feed went away.
+  @override
+  void didPopNext() {
+    _covered = false;
+    final start = _startWhenUncovered;
+    _startWhenUncovered = null;
+    if (start == null) return;
+    debugPrint('[reel] feed ${widget.kind.name}: the page on top closed; '
+        'video playing again');
+    start();
+  }
+
+  /// Another page is on top: nothing starts behind it. [then] runs instead
+  /// when that page goes away.
+  bool _heldBack(VoidCallback then) {
+    if (!_covered) return false;
+    _startWhenUncovered = then;
+    return true;
+  }
+
   @override
   void dispose() {
     _leaving = true;
+    PageCoverObserver.instance.unsubscribe(this);
     widget.refreshRequests?.removeListener(_onRefreshRequested);
     // Keep this feed's place for when Home comes back, and its next videos
     // for when the app next opens.
@@ -624,25 +705,35 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       // Leaving the app: keep the next videos for the next open.
       if (state == AppLifecycleState.paused) _saveNextUp();
     } else if (state == AppLifecycleState.resumed) {
-      _currentItemStart = DateTime.now();
-      // A battle turned to the answer comes back on the answer. Starting
-      // the reel here would start the challenger — its sound playing behind
-      // the answer's still picture, which is what pulling down the
-      // notifications on a battle's other side used to leave.
-      final current = _currentIndex >= 0 && _currentIndex < _items.length
-          ? _items[_currentIndex]
-          : null;
-      if (current is _ReelItem &&
-          current.isBattle &&
-          current.faces.showingOpponent) {
-        current.resumeAnswer.value++;
-        return;
-      }
-      // Not from the start. The viewer never left this reel — the app was
-      // backgrounded and came back — so picking it up where it was is
-      // exactly right, and rewinding would lose their place.
-      _playCurrent(fromStart: false); // re-attaches the playback listener
+      // Back in the app, but with another page on top of this feed: the
+      // video stays stopped until that page goes (didPopNext). Starting it
+      // here played it behind the page.
+      if (_covered) return;
+      _watchAgain();
     }
+  }
+
+  /// The viewer is back on this reel — from another app, or from a page that
+  /// was on top — so it carries on.
+  void _watchAgain() {
+    _currentItemStart = DateTime.now();
+    // A battle turned to the answer comes back on the answer. Starting
+    // the reel here would start the challenger — its sound playing behind
+    // the answer's still picture, which is what pulling down the
+    // notifications on a battle's other side used to leave.
+    final current = _currentIndex >= 0 && _currentIndex < _items.length
+        ? _items[_currentIndex]
+        : null;
+    if (current is _ReelItem &&
+        current.isBattle &&
+        current.faces.showingOpponent) {
+      current.resumeAnswer.value++;
+      return;
+    }
+    // Not from the start. The viewer never left this reel, so picking it
+    // up where it was is exactly right, and rewinding would lose their
+    // place.
+    _playCurrent(fromStart: false); // re-attaches the playback listener
   }
 
   // ─── Pagination ──────────────────────────────────────────────────────
@@ -1513,6 +1604,18 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       await Future.wait(waits);
       if (!mounted || _currentIndex != index) return;
     }
+    // A page is on top of the feed — opened before this reel got going (the
+    // feed's first page arriving late, say) or while it waited just above.
+    // It starts when that page goes, not behind it.
+    if (_heldBack(
+      () => _playCurrent(
+        waitForWarm: waitForWarm,
+        fromStart: fromStart,
+        arriving: arriving,
+      ),
+    )) {
+      return;
+    }
     if (arriving) {
       item.opensOnAnswer = item.isBattle && item.ahead == 'answer';
     }
@@ -1553,6 +1656,11 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     // The service guards its own half of that race; this guards ours, so a
     // watch event is not recorded against a reel that is no longer on screen.
     if (!mounted || _currentIndex != index) return;
+    // And a page opened on top while it was starting: stop it again.
+    if (_heldBack(_watchAgain)) {
+      VideoPlayerService.instance.pauseAll();
+      return;
+    }
 
     // Watch this reel's playback for complete/loop signals.
     _attachPlaybackListener(item, state.controller);

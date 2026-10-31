@@ -27,6 +27,7 @@ import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/session_store.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/services/page_tracker.dart';
+import 'package:myapp/services/page_cover_observer.dart';
 import 'package:myapp/services/websocket_service.dart';
 import 'package:myapp/services/call_service.dart';
 import 'package:myapp/services/push_service.dart';
@@ -327,7 +328,13 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
             darkTheme: AppTheme.darkTheme,
             themeMode: theme.themeMode,
             navigatorKey: MyApp.navigatorKey,
-            navigatorObservers: [MyApp.routeObserver],
+            // The second tells a page when another page opens on top of it:
+            // how the reels feed knows to stop its video. See
+            // PageCoverObserver.
+            navigatorObservers: [
+              MyApp.routeObserver,
+              PageCoverObserver.instance,
+            ],
             // The photo and video editors' words. Without them the editors'
             // top bar, and the "please wait" box they open up here while
             // saving, refuse to draw. See editor_setup.
