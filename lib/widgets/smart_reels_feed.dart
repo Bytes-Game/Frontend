@@ -800,6 +800,11 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       _loadPlaylist(refresh: refresh);
       return;
     }
+    // What was on screen, to put back if the refresh brings nothing.
+    final before = refresh ? List<_FeedEntry>.of(_items) : const <_FeedEntry>[];
+    final beforeIndex = _currentIndex;
+    final beforePage = _page;
+    final beforeHasMore = _hasMore;
     // Seed-first: when a starting challenge was provided (search-result tap
     // path), prepend it before paginating so the user opens *on* the video
     // they tapped, not on whatever the explore feed serves first. Crucially,
@@ -869,6 +874,11 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
             ? 'open'
             : 'no';
     setState(() {
+      // A new list: a page still on its way for the old one no longer
+      // counts, and must not hold this one's first page up.
+      _listGeneration++;
+      _loadingMore = false;
+      _skipKeys = const {};
       _loadingFirstPage = !hasSeed;
       _items.clear();
       // The position goes back with the list, here, in the same breath as
@@ -924,15 +934,38 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       _loadingFirstPage = false;
       _currentItemStart = DateTime.now();
     });
+    // A refresh that brought nothing — the server asleep or out of reach —
+    // puts back what was there, rather than leaving an empty screen with a
+    // Retry button where the videos were a moment ago.
+    if (refresh && _items.isEmpty && before.isNotEmpty) {
+      final failed = _lastError != null;
+      debugPrint('[reel] feed ${widget.kind.name}: the refresh brought '
+          '${failed ? 'an error ($_lastError)' : 'no videos'}; back to the '
+          '${before.length} from before');
+      setState(() {
+        _items.addAll(before);
+        _currentIndex = beforeIndex.clamp(0, before.length - 1);
+        _page = beforePage;
+        _hasMore = beforeHasMore;
+        _lastError = null;
+      });
+      _toast(failed
+          ? "Couldn't refresh — the server didn't answer. Try again in a "
+              'moment.'
+          : 'Nothing new yet.');
+    }
     // Snap back to the first reel after a refresh — otherwise the page
     // controller stays at whatever index the user was at and they see
-    // newly-loaded content out of order.
+    // newly-loaded content out of order. (Or to where it was, if the
+    // refresh brought nothing and the old videos are back.)
     if (refresh && _pageController.hasClients) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         // Visual only. _currentIndex was already reset with the list above,
         // because whether the pager happens to be attached must not decide
         // whether the feed knows where it is.
-        if (_pageController.hasClients) _pageController.jumpToPage(0);
+        if (_pageController.hasClients) {
+          _pageController.jumpToPage(_currentIndex);
+        }
       });
     }
     // Kick off autoplay on the first real item — and warm the prefetch
@@ -1035,6 +1068,26 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   /// opened on, while their fresh page is fetched.
   Set<String> _skipKeys = const {};
 
+  /// Which list the feed is showing. A refresh starts a new one.
+  ///
+  /// ════════════════════════════════════════════════════════════════════════
+  /// A PULL RIGHT AFTER OPENING THE APP ENDED ON "RETRY"
+  /// ════════════════════════════════════════════════════════════════════════
+  ///
+  /// The app opens on the videos kept from last time and asks for a fresh
+  /// page behind them. A server waking up takes up to half a minute to
+  /// answer that. A pull in the meantime emptied the screen and asked for
+  /// its own page — and was turned away, because a page was already on its
+  /// way and only one is asked for at a time. So the refresh asked for
+  /// nothing, and ended at once on the empty "Retry" screen. A device log
+  /// showed it: a pull five seconds after opening, the request still
+  /// waiting from before, and nothing else.
+  ///
+  /// Now a page asked for an older list does not hold a refresh up, and
+  /// when it does arrive it is thrown away: it belongs to a list that has
+  /// gone.
+  int _listGeneration = 0;
+
   /// Whether the last page asked for failed outright.
   bool _lastPageFailed = false;
 
@@ -1074,6 +1127,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   Future<void> _loadNextPage({bool refresh = false}) async {
     if (_loadingMore || !_hasMore) return;
     _loadingMore = true;
+    final generation = _listGeneration;
     final nextPage = _page + 1;
     final sessionId = _sessionId();
     final data = await _fetchPage(
@@ -1083,6 +1137,14 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     );
     if (!mounted) {
       _loadingMore = false;
+      return;
+    }
+    // Asked for a list that has since been refreshed away. The refresh has
+    // asked for its own page, and whether a page is on its way is its
+    // business now, not this one's. See [_listGeneration].
+    if (generation != _listGeneration) {
+      debugPrint('[reel] feed ${widget.kind.name}: a page asked for before '
+          'the refresh came in; left out');
       return;
     }
     final raw = (data['items'] as List?) ?? const [];
