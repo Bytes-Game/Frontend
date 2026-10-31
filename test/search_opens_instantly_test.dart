@@ -165,6 +165,88 @@ void main() {
     expect(tile(1), findsNothing);
   });
 
+  group("the grid's pull is Home's pull", () {
+    // A phone's height. The old pull (Flutter's own) wanted a sixth of the
+    // list's height before it would refresh — well over 100 points here —
+    // which is what having to pull harder than on Home was.
+    void phone(WidgetTester t) {
+      t.view.physicalSize = const Size(400, 860);
+      t.view.devicePixelRatio = 1;
+      addTearDown(t.view.resetPhysicalSize);
+      addTearDown(t.view.resetDevicePixelRatio);
+    }
+
+    Finder label(String text) => find.byWidgetPredicate(
+      (w) =>
+          w is Text &&
+          w.key == const ValueKey('pull_refresh_label') &&
+          w.data == text,
+    );
+
+    testWidgets("a hand's length down refreshes, saying so on the way, and "
+        'the grid follows the finger', (t) async {
+      phone(t);
+      await t.pumpWidget(app(const SearchPage()));
+      await settle(t);
+      expect(tile(1), findsOneWidget);
+      final top = t.getTopLeft(tile(1)).dy;
+      nextIds = [for (var i = 301; i <= 315; i++) i];
+      holdExplore = Completer<void>();
+      final g = await t.startGesture(t.getCenter(tile(1)));
+      await g.moveBy(const Offset(0, 20));
+      await t.pump();
+      await g.moveBy(const Offset(0, 20));
+      await t.pump();
+      expect(label('Pull to refresh'), findsOneWidget);
+      await g.moveBy(const Offset(0, 60));
+      await t.pump();
+      expect(label('Release to refresh'), findsOneWidget,
+          reason: '100 points down is enough, as on Home');
+      expect(t.getTopLeft(tile(1)).dy, greaterThan(top + 40),
+          reason: "the grid follows the finger down, as Home's video does");
+      await g.up();
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 100));
+      expect(label('Refreshing'), findsOneWidget);
+      expect(lastExploreAsk!.queryParameters['refresh'], 'true');
+      holdExplore!.complete();
+      await settle(t);
+      expect(tile(301), findsOneWidget);
+      expect(tile(1), findsNothing);
+      expect(find.byKey(const ValueKey('pull_refresh_label')), findsNothing,
+          reason: 'the words go once the new videos are in');
+      expect(t.getTopLeft(tile(301)).dy, closeTo(top, 1),
+          reason: 'and the grid is back where it was');
+    });
+
+    testWidgets('a short pull lets go without refreshing', (t) async {
+      phone(t);
+      await t.pumpWidget(app(const SearchPage()));
+      await settle(t);
+      final asked = exploreAsks;
+      await t.dragFrom(t.getCenter(tile(1)), const Offset(0, 50));
+      await settle(t);
+      expect(exploreAsks, asked);
+      expect(find.byKey(const ValueKey('pull_refresh_label')), findsNothing);
+    });
+
+    testWidgets('further down the grid, dragging down scrolls back up; it '
+        'does not refresh', (t) async {
+      phone(t);
+      nextIds = [for (var i = 1; i <= 45; i++) i];
+      await t.pumpWidget(app(const SearchPage()));
+      await settle(t);
+      final grid = find.byType(CustomScrollView).first;
+      await t.drag(grid, const Offset(0, -600));
+      await settle(t);
+      final asked = exploreAsks;
+      await t.drag(grid, const Offset(0, 300));
+      await settle(t);
+      expect(exploreAsks, asked);
+      expect(find.byKey(const ValueKey('pull_refresh_label')), findsNothing);
+    });
+  });
+
   testWidgets('with nothing in hand yet it shows a loading grid, not the '
       '"nothing here" screen', (t) async {
     holdExplore = Completer<void>();

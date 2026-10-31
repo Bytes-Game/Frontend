@@ -131,6 +131,9 @@ Completer<void>? holdFeed;
 /// Whether the first video is a battle (so a sideways drag turns it).
 bool firstIsBattle = false;
 
+/// How many videos the feed serves.
+int feedLength = 2;
+
 bool isRefresh(Uri u) => u.queryParameters['refresh'] == 'true';
 
 void main() {
@@ -155,6 +158,7 @@ void main() {
     ExploreGridCache.directory = () async => cacheDir;
     ExploreGridCache.instance.debugReset();
     firstIsBattle = false;
+    feedLength = 2;
     ApiService.useClient(
       MockClient((req) async {
         if (req.url.path.endsWith('/feed/smart')) {
@@ -188,7 +192,8 @@ void main() {
                   'type': 'challenge',
                   'challenge': _challenge('1', battle: firstIsBattle),
                 },
-                {'type': 'challenge', 'challenge': _challenge('2')},
+                for (var i = 2; i <= feedLength; i++)
+                  {'type': 'challenge', 'challenge': _challenge('$i')},
               ],
               'hasMore': false,
             }),
@@ -483,6 +488,77 @@ void main() {
       await frames(t, 8);
       expect(refreshes(), before);
       expect(platform.sounding, {'https://x/c2.mp4'});
+      await close(t);
+    });
+  });
+
+  /// Which video the list shows: 0 for the first. Not which one plays — a
+  /// video can play where nobody can see it, and the sound alone would not
+  /// tell.
+  double? shown(WidgetTester t) =>
+      t.widget<PageView>(videos).controller?.page;
+
+  group('after a refresh that takes a while, Home is on the first video, '
+      'playing it', () {
+    // A server that takes its time is the case that matters: the list is
+    // taken off the screen for the loading picture, and comes back new.
+    // A server that answers at once never takes it off, which is why this
+    // was only ever seen on a phone.
+    Future<void> slowRefresh(WidgetTester t, Future<void> Function() ask) async {
+      holdFeed = Completer<void>();
+      await ask();
+      await frames(t, 10);
+      expect(find.byKey(const ValueKey('pull_refresh_label')), findsOneWidget,
+          reason: 'still waiting for the server');
+      holdFeed!.complete();
+      await frames(t, 14);
+    }
+
+    testWidgets('back on Home further down, up to the first and a pull — '
+        'what a device log showed', (t) async {
+      feedLength = 4;
+      await openHome(t);
+      await t.drag(videos, const Offset(0, -700));
+      await frames(t, 8);
+      await t.drag(videos, const Offset(0, -700));
+      await frames(t, 8);
+      // Away to Search and back: Home comes back where it was, on the
+      // third video.
+      await t.tap(find.text('Search'));
+      await frames(t, 6);
+      await t.tap(find.text('Home'));
+      await frames(t, 12);
+      expect(shown(t), 2.0, reason: 'Home did not come back where it was');
+      // Up to the first, and pull.
+      await t.drag(videos, const Offset(0, 700));
+      await frames(t, 8);
+      await t.drag(videos, const Offset(0, 700));
+      await frames(t, 8);
+      expect(shown(t), 0.0);
+      await slowRefresh(
+        t,
+        () => t.dragFrom(const Offset(200, 420), const Offset(0, 200)),
+      );
+      expect(shown(t), 0.0,
+          reason: 'the fresh list came up showing a video further down');
+      expect(platform.sounding, {'https://x/c1.mp4'},
+          reason: 'the video on screen is the one playing');
+      await close(t);
+    });
+
+    testWidgets('tapping Home from further down', (t) async {
+      feedLength = 4;
+      await openHome(t);
+      await t.drag(videos, const Offset(0, -700));
+      await frames(t, 8);
+      await t.tap(find.text('Search'));
+      await frames(t, 6);
+      await t.tap(find.text('Home'));
+      await frames(t, 12);
+      expect(shown(t), 1.0);
+      await slowRefresh(t, () => t.tap(find.text('Home')));
+      expect(shown(t), 0.0);
+      expect(platform.sounding, {'https://x/c1.mp4'});
       await close(t);
     });
   });

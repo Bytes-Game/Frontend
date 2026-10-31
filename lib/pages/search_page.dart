@@ -22,6 +22,7 @@ import 'package:myapp/widgets/shimmer_loading.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/follow_flow.dart';
+import 'package:myapp/widgets/pull_refresh.dart';
 
 /// Search page — TikTok / Instagram style with four tabs:
 ///   * Top      — interleaved best of accounts + battles + shorts
@@ -399,7 +400,8 @@ class _SearchPageState extends State<SearchPage>
     _uncovering = null;
   }
 
-  final _refresher = GlobalKey<RefreshIndicatorState>();
+  /// The grid's pull to refresh — the same pull as Home's (PullToRefresh).
+  final _refresher = GlobalKey<PullToRefreshState>();
 
   /// Search tapped again in the bottom bar while Search is showing: back to
   /// the videos, at the top, with a fresh set — the same as pulling down.
@@ -644,8 +646,8 @@ class _SearchPageState extends State<SearchPage>
         } else if (n is ScrollEndNotification) {
           _previewCoord.setScrolling(false);
         }
-        // Never swallow it: RefreshIndicator and the tab views are listening
-        // for these too, and eating them would break pull-to-refresh.
+        // Never swallow it: the pull to refresh and the tab views are
+        // listening for these too, and eating them would break the pull.
         return false;
       },
       child: _buildScaffold(cs, showTabs),
@@ -781,9 +783,8 @@ class _SearchPageState extends State<SearchPage>
     }
     if (_exploreChallenges.isEmpty) {
       // Even with nothing loaded, the user should still be able to pull to
-      // retry. Wrap the empty-state in a ListView with always-scrollable
-      // physics so RefreshIndicator gets the pull gesture.
-      return RefreshIndicator(
+      // retry, so the empty state sits in a list like the grid does.
+      return PullToRefresh(
         key: _refresher,
         onRefresh: () => _loadExploreChallenges(refresh: true),
         child: ListView(
@@ -802,7 +803,7 @@ class _SearchPageState extends State<SearchPage>
         ),
       );
     }
-    return RefreshIndicator(
+    return PullToRefresh(
       key: _refresher,
       onRefresh: () => _loadExploreChallenges(refresh: true),
       child: CustomScrollView(
@@ -1055,7 +1056,7 @@ class _SearchPageState extends State<SearchPage>
     final shortsHead = _shorts.take(6).toList();
 
     if (accountsHead.isEmpty && battlesHead.isEmpty && shortsHead.isEmpty) {
-      return RefreshIndicator(
+      return PullToRefresh(
         onRefresh: () async {
           if (_lastQuery.isNotEmpty) await _search(_lastQuery);
         },
@@ -1116,7 +1117,7 @@ class _SearchPageState extends State<SearchPage>
       );
     }
 
-    return RefreshIndicator(
+    return PullToRefresh(
       // Pull-to-refresh re-runs the active query so the user can shake
       // up the result ordering — same TikTok/IG behavior as the home reels.
       onRefresh: () async {
@@ -1173,7 +1174,7 @@ class _SearchPageState extends State<SearchPage>
     if (items.isEmpty) {
       // Wrap the no-results placeholder in a scrollable so the user can
       // still pull to retry the active query.
-      return RefreshIndicator(
+      return PullToRefresh(
         onRefresh: onRefresh,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -1190,7 +1191,7 @@ class _SearchPageState extends State<SearchPage>
         ),
       );
     }
-    return RefreshIndicator(
+    return PullToRefresh(
       // Search-result refresh re-runs the active query. The earlier
       // implementation called _loadExploreChallenges here which was a
       // bug — pulling to refresh on a search-results tab silently
@@ -1202,10 +1203,8 @@ class _SearchPageState extends State<SearchPage>
 
   Widget _challengeGrid(List<ChallengeModel> items, String resultType) {
     return GridView.builder(
-      // AlwaysScrollableScrollPhysics is required for the parent
-      // RefreshIndicator to fire its pull gesture even when the grid
-      // contents fit on a single screen. Without it, a short result list
-      // makes the pull-to-refresh silently drop.
+      // Always scrollable, so a short result list that fits on one screen
+      // still moves under the finger and can be pulled to refresh.
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(top: gridGap, bottom: 24),
       gridDelegate: _gridDelegate,
@@ -1383,7 +1382,7 @@ class _SearchPageState extends State<SearchPage>
     Future<void> onRefresh() async {
       if (_lastQuery.isNotEmpty) await _search(_lastQuery);
     }
-    Widget wrapEmpty(Widget inner) => RefreshIndicator(
+    Widget wrapEmpty(Widget inner) => PullToRefresh(
           onRefresh: onRefresh,
           child: ListView(
             physics: const AlwaysScrollableScrollPhysics(),
@@ -1408,7 +1407,7 @@ class _SearchPageState extends State<SearchPage>
         subtitle: 'Check the spelling, or try part of the name.',
       ));
     }
-    return RefreshIndicator(
+    return PullToRefresh(
       onRefresh: onRefresh,
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
