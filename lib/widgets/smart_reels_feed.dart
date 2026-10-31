@@ -35,6 +35,7 @@ import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/widgets/music_credit.dart';
 import 'package:myapp/widgets/report_video.dart';
 import 'package:myapp/widgets/open_to_battles.dart';
+import 'package:myapp/widgets/pull_refresh.dart';
 import 'package:myapp/widgets/follow_flow.dart';
 import 'package:myapp/widgets/feed_action_bar.dart'
     show
@@ -320,7 +321,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   static const _maxAutoRetries = 3;
 
   // Active reel tracking.
-  late final PageController _pageController;
+  late PageController _pageController;
   int _currentIndex = 0;
 
   // Per-index reel state (player + controller).
@@ -372,16 +373,16 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
   // It used to have to start in the top 120 pixels, which is under the
   // feed's own tab strip: a pull had to begin on a thin band most people
   // never aim for.
-  static const double _refreshTriggerPx = 80;
+  static const double _refreshTriggerPx = pullRefreshTriggerPx;
 
   /// How far a finger moves before it counts as going one way or another.
   /// Below this it could still be a tap.
-  static const double _pullDecidePx = 10;
+  static const double _pullDecidePx = pullRefreshDecidePx;
 
   /// How much more down than sideways a drag has to be to be a pull. A
   /// battle turns to its other side with a sideways drag, and a slightly
   /// downhill sideways drag must still do that, not refresh.
-  static const double _pullSteepness = 1.2;
+  static const double _pullSteepness = pullRefreshSteepness;
 
   double? _pullStartY; // Y of the pointer-down event that armed a pull.
   double? _pullStartX;
@@ -497,6 +498,9 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       initialPage: restore
           ? kept.index.clamp(0, kept.items.length - 1)
           : _playlistStart(),
+      // Where the pager is comes from _currentIndex alone, never from a page
+      // remembered for it. See [_pagerOnCurrent].
+      keepPage: false,
     );
     if (restore) {
       _restore(kept);
@@ -636,6 +640,40 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     debugPrint('[reel] feed ${widget.kind.name}: the page on top closed; '
         'video playing again');
     start();
+  }
+
+  /// The pager — the list of videos on screen — starts on the video the feed
+  /// is on.
+  ///
+  /// ════════════════════════════════════════════════════════════════════════
+  /// A REFRESH LANDED ON A VIDEO FURTHER DOWN, AND IT DID NOT PLAY
+  /// ════════════════════════════════════════════════════════════════════════
+  ///
+  /// While a refresh waits for the server, the pager is taken off the screen
+  /// for the loading picture. When it comes back it is a new one, and a new
+  /// pager starts wherever its controller was first told to: the video Home
+  /// was put back on when you came back to it, long since left. A device log
+  /// showed it — back on video 7, up to the first, pull, and the fresh list
+  /// came up showing a video further down, still, while the first one, the
+  /// one the feed had moved to, played where nobody could see it.
+  ///
+  /// The jump back to the top after a refresh could not fix it: it only
+  /// happens if the pager is on the screen at that moment, and it is not.
+  /// A server that answers at once never takes it off the screen, which is
+  /// why tests did not see this and a phone did.
+  ///
+  /// So whenever the pager comes back, it comes back on the video the feed
+  /// is on.
+  void _pagerOnCurrent() {
+    if (_pageController.hasClients ||
+        _pageController.initialPage == _currentIndex) {
+      return;
+    }
+    _pageController.dispose();
+    _pageController = PageController(
+      initialPage: _currentIndex,
+      keepPage: false,
+    );
   }
 
   /// Another page is on top: nothing starts behind it. [then] runs instead
@@ -800,11 +838,17 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
       _prefetchDebounce?.cancel();
       _lastPrefetchAt = null;
     }
-    final hasSeed = widget.seedChallenge != null;
+    // The video somebody tapped (in Search) goes first — when the feed
+    // opens, not when it is refreshed. A pull asks for something new from
+    // the top, and putting the tapped video back first meant a refresh only
+    // changed the videos after it: you stayed on the one you were already
+    // watching, as if the pull had done nothing.
+    final givenSeed = widget.seedChallenge != null;
+    final hasSeed = givenSeed && !refresh;
     // The first time this feed loads after the app opens, ask for it the
     // way a pull-to-refresh does. See [_freshSinceOpen].
     final freshOnOpen =
-        !hasSeed && !SmartReelsFeed._freshSinceOpen.contains(widget.kind);
+        !givenSeed && !SmartReelsFeed._freshSinceOpen.contains(widget.kind);
     // Opening the app: start on the videos kept from last time, if there
     // are any, and fetch the fresh page behind them. See [NextUpStore].
     if (freshOnOpen && !refresh && widget.kind == FeedKind.forYou) {
@@ -3077,11 +3121,29 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
               left: 0,
               right: 0,
               child: const IgnorePointer(
-                child: _PullRefreshBadge(
+                child: PullRefreshBadge(
                   distance: _refreshTriggerPx,
                   triggerPx: _refreshTriggerPx,
                   isRefreshing: true,
                 ),
+              ),
+            ),
+          // A feed opened on top of a page — Search's videos — keeps its way
+          // back while the fresh videos come, however long the server takes.
+          if (widget.showBack)
+            Positioned(
+              top: topInset + 2,
+              left: 4,
+              child: IconButton(
+                key: const ValueKey('reel_back'),
+                tooltip: 'Back',
+                icon: const Icon(
+                  Icons.arrow_back_ios_new_rounded,
+                  color: Colors.white,
+                  size: 22,
+                  shadows: [Shadow(blurRadius: 8, color: Colors.black54)],
+                ),
+                onPressed: () => Navigator.of(context).maybePop(),
               ),
             ),
         ],
@@ -3090,6 +3152,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     if (_items.isEmpty) {
       return _EmptyState(onRetry: _loadInitialPage, errorMessage: _lastError);
     }
+    _pagerOnCurrent();
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -3204,7 +3267,7 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
             left: 0,
             right: 0,
             child: IgnorePointer(
-              child: _PullRefreshBadge(
+              child: PullRefreshBadge(
                 distance: _pullDistance,
                 triggerPx: _refreshTriggerPx,
                 isRefreshing: _isRefreshing,
@@ -6810,75 +6873,6 @@ class _FullScreenLoaderState extends State<_FullScreenLoader>
                 strokeWidth: 2,
                 color: Colors.white70,
               ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// What a pull on the first video looks like, TikTok style: a ring that
-/// fills as the finger comes down, and a word saying what letting go will
-/// do. Then the ring spins while the new videos come.
-///
-///   * pulling, not far enough — "Pull to refresh", the ring part filled
-///   * far enough — "Release to refresh", the ring full
-///   * refreshing — "Refreshing", the ring spinning
-///
-/// Hand-rolled rather than Material's RefreshProgressIndicator: that one is
-/// driven by a RefreshIndicator and a scrollable, and this pull is read from
-/// the raw finger, see _handlePointerMove.
-class _PullRefreshBadge extends StatelessWidget {
-  final double distance;
-  final double triggerPx;
-  final bool isRefreshing;
-
-  const _PullRefreshBadge({
-    required this.distance,
-    required this.triggerPx,
-    required this.isRefreshing,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final progress = (distance / triggerPx).clamp(0.0, 1.0);
-    final ready = progress >= 1.0;
-    final label = isRefreshing
-        ? 'Refreshing'
-        : ready
-        ? 'Release to refresh'
-        : 'Pull to refresh';
-    const shadow = [Shadow(color: Color(0x99000000), blurRadius: 8)];
-    return Opacity(
-      // Fades in with the pull rather than popping up at the first pixel.
-      opacity: isRefreshing ? 1 : (0.25 + 0.75 * progress).clamp(0.0, 1.0),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 26,
-            height: 26,
-            child: CircularProgressIndicator(
-              key: const ValueKey('pull_refresh_ring'),
-              // Filling with the pull; spinning once it is refreshing.
-              value: isRefreshing ? null : progress,
-              strokeWidth: 2.6,
-              strokeCap: StrokeCap.round,
-              color: Colors.white,
-              backgroundColor: Colors.white.withValues(alpha: 0.22),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            label,
-            key: const ValueKey('pull_refresh_label'),
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.2,
-              shadows: shadow,
             ),
           ),
         ],
