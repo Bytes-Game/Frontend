@@ -816,6 +816,9 @@ void main() {
       await t.binding.setSurfaceSize(const Size(400, 1000));
       addTearDown(() => t.binding.setSurfaceSize(null));
       final leo = person('8', 'leo', tag: 'Comedian');
+      // Both accounts exist on the server: a profile the server has never
+      // heard of now shows as gone (see the profile's unavailable state).
+      accounts = {'leo': leo, 'sam': person('9', 'sam')};
       await t.pumpWidget(app(ProfilePage(user: leo, isEmbedded: false)));
       await settle(t);
       expect(find.byKey(const ValueKey('profile_tag_pill')), findsOneWidget);
