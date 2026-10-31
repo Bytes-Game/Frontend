@@ -1104,6 +1104,12 @@ class VideoPlayerService {
   bool get activeIsPlaying =>
       _activeEntry?.controller.value.isPlaying ?? false;
 
+  /// Whether the video on screen is the one [owner] put there with
+  /// [showAndPlay]. When another page opens on top of a feed, the feed stops
+  /// the video only if it is its own: Home keeps a feed per tab, and only
+  /// one of them is the one being watched.
+  bool isOnScreenFor(Object owner) => identical(_activeOwner, owner);
+
   /// Start the reel on screen again after [pauseActive].
   Future<void> resumeActive() async {
     final entry = _activeEntry;

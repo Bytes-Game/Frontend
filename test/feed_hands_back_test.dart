@@ -78,8 +78,18 @@ void main() {
     test('coming back to the app resumes, it does not restart', () {
       // The viewer never left this reel. Restarting here loses their place
       // for no reason — they backgrounded the app, they did not swipe.
-      final body = bodyOf(src, 'void didChangeAppLifecycleState(');
-      expect(body, contains('_playCurrent(fromStart: false)'),
+      // Coming back from a page that was on top of the feed is the same
+      // case, so both go through _watchAgain. Comment lines are stripped:
+      // the words explaining this must not stand in for the code.
+      String code(String body) => body
+          .split('\n')
+          .where((l) => !l.trimLeft().startsWith('//'))
+          .join('\n');
+      final lifecycle = code(bodyOf(src, 'void didChangeAppLifecycleState('));
+      expect(lifecycle, contains('_watchAgain()'),
+          reason: 'coming back to the app no longer picks the reel up');
+      final again = code(bodyOf(src, 'void _watchAgain()'));
+      expect(again, contains('_playCurrent(fromStart: false)'),
           reason: 'backgrounding the app and coming back now throws away '
               'where they had got to');
     });
