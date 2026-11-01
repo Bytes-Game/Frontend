@@ -1037,9 +1037,9 @@ class _ChatConversationPageState extends State<ChatConversationPage>
             colors: [
               Color.alphaBlend(
                 kAccent.withValues(alpha: dark ? 0.09 : 0.05),
-                Theme.of(context).scaffoldBackgroundColor,
+                AppTheme.pageColor(context),
               ),
-              Theme.of(context).scaffoldBackgroundColor,
+              AppTheme.pageColor(context),
             ],
           ),
         ),
@@ -1380,7 +1380,7 @@ class _Frost extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final bg = Theme.of(context).scaffoldBackgroundColor;
+    final bg = AppTheme.pageColor(context);
     return ClipRect(
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),

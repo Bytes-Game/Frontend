@@ -554,9 +554,9 @@ class _StepHeader extends StatelessWidget {
             borderRadius: BorderRadius.circular(20),
             boxShadow: [
               BoxShadow(
-                color: AppTheme.primary.withValues(alpha: 0.4),
-                blurRadius: 24,
-                offset: const Offset(0, 8),
+                color: AppTheme.primary.withValues(alpha: 0.35),
+                blurRadius: 28,
+                offset: const Offset(0, 4),
               ),
             ],
           ),

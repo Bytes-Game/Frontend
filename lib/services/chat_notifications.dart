@@ -335,7 +335,7 @@ class ChatNote {
 
   /// How it looks on Android: a conversation (the sender's name, their
   /// picture — Android draws their first letter in a coloured circle — and
-  /// their last few messages), in Battle Arena blue, on the Messages
+  /// their last few messages), in Flex blue, on the Messages
   /// channel that pops up and makes a sound, with Reply and Mark as read.
   AndroidNotificationDetails get android {
     final sender = Person(name: senderName, key: senderId, important: true);

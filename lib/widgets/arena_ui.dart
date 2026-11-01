@@ -191,7 +191,7 @@ class ArenaAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bg = Theme.of(context).scaffoldBackgroundColor;
+    final bg = AppTheme.pageColor(context);
     final initial = name.isEmpty ? '?' : name[0].toUpperCase();
     final ringWidth = size >= 48 ? 2.0 : 1.5;
 

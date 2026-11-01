@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:myapp/config/app_theme.dart';
 
 import 'package:myapp/models/battle_model.dart';
 import 'package:myapp/models/user_model.dart';
@@ -86,7 +87,7 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final fg = cs.onSurface;
     final muted = fg.withValues(alpha: 0.6);
-    final page = Theme.of(context).scaffoldBackgroundColor;
+    final page = AppTheme.pageColor(context);
     final wash = leagueWash(record.league);
     final top = dark
         ? Color.lerp(wash, Colors.black, 0.62)!

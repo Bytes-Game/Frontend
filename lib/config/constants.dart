@@ -80,6 +80,11 @@ class AppConstants {
   /// The app's name, wherever the app says it.
   static const String appName = 'Flex';
 
+  /// The version people see (About, the foot of Settings). The same as
+  /// `version:` in pubspec.yaml, before the "+": a test holds the two
+  /// together, so raise both.
+  static const String appVersion = '1.0.0';
+
   /// Where people write for help. The server gives the same address
   /// (supportEmail in its mailer.go). One place each, so it changes in one
   /// place each.

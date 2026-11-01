@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/config/constants.dart';
 import 'package:myapp/config/profile_tags.dart';
 import 'package:myapp/pages/change_username_page.dart';
 import 'package:myapp/providers/data_provider.dart';
@@ -321,7 +322,7 @@ class _EditProfilePageState extends State<EditProfilePage>
                           color: kAccent,
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: Theme.of(context).scaffoldBackgroundColor,
+                            color: AppTheme.pageColor(context),
                             width: 2,
                           ),
                         ),
@@ -449,6 +450,11 @@ class _EditProfilePageState extends State<EditProfilePage>
                       ),
                     ],
                     selected: {_visibility},
+                    // The app's blue for the chosen side.
+                    style: SegmentedButton.styleFrom(
+                      selectedBackgroundColor: AppTheme.primary,
+                      selectedForegroundColor: Colors.white,
+                    ),
                     onSelectionChanged: (set) {
                       if (set.isEmpty) return;
                       setState(() => _visibility = set.first);
@@ -459,7 +465,7 @@ class _EditProfilePageState extends State<EditProfilePage>
                   Text(
                     _visibility == 'friends'
                         ? 'Only your followers can see your full profile and posts.'
-                        : 'Anyone on devf can see your profile and posts.',
+                        : 'Anyone on ${AppConstants.appName} can see your profile and posts.',
                     style: tt.bodySmall?.copyWith(
                       color: cs.onSurfaceVariant,
                     ),

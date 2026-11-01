@@ -162,8 +162,7 @@ void main() {
       'settings_space': FreeUpSpacePage,
       'settings_help': HelpCenterPage,
       'settings_bug': BugReportPage,
-      'settings_terms': TermsOfServicePage,
-      'settings_policy': PrivacyPolicyPage,
+      'settings_policies': TermsAndPoliciesPage,
       'settings_about': AboutPage,
     };
     for (final e in opens.entries) {

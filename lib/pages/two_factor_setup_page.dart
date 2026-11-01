@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/config/constants.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
@@ -254,7 +255,7 @@ class _TwoFactorSetupPageState extends State<TwoFactorSetupPage>
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'Step 1 — add devf to your authenticator',
+          'Step 1 — add ${AppConstants.appName} to your authenticator',
           style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 8),

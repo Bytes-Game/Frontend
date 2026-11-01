@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/config/constants.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
@@ -47,18 +48,18 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage>
   static const _battles = [
     _Pref('friendResponse', "Friends' battles",
         'When people you follow post or answer a challenge',
-        Icons.group_rounded, Color(0xFF5E5CE6)),
+        Icons.group_rounded, AppTheme.primary),
     _Pref('endingSoon', 'Battle updates',
         'Ending soon, results, and when you win', Icons.emoji_events_rounded,
-        Color(0xFFFF9F0A)),
+        AppTheme.primary),
   ];
   static const _more = [
     _Pref('youWillLove', 'Videos picked for you',
         "Now and then, a battle we think you'll like",
-        Icons.auto_awesome_rounded, Color(0xFFFF375F)),
+        Icons.auto_awesome_rounded, AppTheme.primary),
     _Pref('inactiveWinback', 'Reminders',
         "A nudge when you haven't been around for a while",
-        Icons.schedule_rounded, Color(0xFF8E8E93)),
+        Icons.schedule_rounded, AppTheme.primary),
   ];
 
   /// The server's settings, as last read or saved. Null until read.
@@ -129,7 +130,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage>
       backgroundColor: settingsBackground(context),
       appBar: AppBar(
         title: const Text('Notifications'),
-        backgroundColor: settingsBackground(context),
+        backgroundColor: settingsBarColor(context),
         surfaceTintColor: Colors.transparent,
       ),
       body: prefs == null
@@ -158,7 +159,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage>
                   children: [for (final p in _battles) _switch(p)],
                 ),
                 SettingsGroup(
-                  title: 'From Battle Arena',
+                  title: 'From ${AppConstants.appName}',
                   children: [for (final p in _more) _switch(p)],
                 ),
                 SettingsGroup(
@@ -171,7 +172,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage>
                     SettingsSwitchTile(
                       key: const ValueKey('notif_quiet'),
                       icon: Icons.bedtime_rounded,
-                      color: const Color(0xFF5856D6),
+                      color: AppTheme.primary,
                       title: 'Pause at night',
                       subtitle: '10 PM to 8 AM',
                       value: _quiet,
