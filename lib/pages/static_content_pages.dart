@@ -589,6 +589,28 @@ const helpTopics = [
           'your profile with it stop working. Any other phone signed in to '
           'your account is signed out.',
     ]),
+    HelpArticle('How do I turn on two-step verification?', [
+      'Settings → Two-step verification. You need an authenticator app, '
+          'such as Google Authenticator, Authy or 1Password. Add $_app to it, '
+          'save the recovery codes it shows you somewhere safe, and enter '
+          'the 6-digit code the app shows.',
+      'From then on, signing in asks for a code from the app as well as '
+          'your password (or Google, or Apple). Each code works once.',
+      'Lost your phone? Sign in with one of your recovery codes instead: '
+          'tap "Use a recovery code instead" on the code screen. Each works '
+          'once.',
+    ]),
+    HelpArticle('Can I sign in with Google or Apple?', [
+      'Yes: on the sign-in or sign-up screen, tap Continue with Google, or '
+          'Continue with Apple. The first time, choose a username and add '
+          'your birthday to finish making your account.',
+      'If you already made an account with a password using the same '
+          'email, sign in with your password instead. Accounts are never '
+          'joined on the email alone, to keep them safe.',
+      'Signed up with Google or Apple and want a password too? On the '
+          'sign-in screen, tap Forgot password? and use your email: the code '
+          'lets you set one.',
+    ]),
     HelpArticle('How do I change my password?', [
       'Settings → Change password. Enter your current password, then the '
           'new one twice.',

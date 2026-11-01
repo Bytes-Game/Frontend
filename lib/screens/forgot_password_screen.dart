@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/config/constants.dart';
 import 'package:myapp/services/api_service.dart';
@@ -400,7 +399,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
           subtitle: where,
         ),
         const SizedBox(height: 28),
-        _CodeBoxes(
+        CodeBoxes(
+          fieldKey: const ValueKey('forgot_code'),
           controller: _code,
           focus: _codeFocus,
           enabled: !_busy,
@@ -615,126 +615,6 @@ class _HelpNote extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// Six boxes for the code. One real text box lies over them, unseen: it
-/// takes the typing, a paste, and the phone's own "fill in the code", and
-/// the boxes show what it holds.
-class _CodeBoxes extends StatelessWidget {
-  const _CodeBoxes({
-    required this.controller,
-    required this.focus,
-    required this.enabled,
-    required this.error,
-    required this.onChanged,
-  });
-
-  final TextEditingController controller;
-  final FocusNode focus;
-  final bool enabled;
-  final bool error;
-  final ValueChanged<String> onChanged;
-
-  static const _length = 6;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return SizedBox(
-      height: 60,
-      child: Stack(
-        children: [
-          ListenableBuilder(
-            listenable: Listenable.merge([controller, focus]),
-            builder: (context, _) {
-              final code = controller.text;
-              return Row(
-                children: [
-                  for (var i = 0; i < _length; i++) ...[
-                    Expanded(child: _box(i, code, scheme, dark)),
-                    if (i < _length - 1) const SizedBox(width: 10),
-                  ],
-                ],
-              );
-            },
-          ),
-          Positioned.fill(
-            child: TextField(
-              key: const ValueKey('forgot_code'),
-              controller: controller,
-              focusNode: focus,
-              enabled: enabled,
-              autofocus: true,
-              keyboardType: TextInputType.number,
-              autofillHints: const [AutofillHints.oneTimeCode],
-              inputFormatters: [
-                FilteringTextInputFormatter.digitsOnly,
-                LengthLimitingTextInputFormatter(_length),
-              ],
-              onChanged: onChanged,
-              showCursor: false,
-              cursorColor: Colors.transparent,
-              style: const TextStyle(color: Colors.transparent, fontSize: 1),
-              decoration: const InputDecoration(
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                disabledBorder: InputBorder.none,
-                errorBorder: InputBorder.none,
-                focusedErrorBorder: InputBorder.none,
-                filled: false,
-                isCollapsed: true,
-                counterText: '',
-                contentPadding: EdgeInsets.zero,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _box(int i, String code, ColorScheme scheme, bool dark) {
-    final digit = i < code.length ? code[i] : '';
-    final active = enabled &&
-        focus.hasFocus &&
-        (i == code.length || (code.length == _length && i == _length - 1));
-    final Color edge = error
-        ? AppTheme.error
-        : active
-            ? AppTheme.primary
-            : digit.isNotEmpty
-                ? AppTheme.primary.withValues(alpha: 0.5)
-                : scheme.onSurfaceVariant.withValues(alpha: 0.25);
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 160),
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: dark
-            ? Colors.white.withValues(alpha: 0.06)
-            : AppTheme.surfaceLightHigh,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: edge, width: active || error ? 2 : 1.2),
-        boxShadow: active
-            ? [
-                BoxShadow(
-                  color: AppTheme.primary.withValues(alpha: 0.25),
-                  blurRadius: 12,
-                ),
-              ]
-            : null,
-      ),
-      child: Text(
-        digit,
-        style: TextStyle(
-          fontSize: 24,
-          fontWeight: FontWeight.w800,
-          color: scheme.onSurface,
-        ),
       ),
     );
   }

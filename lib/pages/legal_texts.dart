@@ -83,8 +83,10 @@ const termsOfService = LegalDocument(
       'One account per person per email address. Your username is public, '
           'and you can change it once every 30 days. When you change it, '
           'your old one becomes free for anyone to take.',
-      'Keep your password to yourself, and use a strong one that you do '
-          'not use anywhere else.',
+      'You can sign in with your username or email and a password, or with '
+          'Google or Apple. Keep your password to yourself, use a strong one '
+          'that you do not use anywhere else, and turn on two-step '
+          'verification in Settings.',
       'You are responsible for what happens on your account. If you think '
           'someone else has got into it, change your password straight '
           'away (this signs out every other phone) and tell us at '
@@ -226,6 +228,9 @@ const privacyPolicy = LegalDocument(
       '• Reports and feedback: what you tell us when you report a video or '
           'a problem.',
       '• Interests: the kinds of videos you pick when you join.',
+      '• Google or Apple: if you sign in with one of them, the name and '
+          'email address they share with us, and the id they give your '
+          'account. We never see your Google or Apple password.',
     ]),
     LegalSection('Information collected as you use $_name', [
       '• Activity: which videos you watch and for how long, what you tap, '
@@ -275,7 +280,8 @@ const privacyPolicy = LegalDocument(
       '• Cloudflare, which stores and delivers videos and photos;',
       '• Google Firebase, to deliver notifications to your phone;',
       '• Sentry, to receive crash reports;',
-      '• an email service, to send password reset codes.',
+      '• an email service, to send password reset codes;',
+      '• Google or Apple, only if you choose to sign in with them.',
       'We may also share information when the law requires it, to protect '
           'someone\'s safety, or as part of a sale or merger of $_name, in '
           'which case this policy would continue to protect it.',
@@ -294,8 +300,8 @@ const privacyPolicy = LegalDocument(
       'In the app you can: edit your profile; make your account private; '
           'choose who can message and call you; hide your activity status; '
           'block people; delete posts; clear your watch history; choose '
-          'your notifications; change your password; and delete your '
-          'account.',
+          'your notifications; change your password; turn on two-step '
+          'verification; and delete your account.',
       'Depending on where you live, you may also have the right to see a '
           'copy of your information, correct it, have it deleted, take it '
           'with you, or object to how we use it. Write to $_privacy and we '
@@ -305,9 +311,10 @@ const privacyPolicy = LegalDocument(
     LegalSection('Keeping it safe', [
       'Connections to $_name are encrypted. Passwords and reset codes are '
           'stored scrambled, and changing your password signs out every '
-          'other phone. We limit how often anyone can try to sign in or ask '
-          'for a code. No system is perfect, but we work to protect your '
-          'information.',
+          'other phone. Two-step verification adds a code from an '
+          'authenticator app to signing in. We limit how often anyone can '
+          'try to sign in or ask for a code. No system is perfect, but we '
+          'work to protect your information.',
     ]),
     LegalSection('Children', [
       '$_name is not for children under 13, and we do not knowingly collect '

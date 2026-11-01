@@ -6,6 +6,7 @@ import 'package:myapp/models/user_model.dart';
 import 'package:myapp/services/chat_cache.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/session_store.dart';
+import 'package:myapp/services/social_auth.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
 import 'package:myapp/services/next_up_store.dart';
 import 'package:myapp/services/profile_cache.dart';
@@ -52,6 +53,72 @@ class AuthProvider with ChangeNotifier {
           : result;
     }
     // ignore: use_build_context_synchronously
+    await _completeAuth(context, result.data!);
+    return null;
+  }
+
+  /// The two-step code, after a sign-in answered
+  /// [AuthFailure.twoFactorRequired]: [ticket] is what that answer carried.
+  /// With the ticket from [AuthFailure.deletionPending], [keepAccount] keeps
+  /// the account and [code] is not needed. Null when signed in.
+  Future<AuthResult?> loginWithCode(
+      BuildContext context, String ticket, String code,
+      {bool keepAccount = false}) async {
+    final result =
+        await ApiService.loginWithCode(ticket, code, keepAccount: keepAccount);
+    // ignore: use_build_context_synchronously
+    return _finish(context, result);
+  }
+
+  /// Signs in with what Google's or Apple's sheet gave back. Null when
+  /// signed in; otherwise what comes next or what went wrong: the two-step
+  /// code ([AuthFailure.twoFactorRequired]), keeping an account
+  /// ([AuthFailure.deletionPending]), or finishing a new one
+  /// ([AuthFailure.needsSignup]). Keeping an account goes through the
+  /// ticket that answer carries ([loginWithCode]), not Google or Apple again.
+  Future<AuthResult?> signInWith(BuildContext context, SocialProvider provider,
+      SocialCredential credential) async {
+    final result = await ApiService.signInWithProvider(
+      provider.id,
+      credential.idToken,
+      // Only Apple keeps a person's name out of its token.
+      fullName: provider == SocialProvider.apple ? credential.fullName : null,
+    );
+    // ignore: use_build_context_synchronously
+    return _finish(context, result);
+  }
+
+  /// Finishes an account started with Google or Apple. Like [signup]: signed
+  /// in straight away, and on to the welcome steps. Null when done.
+  Future<AuthResult?> finishSocialSignup(BuildContext context,
+      {required String signupTicket,
+      required String username,
+      required String fullName,
+      required String birthDate,
+      required bool acceptTerms}) async {
+    final result = await ApiService.finishSocialSignup(
+      signupTicket: signupTicket,
+      username: username,
+      fullName: fullName,
+      birthDate: birthDate,
+      acceptTerms: acceptTerms,
+    );
+    // ignore: use_build_context_synchronously
+    final failed = await _finish(context, result);
+    if (failed == null) {
+      _needsOnboarding = true;
+      notifyListeners();
+    }
+    return failed;
+  }
+
+  /// Signs in with [result] when it is a sign-in; otherwise says why not.
+  Future<AuthResult?> _finish(BuildContext context, AuthResult result) async {
+    if (!result.ok) {
+      return result.failure == null
+          ? const AuthResult.failed(AuthFailure.unreachable)
+          : result;
+    }
     await _completeAuth(context, result.data!);
     return null;
   }

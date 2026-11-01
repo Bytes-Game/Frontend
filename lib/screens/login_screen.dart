@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
-import 'package:myapp/config/dates.dart';
 import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/screens/forgot_password_screen.dart';
 import 'package:myapp/screens/signup_screen.dart';
+import 'package:myapp/screens/social_sign_in.dart';
+import 'package:myapp/screens/two_step_signin_screen.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/widgets/auth_widgets.dart';
 
@@ -69,76 +70,31 @@ class _LoginScreenState extends State<LoginScreen> {
     // The account asked to be deleted and is waiting out its 30 days. Ask:
     // only the person's own tap keeps it.
     if (mounted && failure?.failure == AuthFailure.deletionPending) {
-      final keep = await _askToKeep(failure!.deleteOn);
-      if (!mounted) return;
-      if (keep == true) {
-        // ignore: use_build_context_synchronously
-        failure = await auth.login(context, user, pass, keepAccount: true);
-      }
+      // ignore: use_build_context_synchronously
+      failure = await keepIfChosen(context, failure!,
+          // ignore: use_build_context_synchronously
+          withoutTicket: () => auth.login(context, user, pass,
+              keepAccount: true));
+    }
+    if (!mounted) return;
+
+    // Two-step verification is on: the code is next, on its own screen,
+    // which signs in when it is right.
+    final ticket = failure?.ticket;
+    if (failure?.failure == AuthFailure.twoFactorRequired && ticket != null) {
+      await Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => TwoStepSignInScreen(ticket: ticket)));
+      if (mounted) setState(() => _isLoading = false);
+      return;
     }
 
-    if (!mounted) return;
     final why = failure;
     if (why != null) {
       setState(() {
         _isLoading = false;
-        _error = _messageFor(why);
+        _error = signInProblem(why);
       });
     }
-  }
-
-  /// Say what actually went wrong. Reporting an unreachable server as bad
-  /// credentials is worse than unhelpful — it sends someone off resetting a
-  /// password that was never the problem, which is exactly what happened
-  /// when the backend was mid-cold-start.
-  String _messageFor(AuthResult result) {
-    switch (result.failure ?? AuthFailure.unreachable) {
-      case AuthFailure.rejected:
-        return result.message != null && result.field == null
-            ? result.message!
-            : "That username, email or password isn't right.";
-      case AuthFailure.unreachable:
-        return "Couldn't reach the server. It may be waking up — "
-            'wait a few seconds and try again.';
-      case AuthFailure.serverError:
-        return 'The server had a problem. Your details are probably fine — '
-            'please try again in a moment.';
-      case AuthFailure.deletionPending:
-        return 'This account is waiting to be deleted. Sign in again and '
-            'choose "Keep my account" to stop that.';
-    }
-  }
-
-  /// "Keep your account?" for an account waiting to be deleted. True when
-  /// they choose to keep it.
-  Future<bool?> _askToKeep(DateTime? deleteOn) {
-    final when =
-        deleteOn == null ? 'soon' : 'on ${dateInWords(deleteOn.toLocal())}';
-    return showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        key: const ValueKey('keep_account_dialog'),
-        title: const Text('Keep your account?'),
-        content: Text(
-          'You asked for this account to be deleted. It will be deleted for '
-          'good $when.\n\n'
-          'Keep it to sign in and get everything back: your profile, posts, '
-          'followers and messages. Battles that were going on when you left '
-          'stay cancelled.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Not now'),
-          ),
-          FilledButton(
-            key: const ValueKey('keep_account'),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Keep my account'),
-          ),
-        ],
-      ),
-    );
   }
 
   /// "Forgot password?": a code by email, then a new password. Coming back
@@ -254,6 +210,13 @@ class _LoginScreenState extends State<LoginScreen> {
                       const SizedBox(height: 26),
                       const AuthOrDivider(),
                       const SizedBox(height: 26),
+                      if (SocialSignInButtons.anyOffered) ...[
+                        SocialSignInButtons(
+                          enabled: !_isLoading,
+                          onProblem: (why) => setState(() => _error = why),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       SizedBox(
                         height: 54,
                         child: OutlinedButton.icon(

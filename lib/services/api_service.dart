@@ -263,8 +263,25 @@ enum AuthFailure {
   /// The password was right, but this account asked to be deleted and is
   /// waiting out its 30 days. The person can choose to keep it: signing in
   /// again with keepAccount brings everything back. [AuthResult.deleteOn]
-  /// says when it will go.
+  /// says when it will go, and [AuthResult.ticket], when there is one, keeps
+  /// it without anything typed again ([ApiService.loginWithCode]).
   deletionPending,
+
+  /// The password (or Google, or Apple) was right, and the account has
+  /// two-step verification on: the code from the authenticator app is next.
+  /// [AuthResult.ticket] goes with it to [ApiService.loginWithCode].
+  twoFactorRequired,
+
+  /// Google or Apple said who this is, and they are new here: the account
+  /// still needs a username and a birthday. [AuthResult.extra] has the
+  /// sign-up ticket and what Google or Apple said (see SocialSignupStart).
+  needsSignup,
+
+  /// Signing in that way is not set up on the server yet.
+  unavailable,
+
+  /// A sign-in or sign-up ticket ran out (they last minutes): start again.
+  expired,
 }
 
 /// Outcome of a login or signup attempt: the session payload on success, or
@@ -274,9 +291,11 @@ class AuthResult {
       : failure = null,
         field = null,
         message = null,
-        deleteOn = null;
+        deleteOn = null,
+        ticket = null,
+        extra = null;
   const AuthResult.failed(this.failure,
-      {this.field, this.message, this.deleteOn})
+      {this.field, this.message, this.deleteOn, this.ticket, this.extra})
       : data = null;
 
   final Map<String, dynamic>? data;
@@ -291,6 +310,14 @@ class AuthResult {
   /// For [AuthFailure.deletionPending]: when the account will be deleted for
   /// good, unless it is kept.
   final DateTime? deleteOn;
+
+  /// For [AuthFailure.twoFactorRequired] and [AuthFailure.deletionPending]:
+  /// the server's note that the steps so far are done, to finish with
+  /// [ApiService.loginWithCode]. It lasts a few minutes.
+  final String? ticket;
+
+  /// For [AuthFailure.needsSignup]: what the server said, as it said it.
+  final Map<String, dynamic>? extra;
 
   bool get ok => data != null;
 }
@@ -830,42 +857,56 @@ class ApiService {
       // login and a password change answer 200, signup answers 201.
       if (res.statusCode == 200 || res.statusCode == 201) {
         final data = json.decode(res.body) as Map<String, dynamic>;
+        // Google or Apple, and somebody new: no sign-in yet, only what the
+        // account still needs.
+        if (data['needsSignup'] == true && data['token'] == null) {
+          return AuthResult.failed(AuthFailure.needsSignup, extra: data);
+        }
         // Capture the session token so every subsequent request is authorized.
         final token = data['token'] as String?;
         if (token != null && token.isNotEmpty) authToken = token;
         return AuthResult.success(data);
       }
+      Map<String, dynamic> said = const {};
+      try {
+        final decoded = json.decode(res.body);
+        if (decoded is Map<String, dynamic>) said = decoded;
+      } catch (_) {
+        // A plain-text answer (an older server, a proxy page): no details.
+      }
+      final message = said['error'] as String?;
+      final ticket = said['ticket'] as String?;
       // Only a 4xx from the server is a statement about the credentials.
       if (res.statusCode >= 400 && res.statusCode < 500) {
-        String? field, message;
-        DateTime? deleteOn;
-        var deletionPending = false;
-        try {
-          final said = json.decode(res.body);
-          if (said is Map) {
-            field = said['field'] as String?;
-            message = said['error'] as String?;
-            deletionPending = said['deletionPending'] == true;
-            deleteOn = DateTime.tryParse('${said['deleteOn'] ?? ''}');
-          }
-        } catch (_) {
-          // A plain-text refusal (an older server): no box to point at.
-        }
         // The password was right; the account is waiting to be deleted and
         // can be kept.
-        if (deletionPending) {
+        if (said['deletionPending'] == true) {
           return AuthResult.failed(AuthFailure.deletionPending,
-              message: message, deleteOn: deleteOn);
+              message: message,
+              deleteOn: DateTime.tryParse('${said['deleteOn'] ?? ''}'),
+              ticket: ticket);
+        }
+        // Right so far; the two-step code is next.
+        if (said['twoFactorRequired'] == true && ticket != null) {
+          return AuthResult.failed(AuthFailure.twoFactorRequired,
+              message: message, ticket: ticket);
+        }
+        if (said['expired'] == true) {
+          return AuthResult.failed(AuthFailure.expired, message: message);
         }
         // Too many tries: the server's own words for it are for programs
         // ("rate limited"), so the app says it for people.
         if (res.statusCode == 429) {
-          field = null;
-          message = 'Too many tries. Please wait a few minutes and try '
-              'again.';
+          return const AuthResult.failed(AuthFailure.rejected,
+              message: 'Too many tries. Please wait a few minutes and try '
+                  'again.');
         }
         return AuthResult.failed(AuthFailure.rejected,
-            field: field, message: message);
+            field: said['field'] as String?, message: message);
+      }
+      // Not set up on the server (Google or Apple sign-in): said so.
+      if (res.statusCode == 503 && said['unavailable'] == true) {
+        return AuthResult.failed(AuthFailure.unavailable, message: message);
       }
       // 5xx, a proxy error, or a Render cold-start holding page: the server is
       // unwell and has told us nothing about the password.
@@ -876,6 +917,50 @@ class ApiService {
       // the credentials were wrong.
       return const AuthResult.failed(AuthFailure.unreachable);
     }
+  }
+
+  /// POST /login/2fa — the two-step code, with the [ticket] the password (or
+  /// Google, or Apple) got. [code] is six digits from the authenticator app,
+  /// or a recovery code. With the ticket that came with
+  /// [AuthFailure.deletionPending], [keepAccount] keeps the account and no
+  /// code is needed.
+  static Future<AuthResult> loginWithCode(String ticket, String code,
+      {bool keepAccount = false}) async {
+    return _post('$_base/login/2fa', {
+      'ticket': ticket,
+      'code': code,
+      if (keepAccount) 'keepAccount': true,
+    });
+  }
+
+  /// POST /auth/{google|apple} — sign in with the token Google or Apple
+  /// gave the phone. [fullName] is Apple's: Apple tells the app a person's
+  /// name once, never the server.
+  static Future<AuthResult> signInWithProvider(String provider, String idToken,
+      {String? fullName}) async {
+    return _post('$_base/auth/$provider', {
+      'idToken': idToken,
+      if (fullName != null && fullName.isNotEmpty) 'fullName': fullName,
+    });
+  }
+
+  /// POST /auth/social/signup — finish an account started with Google or
+  /// Apple. The answer is sign-up's: the account and its sign-in, or which
+  /// box is wrong.
+  static Future<AuthResult> finishSocialSignup({
+    required String signupTicket,
+    required String username,
+    required String fullName,
+    required String birthDate,
+    required bool acceptTerms,
+  }) async {
+    return _post('$_base/auth/social/signup', {
+      'signupTicket': signupTicket,
+      'username': username,
+      'fullName': fullName,
+      'birthDate': birthDate,
+      'acceptTerms': acceptTerms,
+    });
   }
 
   // —— Recommended Feed ————————————————————————————————————————————

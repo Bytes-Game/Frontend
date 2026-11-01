@@ -92,6 +92,31 @@ class AppConstants {
 
   /// Where people write about their personal data.
   static const String privacyEmail = 'privacy@devf.app';
+
+  // —— Signing in with Google or Apple ——————————————————————————————————
+  //
+  // Each is passed to the build with --dart-define. A button only shows
+  // when its settings are there, so a build without them simply has no
+  // Google or Apple button. The server needs its own half (GOOGLE_CLIENT_IDS
+  // and APPLE_CLIENT_IDS on Render). Where each comes from is in the
+  // before-release list in CLAUDE.md.
+
+  /// Google Cloud's OAuth client id of the "Web" kind. The phone asks Google
+  /// for tokens made for it, and the server accepts tokens made for it.
+  static const String googleServerClientId =
+      String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID');
+
+  /// Google Cloud's OAuth client id of the "iOS" kind (the iPhone only).
+  static const String googleIosClientId =
+      String.fromEnvironment('GOOGLE_IOS_CLIENT_ID');
+
+  /// Sign in with Apple on the iPhone, once it is switched on for the app in
+  /// Apple Developer: --dart-define=APPLE_SIGN_IN=true.
+  static const bool appleSignInOnIos = bool.fromEnvironment('APPLE_SIGN_IN');
+
+  /// Sign in with Apple on Android: the Services ID from Apple Developer.
+  static const String appleServiceId =
+      String.fromEnvironment('APPLE_SERVICE_ID');
 }
 
 /// What a video can be about.
