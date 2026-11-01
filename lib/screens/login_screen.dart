@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/config/dates.dart';
 import 'package:myapp/providers/auth_provider.dart';
+import 'package:myapp/screens/forgot_password_screen.dart';
 import 'package:myapp/screens/signup_screen.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/widgets/auth_widgets.dart';
@@ -140,39 +141,27 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  void _forgotPassword() {
-    showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => const SafeArea(
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(24, 0, 24, 24),
-          child: Column(
-            key: ValueKey('forgot_password_sheet'),
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Forgot your password?',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
-              ),
-              SizedBox(height: 10),
-              Text(
-                "Email support@devf.app from the address on your account "
-                "and tell us your username. We'll help you get back in.",
-                style: TextStyle(fontSize: 15, height: 1.4),
-              ),
-              SizedBox(height: 10),
-              Text(
-                'If you remember it later, you can change it any time in '
-                'Settings → Change password.',
-                style: TextStyle(fontSize: 13.5, height: 1.4),
-              ),
-            ],
-          ),
-        ),
+  /// "Forgot password?": a code by email, then a new password. Coming back
+  /// with one signs in with it, the ordinary way, so everything signing in
+  /// checks (an account waiting to be deleted, say) is still checked.
+  Future<void> _forgotPassword() async {
+    setState(() => _error = null);
+    final done = await Navigator.of(context).push<PasswordResetDone>(
+      MaterialPageRoute(
+        builder: (_) =>
+            ForgotPasswordScreen(login: _usernameCtrl.text.trim()),
       ),
     );
+    if (!mounted || done == null) return;
+    _usernameCtrl.text = done.username;
+    _passwordCtrl.text = done.password;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        key: ValueKey('password_reset_done'),
+        content: Text('Password changed. Signing you in…'),
+      ),
+    );
+    await _submit();
   }
 
   @override
