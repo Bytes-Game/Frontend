@@ -7,7 +7,9 @@ import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/config/username_rules.dart';
 import 'package:myapp/pages/static_content_pages.dart';
 import 'package:myapp/providers/auth_provider.dart';
+import 'package:myapp/screens/social_sign_in.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/social_auth.dart';
 import 'package:myapp/widgets/auth_widgets.dart';
 
 /// Create an account: name, username, email, birthday, password, and the
@@ -31,16 +33,11 @@ DateTime thirteenYearsAgo(DateTime today) {
   return DateTime(y, today.month, d);
 }
 
-class _SignupScreenState extends State<SignupScreen> {
-  final _fullName = TextEditingController();
+/// The username box's live check, shared by both sign-up screens: whether
+/// the name is allowed at all, then, after a short pause in the typing,
+/// whether it is free. And what the server said about each box.
+mixin _UsernameCheck<T extends StatefulWidget> on State<T> {
   final _username = TextEditingController();
-  final _email = TextEditingController();
-  final _password = TextEditingController();
-
-  DateTime? _birthday;
-  bool _agreed = false;
-  bool _obscure = true;
-  bool _busy = false;
 
   _Name _name = _Name.empty;
   String? _nameWhy;
@@ -49,17 +46,11 @@ class _SignupScreenState extends State<SignupScreen> {
   /// What the server said about one box, by its name: username, email,
   /// password, birthDate, fullName, terms. Cleared when that box changes.
   final Map<String, String> _serverSays = {};
-  String? _error;
-
-  static final _emailRe = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
 
   @override
   void dispose() {
     _nameCheck?.cancel();
-    _fullName.dispose();
     _username.dispose();
-    _email.dispose();
-    _password.dispose();
     super.dispose();
   }
 
@@ -94,6 +85,73 @@ class _SignupScreenState extends State<SignupScreen> {
     });
   }
 
+  Widget? _nameSuffix() => switch (_name) {
+        _Name.checking => const Padding(
+            padding: EdgeInsets.all(14),
+            child: SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+        _Name.free => const Icon(Icons.check_circle_rounded,
+            color: AppTheme.success, key: ValueKey('username_free')),
+        _Name.taken || _Name.bad => const Icon(Icons.cancel_rounded,
+            color: AppTheme.error, key: ValueKey('username_not_free')),
+        _Name.empty => null,
+      };
+
+  String? get _nameHelp => switch (_name) {
+        _Name.free => '@${_username.text.trim().toLowerCase()} is yours '
+            'if you want it',
+        _ => null,
+      };
+
+  String? get _nameError =>
+      _serverSays['username'] ??
+      switch (_name) {
+        _Name.taken => _nameWhy ?? 'That username is taken.',
+        _Name.bad => _nameWhy,
+        _ => null,
+      };
+}
+
+/// The calendar for a birthday, offering nothing younger than 13.
+Future<DateTime?> _askBirthday(BuildContext context, DateTime? current) {
+  FocusScope.of(context).unfocus();
+  final latest = thirteenYearsAgo(DateTime.now());
+  return showDatePicker(
+    context: context,
+    initialDate: current ?? DateTime(latest.year - 5, latest.month, 1),
+    firstDate: DateTime(1900),
+    lastDate: latest,
+    helpText: 'Your date of birth',
+    initialEntryMode: DatePickerEntryMode.calendarOnly,
+  );
+}
+
+class _SignupScreenState extends State<SignupScreen>
+    with _UsernameCheck<SignupScreen> {
+  final _fullName = TextEditingController();
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+
+  DateTime? _birthday;
+  bool _agreed = false;
+  bool _obscure = true;
+  bool _busy = false;
+  String? _error;
+
+  static final _emailRe = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+
+  @override
+  void dispose() {
+    _fullName.dispose();
+    _email.dispose();
+    _password.dispose();
+    super.dispose();
+  }
+
   String? get _emailProblem {
     final e = _email.text.trim();
     if (e.isEmpty || _emailRe.hasMatch(e)) return null;
@@ -124,17 +182,7 @@ class _SignupScreenState extends State<SignupScreen> {
       _agreed;
 
   Future<void> _pickBirthday() async {
-    FocusScope.of(context).unfocus();
-    final today = DateTime.now();
-    final latest = thirteenYearsAgo(today);
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _birthday ?? DateTime(latest.year - 5, latest.month, 1),
-      firstDate: DateTime(1900),
-      lastDate: latest,
-      helpText: 'Your date of birth',
-      initialEntryMode: DatePickerEntryMode.calendarOnly,
-    );
+    final picked = await _askBirthday(context, _birthday);
     if (picked != null && mounted) {
       setState(() {
         _birthday = picked;
@@ -207,36 +255,8 @@ class _SignupScreenState extends State<SignupScreen> {
             'waking up — wait a few seconds and try again.',
         AuthFailure.serverError => 'The server had a problem. Please try '
             'again in a moment.',
-      };
-
-  Widget? _nameSuffix() => switch (_name) {
-        _Name.checking => const Padding(
-            padding: EdgeInsets.all(14),
-            child: SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          ),
-        _Name.free => const Icon(Icons.check_circle_rounded,
-            color: AppTheme.success, key: ValueKey('username_free')),
-        _Name.taken || _Name.bad => const Icon(Icons.cancel_rounded,
-            color: AppTheme.error, key: ValueKey('username_not_free')),
-        _Name.empty => null,
-      };
-
-  String? get _nameHelp => switch (_name) {
-        _Name.free => '@${_username.text.trim().toLowerCase()} is yours '
-            'if you want it',
-        _ => null,
-      };
-
-  String? get _nameError =>
-      _serverSays['username'] ??
-      switch (_name) {
-        _Name.taken => _nameWhy ?? 'That username is taken.',
-        _Name.bad => _nameWhy,
-        _ => null,
+        // The rest are answers to signing in, which sign-up never gets.
+        _ => "Couldn't create the account. Please try again.",
       };
 
   InputDecoration _box({
@@ -292,6 +312,16 @@ class _SignupScreenState extends State<SignupScreen> {
                             'the leagues.',
                       ),
                       const SizedBox(height: 32),
+                      if (SocialSignInButtons.anyOffered) ...[
+                        SocialSignInButtons(
+                          verb: 'Sign up',
+                          enabled: !_busy,
+                          onProblem: (why) => setState(() => _error = why),
+                        ),
+                        const SizedBox(height: 22),
+                        const AuthOrDivider(),
+                        const SizedBox(height: 22),
+                      ],
                       TextField(
                         key: const ValueKey('signup_full_name'),
                         controller: _fullName,
@@ -570,6 +600,255 @@ class _TermsLineState extends State<_TermsLine> {
                 style: const TextStyle(color: AppTheme.error, fontSize: 12.5)),
           ),
       ],
+    );
+  }
+}
+
+/// What Google or Apple said about somebody new, and the ticket that
+/// finishes their account (from ApiService.signInWithProvider).
+class SocialSignupStart {
+  const SocialSignupStart({
+    required this.provider,
+    required this.ticket,
+    this.email = '',
+    this.fullName = '',
+    this.suggestedUsername = '',
+  });
+
+  factory SocialSignupStart.fromAnswer(
+          SocialProvider provider, Map<String, dynamic> said) =>
+      SocialSignupStart(
+        provider: provider,
+        ticket: '${said['signupTicket'] ?? ''}',
+        email: '${said['email'] ?? ''}',
+        fullName: '${said['fullName'] ?? ''}',
+        suggestedUsername: '${said['suggestedUsername'] ?? ''}',
+      );
+
+  final SocialProvider provider;
+  final String ticket;
+  final String email;
+  final String fullName;
+  final String suggestedUsername;
+}
+
+/// "Almost there": the end of signing up with Google or Apple. They already
+/// said who the person is; what every account still needs is a username,
+/// a birthday (13 or older) and the terms, so only those are asked. No
+/// password: the account signs in with Google or Apple, and can set one
+/// later with "Forgot password?".
+class FinishSocialSignupScreen extends StatefulWidget {
+  const FinishSocialSignupScreen({super.key, required this.start});
+
+  final SocialSignupStart start;
+
+  @override
+  State<FinishSocialSignupScreen> createState() =>
+      _FinishSocialSignupScreenState();
+}
+
+class _FinishSocialSignupScreenState extends State<FinishSocialSignupScreen>
+    with _UsernameCheck<FinishSocialSignupScreen> {
+  late final _fullName = TextEditingController(text: widget.start.fullName);
+  DateTime? _birthday;
+  bool _agreed = false;
+  bool _busy = false;
+  String? _error;
+
+  /// The ticket ran out: only starting again helps.
+  bool _expired = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final suggested = widget.start.suggestedUsername;
+    if (suggested.isNotEmpty) {
+      _username.text = suggested;
+      _onUsername(suggested);
+    }
+  }
+
+  @override
+  void dispose() {
+    _fullName.dispose();
+    super.dispose();
+  }
+
+  bool get _ready =>
+      _name == _Name.free && _birthday != null && _agreed && !_expired;
+
+  Future<void> _pickBirthday() async {
+    final picked = await _askBirthday(context, _birthday);
+    if (picked != null && mounted) {
+      setState(() {
+        _birthday = picked;
+        _serverSays.remove('birthDate');
+      });
+    }
+  }
+
+  Future<void> _submit() async {
+    if (!_ready || _busy) return;
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _busy = true;
+      _error = null;
+      _serverSays.clear();
+    });
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    final navigator = Navigator.of(context);
+    final result = await auth.finishSocialSignup(
+      context,
+      signupTicket: widget.start.ticket,
+      username: _username.text.trim().toLowerCase(),
+      fullName: _fullName.text.trim(),
+      birthDate: _SignupScreenState.birthdayForServer(_birthday!),
+      acceptTerms: _agreed,
+    );
+    if (!mounted) return;
+    if (result == null) {
+      // Signed in: the welcome steps are underneath now.
+      navigator.popUntil((r) => r.isFirst);
+      return;
+    }
+    setState(() {
+      _busy = false;
+      final field = result.field;
+      if (field != null && result.message != null) {
+        _serverSays[field] = result.message!;
+        if (field == 'username') _name = _Name.taken;
+      } else {
+        _expired = result.failure == AuthFailure.expired;
+        _error = signInProblem(result);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final start = widget.start;
+    final strong = TextStyle(
+      fontWeight: FontWeight.w700,
+      color: Theme.of(context).colorScheme.onSurface,
+    );
+    return Scaffold(
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        leading: const BackButton(key: ValueKey('finish_signup_back')),
+      ),
+      body: AuthBackdrop(
+        child: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Column(
+                  key: const ValueKey('finish_signup'),
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    AuthStepHeader(
+                      icon: start.provider == SocialProvider.apple
+                          ? Icons.apple
+                          : Icons.person_add_alt_1_rounded,
+                      title: 'Almost there',
+                      subtitle: Text.rich(TextSpan(children: [
+                        TextSpan(
+                            text: 'You\'re signing up with '
+                                '${start.provider.label}'),
+                        if (start.email.isNotEmpty) ...[
+                          const TextSpan(text: ' as '),
+                          TextSpan(text: start.email, style: strong),
+                        ],
+                        const TextSpan(
+                            text: '. Choose a username and add your '
+                                'birthday to finish.'),
+                      ])),
+                    ),
+                    const SizedBox(height: 28),
+                    TextField(
+                      key: const ValueKey('finish_full_name'),
+                      controller: _fullName,
+                      enabled: !_busy,
+                      textCapitalization: TextCapitalization.words,
+                      textInputAction: TextInputAction.next,
+                      maxLength: 50,
+                      onChanged: (_) =>
+                          setState(() => _serverSays.remove('fullName')),
+                      decoration: InputDecoration(
+                        labelText: 'Your name',
+                        helperText: _serverSays['fullName'] == null
+                            ? 'Optional. Shown on your profile.'
+                            : null,
+                        errorText: _serverSays['fullName'],
+                        prefixIcon: const Icon(Icons.badge_outlined),
+                        counterText: '',
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      key: const ValueKey('finish_username'),
+                      controller: _username,
+                      enabled: !_busy,
+                      autocorrect: false,
+                      textInputAction: TextInputAction.next,
+                      onChanged: _onUsername,
+                      decoration: InputDecoration(
+                        labelText: 'Username',
+                        helperText: _nameError == null
+                            ? (_nameHelp ??
+                                'Letters, numbers, _ and . — this is how '
+                                    'people find you.')
+                            : null,
+                        helperMaxLines: 2,
+                        errorText: _nameError,
+                        errorMaxLines: 3,
+                        prefixIcon: const Icon(Icons.alternate_email_rounded),
+                        suffixIcon: _nameSuffix(),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    _BirthdayBox(
+                      value: _birthday == null
+                          ? null
+                          : _SignupScreenState.birthdayWords(_birthday!),
+                      error: _serverSays['birthDate'],
+                      enabled: !_busy,
+                      onTap: _pickBirthday,
+                    ),
+                    const SizedBox(height: 18),
+                    _TermsLine(
+                      agreed: _agreed,
+                      error: _serverSays['terms'],
+                      onChanged: _busy
+                          ? null
+                          : (v) => setState(() {
+                                _agreed = v;
+                                _serverSays.remove('terms');
+                              }),
+                    ),
+                    const SizedBox(height: 18),
+                    AuthPrimaryButton(
+                      key: const ValueKey('finish_submit'),
+                      label: 'Create account',
+                      loading: _busy,
+                      onPressed: _ready ? _submit : null,
+                    ),
+                    if (_error != null) ...[
+                      const SizedBox(height: 14),
+                      AuthErrorBox(message: _error!),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

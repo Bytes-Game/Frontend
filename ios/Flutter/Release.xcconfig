@@ -1,1 +1,8 @@
 #include "Generated.xcconfig"
+
+// Google sign-in on the iPhone comes back to the app through a link made
+// from the iOS OAuth client id, reversed: com.googleusercontent.apps.<the
+// part of the id before .apps.googleusercontent.com>. Put the real one
+// here before building with Google sign-in (see the before-release list
+// in CLAUDE.md).
+GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.not-set-yet
