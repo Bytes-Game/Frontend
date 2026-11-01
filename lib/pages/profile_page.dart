@@ -716,7 +716,7 @@ class _ProfilePageState extends State<ProfilePage>
                 ),
               ),
               height: 52,
-              backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+              backgroundColor: AppTheme.pageColor(context),
             ),
           ),
         ];
@@ -746,11 +746,11 @@ class _ProfilePageState extends State<ProfilePage>
 
     // When embedded in MainShell, MainShell's Scaffold forces a black
     // background (intentional for the home tab). Wrap in a Material
-    // with the theme's scaffoldBackgroundColor so the profile owns its
-    // own surface and text contrast is correct in both light and dark.
+    // with the page's solid colour so the profile owns its own surface
+    // and text contrast is correct in both light and dark.
     if (widget.isEmbedded) {
       return Material(
-        color: Theme.of(context).scaffoldBackgroundColor,
+        color: AppTheme.pageColor(context),
         child: SafeArea(bottom: false, child: body),
       );
     }

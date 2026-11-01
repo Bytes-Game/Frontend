@@ -1,6 +1,6 @@
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:myapp/widgets/page_backdrop.dart';
 
 /// Single source of truth for the app's design system.
 ///
@@ -69,6 +69,15 @@ class AppTheme {
   static const Color surfaceLightHigh = Color(0xFFF2F2F7);
   static const Color borderLight = Color(0xFFE5E5EA);
   static const Color textMutedLight = Color(0xFF6E6E73);
+
+  /// The page's colour as a solid: black in dark mode, white in light.
+  ///
+  /// For a widget that must cover what is behind it in the page's colour:
+  /// a ring cut around a badge, a header that content scrolls under. The
+  /// theme's own page colour is see-through in dark mode, to show the blue
+  /// glow (PageBackdrop), so it cannot do that job.
+  static Color pageColor(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark ? bgDark : bgLight;
 
   // ═══════════════════════════════════════════════════════════════════════
   // GRADIENTS — kept quiet: one hue at a time, never a rainbow
@@ -351,7 +360,10 @@ class AppTheme {
   static final ThemeData darkTheme = ThemeData(
     useMaterial3: true,
     brightness: Brightness.dark,
-    scaffoldBackgroundColor: bgDark,
+    // See-through, so a page shows the blue glow under it (PageBackdrop).
+    // A page that wants black (the video screens) sets it itself, and a
+    // widget that needs the page's colour as a solid uses [pageColor].
+    scaffoldBackgroundColor: Colors.transparent,
     canvasColor: bgDark,
     colorScheme: const ColorScheme.dark(
       brightness: Brightness.dark,
@@ -374,7 +386,13 @@ class AppTheme {
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: true,
-      backgroundColor: bgDark,
+      // Clear over the glow; a deep blue once the page scrolls under it,
+      // so the title never sits on top of the content.
+      backgroundColor: WidgetStateColor.resolveWith(
+        (states) => states.contains(WidgetState.scrolledUnder)
+            ? const Color(0xF2061322)
+            : Colors.transparent,
+      ),
       foregroundColor: Colors.white,
       surfaceTintColor: Colors.transparent,
       titleTextStyle: GoogleFonts.inter(
@@ -493,7 +511,8 @@ class AppTheme {
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: surfaceDark,
+      // Deep blue glass, to sit on the blue glow behind the pages.
+      fillColor: const Color(0xCC0B1A2E),
       hintStyle: GoogleFonts.inter(
         fontSize: 14,
         color: textMutedDark,
@@ -511,11 +530,11 @@ class AppTheme {
       ),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(radiusMd),
-        borderSide: const BorderSide(color: borderDark, width: 1),
+        borderSide: const BorderSide(color: Color(0x3364D2FF), width: 1),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(radiusMd),
-        borderSide: const BorderSide(color: borderDark, width: 1),
+        borderSide: const BorderSide(color: Color(0x3364D2FF), width: 1),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(radiusMd),
@@ -615,13 +634,14 @@ class AppTheme {
       }),
     ),
     splashFactory: InkRipple.splashFactory,
+    // The iPhone's slide everywhere, with the page's backdrop under it.
     pageTransitionsTheme: const PageTransitionsTheme(
       builders: {
-        TargetPlatform.android: CupertinoPageTransitionsBuilder(),
-        TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-        TargetPlatform.windows: CupertinoPageTransitionsBuilder(),
-        TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
-        TargetPlatform.linux: CupertinoPageTransitionsBuilder(),
+        TargetPlatform.android: BackdropPageTransitionsBuilder(),
+        TargetPlatform.iOS: BackdropPageTransitionsBuilder(),
+        TargetPlatform.windows: BackdropPageTransitionsBuilder(),
+        TargetPlatform.macOS: BackdropPageTransitionsBuilder(),
+        TargetPlatform.linux: BackdropPageTransitionsBuilder(),
       },
     ),
   );
@@ -848,13 +868,14 @@ class AppTheme {
       space: 1,
     ),
     splashFactory: InkRipple.splashFactory,
+    // The iPhone's slide everywhere, with the page's backdrop under it.
     pageTransitionsTheme: const PageTransitionsTheme(
       builders: {
-        TargetPlatform.android: CupertinoPageTransitionsBuilder(),
-        TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-        TargetPlatform.windows: CupertinoPageTransitionsBuilder(),
-        TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
-        TargetPlatform.linux: CupertinoPageTransitionsBuilder(),
+        TargetPlatform.android: BackdropPageTransitionsBuilder(),
+        TargetPlatform.iOS: BackdropPageTransitionsBuilder(),
+        TargetPlatform.windows: BackdropPageTransitionsBuilder(),
+        TargetPlatform.macOS: BackdropPageTransitionsBuilder(),
+        TargetPlatform.linux: BackdropPageTransitionsBuilder(),
       },
     ),
   );

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/config/constants.dart';
 import 'package:myapp/config/dates.dart';
 import 'package:myapp/pages/change_password_page.dart';
 import 'package:myapp/pages/free_up_space_page.dart';
@@ -18,6 +19,7 @@ import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/save_to_phone.dart';
 import 'package:myapp/widgets/arena_ui.dart';
+import 'package:myapp/widgets/flex_logo.dart';
 import 'package:myapp/widgets/settings_kit.dart';
 
 /// Settings and privacy, as a page of its own.
@@ -196,104 +198,42 @@ class _SettingsPageState extends State<SettingsPage>
   @override
   Widget build(BuildContext context) {
     final user = Provider.of<DataProvider>(context).user;
-    final cs = Theme.of(context).colorScheme;
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final muted = dark ? AppTheme.textMutedDark : AppTheme.textMutedLight;
     final name = (user?.fullName.isNotEmpty ?? false)
         ? user!.fullName
         : (user?.username ?? '');
+    const blue = AppTheme.primary;
 
     return Scaffold(
       backgroundColor: settingsBackground(context),
       appBar: AppBar(
         title: const Text('Settings and privacy'),
-        backgroundColor: settingsBackground(context),
+        backgroundColor: settingsBarColor(context),
         surfaceTintColor: Colors.transparent,
       ),
       body: ListView(
         padding: const EdgeInsets.only(bottom: AppTheme.space40),
         children: [
-          // You, at the top: tap to edit your profile.
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-                AppTheme.space16, AppTheme.space8, AppTheme.space16, 0),
-            child: Material(
-              color: dark ? AppTheme.surfaceDark : cs.surface,
-              borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-              clipBehavior: Clip.antiAlias,
-              child: InkWell(
-                key: const ValueKey('settings_account'),
-                onTap: widget.onEditProfile,
-                child: Padding(
-                  padding: const EdgeInsets.all(AppTheme.space16),
-                  child: Row(
-                    children: [
-                      ArenaAvatar(name: user?.username ?? '?', size: 56),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w700)),
-                            const SizedBox(height: 2),
-                            Text('@${user?.username ?? ''} · Edit profile',
-                                style: TextStyle(fontSize: 13.5, color: muted)),
-                          ],
-                        ),
-                      ),
-                      Icon(Icons.chevron_right_rounded, color: muted),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+          _AccountCard(
+            name: name,
+            username: user?.username ?? '',
+            onEdit: widget.onEditProfile,
+            onShare: widget.onShareProfile,
           ),
           SettingsGroup(
-            title: 'Your activity',
-            children: [
-              SettingsTile(
-                key: const ValueKey('settings_saved'),
-                icon: Icons.bookmark_rounded,
-                color: const Color(0xFFFF9F0A),
-                title: 'Saved',
-                onTap: widget.onSaved,
-              ),
-              SettingsTile(
-                key: const ValueKey('settings_liked'),
-                icon: Icons.favorite_rounded,
-                color: const Color(0xFFFF375F),
-                title: 'Liked',
-                onTap: widget.onLiked,
-              ),
-              SettingsTile(
-                key: const ValueKey('settings_history'),
-                icon: Icons.history_rounded,
-                color: const Color(0xFF64D2FF),
-                title: 'Watch history',
-                onTap: () => _open(const WatchHistoryPage()),
-              ),
-            ],
-          ),
-          SettingsGroup(
-            title: 'Privacy and safety',
+            title: 'Account',
             children: [
               SettingsTile(
                 key: const ValueKey('settings_privacy'),
                 icon: Icons.lock_rounded,
-                color: const Color(0xFF5E5CE6),
+                color: blue,
                 title: 'Privacy',
                 value: privacySummary(user),
                 onTap: () => _open(const PrivacyPage()),
               ),
               SettingsTile(
                 key: const ValueKey('settings_2fa'),
-                icon: Icons.shield_rounded,
-                color: AppTheme.success,
+                icon: Icons.verified_user_rounded,
+                color: blue,
                 title: 'Two-step verification',
                 value: user?.twoFactorEnabled == true ? 'On' : 'Off',
                 onTap: () => _open(const TwoFactorSetupPage()),
@@ -301,26 +241,52 @@ class _SettingsPageState extends State<SettingsPage>
               SettingsTile(
                 key: const ValueKey('settings_password'),
                 icon: Icons.key_rounded,
-                color: const Color(0xFFFF9F0A),
+                color: blue,
                 title: 'Change password',
                 onTap: () => _open(const ChangePasswordPage()),
               ),
             ],
           ),
           SettingsGroup(
-            title: 'Preferences',
+            title: 'Content and activity',
+            children: [
+              SettingsTile(
+                key: const ValueKey('settings_saved'),
+                icon: Icons.bookmark_rounded,
+                color: blue,
+                title: 'Saved',
+                onTap: widget.onSaved,
+              ),
+              SettingsTile(
+                key: const ValueKey('settings_liked'),
+                icon: Icons.favorite_rounded,
+                color: blue,
+                title: 'Liked',
+                onTap: widget.onLiked,
+              ),
+              SettingsTile(
+                key: const ValueKey('settings_history'),
+                icon: Icons.history_rounded,
+                color: blue,
+                title: 'Watch history',
+                onTap: () => _open(const WatchHistoryPage()),
+              ),
+            ],
+          ),
+          SettingsGroup(
+            title: 'Content and display',
             children: [
               SettingsTile(
                 key: const ValueKey('settings_notifications'),
                 icon: Icons.notifications_rounded,
-                color: AppTheme.error,
+                color: blue,
                 title: 'Notifications',
                 onTap: () => _open(const NotificationSettingsPage()),
               ),
               SettingsTile(
                 key: const ValueKey('settings_appearance'),
                 icon: Icons.dark_mode_rounded,
-                color: const Color(0xFF3A3A3C),
+                color: blue,
                 title: 'Appearance',
                 value: _themeLabel(user?.settings ?? const {}),
                 onTap: () => _open(const AppearancePage()),
@@ -328,34 +294,29 @@ class _SettingsPageState extends State<SettingsPage>
               SettingsTile(
                 key: const ValueKey('settings_save_posts'),
                 icon: Icons.download_rounded,
-                color: AppTheme.primary,
+                color: blue,
                 title: 'Save your posts to your phone',
                 subtitle: 'A copy of what you make or edit here goes to '
                     'your gallery',
                 trailing: Switch.adaptive(
                   key: const ValueKey('settings_save_posts_switch'),
                   value: _savePosts,
+                  activeTrackColor: blue,
                   onChanged: _setSavePosts,
                 ),
                 onTap: () => _setSavePosts(!_savePosts),
               ),
-              SettingsTile(
-                key: const ValueKey('settings_space'),
-                icon: Icons.cleaning_services_rounded,
-                color: const Color(0xFF8E8E93),
-                title: 'Free up space',
-                onTap: () => _open(const FreeUpSpacePage()),
-              ),
             ],
           ),
           SettingsGroup(
+            title: 'Cache and storage',
             children: [
               SettingsTile(
-                key: const ValueKey('settings_share'),
-                icon: Icons.ios_share_rounded,
-                color: AppTheme.primary,
-                title: 'Share profile',
-                onTap: widget.onShareProfile,
+                key: const ValueKey('settings_space'),
+                icon: Icons.cleaning_services_rounded,
+                color: blue,
+                title: 'Free up space',
+                onTap: () => _open(const FreeUpSpacePage()),
               ),
             ],
           ),
@@ -363,48 +324,42 @@ class _SettingsPageState extends State<SettingsPage>
             title: 'Support and about',
             children: [
               SettingsTile(
-                key: const ValueKey('settings_help'),
-                icon: Icons.help_rounded,
-                color: AppTheme.primary,
-                title: 'Help center',
-                onTap: () => _open(const HelpCenterPage()),
-              ),
-              SettingsTile(
                 key: const ValueKey('settings_bug'),
                 icon: Icons.flag_rounded,
-                color: const Color(0xFFFF9F0A),
+                color: blue,
                 title: 'Report a problem',
                 onTap: () => _open(const BugReportPage()),
               ),
               SettingsTile(
-                key: const ValueKey('settings_terms'),
-                icon: Icons.description_rounded,
-                color: const Color(0xFF8E8E93),
-                title: 'Terms of service',
-                onTap: () => _open(const TermsOfServicePage()),
+                key: const ValueKey('settings_help'),
+                icon: Icons.support_agent_rounded,
+                color: blue,
+                title: 'Help Center',
+                onTap: () => _open(const HelpCenterPage()),
               ),
               SettingsTile(
-                key: const ValueKey('settings_policy'),
-                icon: Icons.privacy_tip_rounded,
-                color: const Color(0xFF8E8E93),
-                title: 'Privacy policy',
-                onTap: () => _open(const PrivacyPolicyPage()),
+                key: const ValueKey('settings_policies'),
+                icon: Icons.gavel_rounded,
+                color: blue,
+                title: 'Terms and policies',
+                onTap: () => _open(const TermsAndPoliciesPage()),
               ),
               SettingsTile(
                 key: const ValueKey('settings_about'),
                 icon: Icons.info_rounded,
-                color: const Color(0xFF8E8E93),
-                title: 'About',
+                color: blue,
+                title: 'About ${AppConstants.appName}',
                 onTap: () => _open(const AboutPage()),
               ),
             ],
           ),
           SettingsGroup(
+            title: 'Login',
             children: [
               SettingsTile(
                 key: const ValueKey('settings_new_account'),
                 icon: Icons.person_add_alt_1_rounded,
-                color: AppTheme.primary,
+                color: blue,
                 title: 'Create a new account',
                 onTap: _newAccount,
               ),
@@ -426,8 +381,163 @@ class _SettingsPageState extends State<SettingsPage>
               ),
             ],
           ),
+          const SizedBox(height: 20),
+          const _VersionFoot(),
         ],
       ),
+    );
+  }
+}
+
+/// You, at the top of Settings, on the app's blue: tap to edit your
+/// profile, or share it.
+class _AccountCard extends StatelessWidget {
+  const _AccountCard({
+    required this.name,
+    required this.username,
+    required this.onEdit,
+    required this.onShare,
+  });
+
+  final String name;
+  final String username;
+  final VoidCallback onEdit;
+  final VoidCallback onShare;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+          AppTheme.space16, AppTheme.space8, AppTheme.space16, AppTheme.space8),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(22),
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: FlexMark.tileColors,
+            stops: [0, 0.5, 1],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: AppTheme.primary.withValues(alpha: 0.28),
+              blurRadius: 28,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          borderRadius: BorderRadius.circular(22),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            key: const ValueKey('settings_account'),
+            onTap: onEdit,
+            splashColor: Colors.white.withValues(alpha: 0.12),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 10, 16),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(2.5),
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                    ),
+                    child: ArenaAvatar(
+                        name: username.isEmpty ? '?' : username, size: 56),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.2,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '@$username',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.82),
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.18),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.3),
+                              width: 0.8,
+                            ),
+                          ),
+                          child: const Text(
+                            'Edit profile',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    key: const ValueKey('settings_share'),
+                    tooltip: 'Share profile',
+                    onPressed: onShare,
+                    style: IconButton.styleFrom(
+                      backgroundColor: Colors.white.withValues(alpha: 0.18),
+                      foregroundColor: Colors.white,
+                    ),
+                    icon: const Icon(Icons.qr_code_2_rounded),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The logo and the version, quietly, at the foot of Settings.
+class _VersionFoot extends StatelessWidget {
+  const _VersionFoot();
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = settingsMuted(context);
+    return Column(
+      children: [
+        const FlexLogo(size: 30, glow: false),
+        const SizedBox(height: 8),
+        Text(
+          '${AppConstants.appName} ${AppConstants.appVersion}',
+          key: const ValueKey('settings_version'),
+          style: TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+            color: muted,
+          ),
+        ),
+      ],
     );
   }
 }

@@ -3,14 +3,56 @@ import 'package:flutter/material.dart';
 import 'package:myapp/config/app_theme.dart';
 
 /// The pieces every settings page is built from, so they all look the same:
-/// rounded groups on a soft background, each row with its icon on a small
-/// coloured square, the way iPhone and Instagram settings look.
+/// rounded groups on the page, each row with its icon on a small blue
+/// tile like the app's own icon.
+///
+/// In dark mode the groups are deep-blue glass over the blue glow behind
+/// every page (PageBackdrop). In light mode they are white cards on a soft
+/// blue-grey.
 
-/// The page background behind the groups.
+/// The page background behind the groups: clear in dark mode, so the glow
+/// shows; a soft blue-grey in light mode.
 Color settingsBackground(BuildContext context) =>
     Theme.of(context).brightness == Brightness.dark
-        ? AppTheme.bgDark
-        : AppTheme.surfaceLightHigh;
+        ? Colors.transparent
+        : const Color(0xFFF2F4F8);
+
+/// The top bar's colour on a settings page: the theme's in dark mode (clear
+/// over the glow, deep blue once the page scrolls under it), the page's
+/// blue-grey in light mode.
+Color? settingsBarColor(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+        ? null
+        : settingsBackground(context);
+
+/// The look of a settings card, light or dark: its fill, its edge and its
+/// shadow. Shared, so a page's own cards match the groups.
+BoxDecoration settingsCard(BuildContext context, {double radius = 18}) {
+  final dark = Theme.of(context).brightness == Brightness.dark;
+  return BoxDecoration(
+    color: dark ? const Color(0xB80B1A2E) : Colors.white,
+    borderRadius: BorderRadius.circular(radius),
+    border: Border.all(
+      color: dark ? const Color(0x2664D2FF) : const Color(0xFFE5EAF2),
+      width: 0.8,
+    ),
+    boxShadow: dark
+        ? null
+        : const [
+            BoxShadow(
+              color: Color(0x0F0A84FF),
+              blurRadius: 18,
+              offset: Offset(0, 6),
+            ),
+          ],
+  );
+}
+
+/// The muted colour for headings and notes: a blue-grey in dark mode.
+Color settingsMuted(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+        ? const Color(0xFF8DA2BD)
+        : AppTheme.textMutedLight;
 
 /// A rounded group of rows, with an optional heading above and a note below.
 class SettingsGroup extends StatelessWidget {
@@ -27,19 +69,18 @@ class SettingsGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final muted = dark ? AppTheme.textMutedDark : AppTheme.textMutedLight;
+    final muted = settingsMuted(context);
     final rows = <Widget>[];
     for (var i = 0; i < children.length; i++) {
       rows.add(children[i]);
       if (i < children.length - 1) {
         rows.add(Padding(
-          padding: const EdgeInsets.only(left: 60),
+          padding: const EdgeInsets.only(left: 64),
           child: Divider(
             height: 0.5,
             thickness: 0.5,
-            color: dark ? AppTheme.borderDark : AppTheme.borderLight,
+            color: dark ? const Color(0x1FFFFFFF) : AppTheme.borderLight,
           ),
         ));
       }
@@ -58,17 +99,20 @@ class SettingsGroup extends StatelessWidget {
                 title!.toUpperCase(),
                 style: TextStyle(
                   fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.6,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.9,
                   color: muted,
                 ),
               ),
             ),
-          Material(
-            color: dark ? AppTheme.surfaceDark : cs.surface,
-            borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-            clipBehavior: Clip.antiAlias,
-            child: Column(children: rows),
+          DecoratedBox(
+            decoration: settingsCard(context),
+            child: Material(
+              type: MaterialType.transparency,
+              borderRadius: BorderRadius.circular(18),
+              clipBehavior: Clip.antiAlias,
+              child: Column(children: rows),
+            ),
           ),
           if (footer != null)
             Padding(
@@ -85,7 +129,8 @@ class SettingsGroup extends StatelessWidget {
   }
 }
 
-/// The small coloured square an icon sits on.
+/// The small tile an icon sits on: [color] shading to a little lighter at
+/// the top, like the app's own icon.
 class SettingsIcon extends StatelessWidget {
   final IconData icon;
   final Color color;
@@ -94,14 +139,25 @@ class SettingsIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 30,
-      height: 30,
+      width: 34,
+      height: 34,
       decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color.lerp(color, Colors.white, 0.22)!, color],
+        ),
+        borderRadius: BorderRadius.circular(10),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: 0.26),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       alignment: Alignment.center,
-      child: Icon(icon, size: 18, color: Colors.white),
+      child: Icon(icon, size: 19, color: Colors.white),
     );
   }
 }
@@ -135,12 +191,13 @@ class SettingsTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final muted = dark ? AppTheme.textMutedDark : AppTheme.textMutedLight;
+    final muted = settingsMuted(context);
     return InkWell(
       onTap: onTap,
+      splashColor: AppTheme.primary.withValues(alpha: 0.12),
+      highlightColor: AppTheme.primary.withValues(alpha: 0.06),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 52),
+        constraints: const BoxConstraints(minHeight: 56),
         child: Padding(
           padding: const EdgeInsets.symmetric(
               horizontal: AppTheme.space16, vertical: 10),
@@ -157,7 +214,8 @@ class SettingsTile extends StatelessWidget {
                       title,
                       style: TextStyle(
                         fontSize: 16,
-                        fontWeight: FontWeight.w500,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: -0.1,
                         color: destructive ? AppTheme.error : cs.onSurface,
                       ),
                     ),
@@ -220,7 +278,7 @@ class SettingsSwitchTile extends StatelessWidget {
       onTap: change == null ? null : () => change(!value),
       trailing: Switch.adaptive(
         value: value,
-        activeTrackColor: AppTheme.success,
+        activeTrackColor: AppTheme.primary,
         onChanged: change,
       ),
     );
@@ -250,10 +308,11 @@ class SettingsChoiceTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final muted = dark ? AppTheme.textMutedDark : AppTheme.textMutedLight;
+    final muted = settingsMuted(context);
     return InkWell(
       onTap: enabled ? onTap : null,
+      splashColor: AppTheme.primary.withValues(alpha: 0.12),
+      highlightColor: AppTheme.primary.withValues(alpha: 0.06),
       child: Padding(
         padding: const EdgeInsets.symmetric(
             horizontal: AppTheme.space16, vertical: 13),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/config/constants.dart';
+import 'package:myapp/widgets/flex_logo.dart';
 import 'package:myapp/pages/static_content_pages.dart';
 
 /// The pieces the sign-in and sign-up screens share, so the two look like
@@ -8,7 +9,8 @@ import 'package:myapp/pages/static_content_pages.dart';
 /// strength bar under a new password, and the Terms and Privacy links.
 
 /// A quiet blue glow at the top and a cyan one low on the right, over the
-/// page's own background. Works in light and dark.
+/// page's own background. In dark mode the page already glows blue from
+/// the top (PageBackdrop), so only the cyan one is added.
 class AuthBackdrop extends StatelessWidget {
   final Widget child;
 
@@ -18,21 +20,24 @@ class AuthBackdrop extends StatelessWidget {
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     return Stack(
+      // Fills the page, so the glows reach its foot however short the form.
+      fit: StackFit.expand,
       children: [
-        Positioned.fill(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                center: const Alignment(0, -1.1),
-                radius: 1.1,
-                colors: [
-                  AppTheme.primary.withValues(alpha: dark ? 0.28 : 0.14),
-                  AppTheme.primary.withValues(alpha: 0),
-                ],
+        if (!dark)
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: const Alignment(0, -1.1),
+                  radius: 1.1,
+                  colors: [
+                    AppTheme.primary.withValues(alpha: 0.14),
+                    AppTheme.primary.withValues(alpha: 0),
+                  ],
+                ),
               ),
             ),
           ),
-        ),
         Positioned.fill(
           child: DecoratedBox(
             decoration: BoxDecoration(
@@ -65,22 +70,7 @@ class AuthBrand extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Column(
       children: [
-        Container(
-          width: 76,
-          height: 76,
-          decoration: BoxDecoration(
-            gradient: AppTheme.gradientCyber,
-            borderRadius: BorderRadius.circular(22),
-            boxShadow: [
-              BoxShadow(
-                color: AppTheme.primary.withValues(alpha: 0.45),
-                blurRadius: 28,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: const Icon(Icons.bolt_rounded, size: 44, color: Colors.white),
-        ),
+        const FlexLogo(size: 76),
         const SizedBox(height: 20),
         Text(
           AppConstants.appName,

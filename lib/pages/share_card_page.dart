@@ -7,9 +7,12 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import 'package:myapp/config/constants.dart';
 import 'package:myapp/services/device_gallery.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/widgets/arena_ui.dart';
+import 'package:myapp/widgets/flex_logo.dart';
+import 'package:myapp/widgets/page_backdrop.dart';
 
 /// Sharing a profile or a video: a QR code to scan and the link to send.
 ///
@@ -154,17 +157,11 @@ class _ShareCardPageState extends State<ShareCardPage>
       ),
       body: Stack(
         children: [
-          // The glow: the app's blue, soft, from the top.
+          // The glow: the app's blue, soft, from the top. The same glow as
+          // behind every page in dark mode; here in light mode too.
           const Positioned.fill(
             child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  center: Alignment(0, -0.85),
-                  radius: 1.15,
-                  colors: [Color(0xFF0B3D73), Color(0xFF051425), Colors.black],
-                  stops: [0, 0.45, 1],
-                ),
-              ),
+              decoration: BoxDecoration(gradient: PageBackdrop.glow),
             ),
           ),
           SafeArea(
@@ -334,27 +331,10 @@ class _Card extends StatelessWidget {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 18,
-                height: 18,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: _blue,
-                  borderRadius: BorderRadius.circular(5),
-                ),
-                child: const Text(
-                  'd',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w900,
-                    height: 1,
-                  ),
-                ),
-              ),
+              const FlexLogo(size: 18, glow: false),
               const SizedBox(width: 6),
               const Text(
-                'devf',
+                AppConstants.appName,
                 style: TextStyle(
                   color: Color(0xFF111114),
                   fontSize: 13,

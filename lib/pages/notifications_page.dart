@@ -311,7 +311,7 @@ class _NoteRow extends StatelessWidget {
                             color: look.color,
                             shape: BoxShape.circle,
                             border: Border.all(
-                              color: Theme.of(context).scaffoldBackgroundColor,
+                              color: AppTheme.pageColor(context),
                               width: 2,
                             ),
                           ),

@@ -93,7 +93,7 @@ Future<void> main() async {
         cacheMode: CacheMode.disabled,
         enableQuic: true,
         enableHttp2: true,
-        userAgent: 'BattleArena/1.0',
+        userAgent: 'Flex/1.0',
       );
       ApiService.useClient(CronetClient.fromCronetEngine(engine));
     } catch (e) {
@@ -322,7 +322,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       child: Consumer2<AuthProvider, ThemeProvider>(
         builder: (context, auth, theme, _) {
           return MaterialApp(
-            title: 'Battle Arena',
+            title: AppConstants.appName,
             debugShowCheckedModeBanner: false,
             theme: AppTheme.lightTheme,
             darkTheme: AppTheme.darkTheme,

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Made by tool/make_app_icons_test.dart from the logo in
+     lib/widgets/flex_logo.dart. Change the logo there and run that;
+     do not edit this by hand. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- The play button: white, fading to light blue at its tip. -->
+    <path android:pathData="M44.496,52.219 A2.772,2.772 0 0 1 48.542,49.757 L62.704,57.082 A2.772,2.772 0 0 1 62.704,62.006 L48.542,69.331 A2.772,2.772 0 0 1 44.496,66.869 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="44.496"
+                android:startY="59.544"
+                android:endX="64.202"
+                android:endY="59.544">
+                <item android:offset="0" android:color="#FFFFFFFF" />
+                <item android:offset="1" android:color="#FFA5E3FF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- The stem and top arm of the F. -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M51.624,34.2 L66.276,34.2 A5.148,5.148 0 0 1 71.424,39.348 A5.148,5.148 0 0 1 66.276,44.496 L52.416,44.496 A2.376,2.376 0 0 0 50.04,46.872 L50.04,71.028 A5.148,5.148 0 0 1 44.892,76.176 A5.148,5.148 0 0 1 39.744,71.028 L39.744,46.08 A11.88,11.88 0 0 1 51.624,34.2 Z" />
+</vector>

@@ -183,9 +183,10 @@ class _MainShellState extends State<MainShell> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // Whole shell sits on a black backdrop so the nav bar reads as part
-      // of the dark TikTok-style chrome rather than a stark light strip.
-      backgroundColor: Colors.black,
+      // Black behind the video feed. Behind the other tabs, nothing: each
+      // paints its own page, which in dark mode is the blue glow under the
+      // app (PageBackdrop).
+      backgroundColor: _currentIndex == 0 ? Colors.black : Colors.transparent,
       body: _body(),
       // Dark NavigationBar, TikTok-styled. White-on-black icons + labels
       // with a subtle indicator pill behind the active destination so the

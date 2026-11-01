@@ -398,6 +398,98 @@ class UsernameChange {
   bool get changed => user != null && token != null;
 }
 
+/// Every answer "Forgot password?" can get. See [ApiService.askResetCode].
+enum ResetCodeAnswer {
+  /// A code is on its way. [ResetCodeAsk.sentTo] says where, for a username.
+  sent,
+
+  /// No account has that username.
+  noAccount,
+
+  /// The account has no email address to send a code to.
+  noEmail,
+
+  /// A code was sent less than a minute ago, and it still works.
+  /// [ResetCodeAsk.resendIn] says when another may be asked for.
+  tooSoon,
+
+  /// Too many codes asked for. Wait a while.
+  tooMany,
+
+  /// Email is not working on the server. [ResetCodeAsk.message] gives the
+  /// support address instead.
+  unavailable,
+
+  /// Some other "no" from the server, in [ResetCodeAsk.message].
+  refused,
+
+  /// The server failed, and said nothing about the account.
+  serverError,
+
+  /// The server could not be reached.
+  unreachable,
+}
+
+/// What asking for a password reset code came to.
+class ResetCodeAsk {
+  const ResetCodeAsk(this.answer,
+      {this.sentTo, this.resendIn = 0, this.message});
+
+  final ResetCodeAnswer answer;
+
+  /// Where the code went, shown so only its owner knows it: k•••n@gmail.com.
+  /// Only for a username. An email address is never confirmed or denied.
+  final String? sentTo;
+
+  /// Seconds before another code may be asked for.
+  final int resendIn;
+
+  /// What the server said, in words for the person.
+  final String? message;
+}
+
+/// Every answer to the code and the new password. See
+/// [ApiService.resetPassword].
+enum PasswordResetAnswer {
+  /// Changed. [PasswordReset.username] is the account to sign in to.
+  reset,
+
+  /// That code isn't right. Another try is allowed.
+  wrongCode,
+
+  /// The code ran out, or had too many wrong tries. A new one is needed.
+  expired,
+
+  /// The code was right, but the new password isn't allowed. The code still
+  /// works, to fix the password and try again.
+  badPassword,
+
+  /// Too many tries from this phone. Wait a while.
+  tooMany,
+
+  /// Some other "no" from the server, in [PasswordReset.message].
+  refused,
+
+  /// The server failed. Nothing is known about the code.
+  serverError,
+
+  /// The server could not be reached.
+  unreachable,
+}
+
+/// What sending the code and the new password came to.
+class PasswordReset {
+  const PasswordReset(this.answer, {this.username, this.message});
+
+  final PasswordResetAnswer answer;
+
+  /// The account's username, to sign in with, once it is [reset].
+  final String? username;
+
+  /// What the server said, in words for the person.
+  final String? message;
+}
+
 class ApiService {
   ApiService._();
 
@@ -594,6 +686,134 @@ class ApiService {
       'password': password,
       if (keepAccount) 'keepAccount': true,
     });
+  }
+
+  /// POST /password/forgot — "Forgot password?". A 6-digit code goes to the
+  /// email on the account that [login] (a username or an email) names.
+  static Future<ResetCodeAsk> askResetCode(String login) async {
+    try {
+      final res = await _authHttp.post(
+        Uri.parse('$_base/password/forgot'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'login': login}),
+      );
+      final body = _answerOf(res);
+      final said = '${body['error'] ?? ''}'.trim();
+      final wait = body['resendIn'] ?? body['retryAfter'];
+      final seconds = wait is num ? wait.round() : 60;
+      switch (res.statusCode) {
+        case 200:
+          if (body['sent'] == true) {
+            final to = '${body['to'] ?? ''}'.trim();
+            return ResetCodeAsk(ResetCodeAnswer.sent,
+                sentTo: to.isEmpty ? null : to, resendIn: seconds);
+          }
+        case 404:
+          return ResetCodeAsk(ResetCodeAnswer.noAccount,
+              message: said.isEmpty ? 'No account has that username.' : said);
+        case 409:
+          if (body['noEmail'] == true) {
+            return ResetCodeAsk(ResetCodeAnswer.noEmail,
+                message: said.isEmpty
+                    ? "This account has no email address, so we can't send "
+                        'it a code. Email ${AppConstants.supportEmail} and '
+                        'tell us your username.'
+                    : said);
+          }
+        case 429:
+          // A code went out under a minute ago. The other kind of 429 is the
+          // general "too many", whose words are for programs, not people.
+          if (body['retryAfter'] != null) {
+            return ResetCodeAsk(ResetCodeAnswer.tooSoon,
+                resendIn: seconds, message: said);
+          }
+          return const ResetCodeAsk(ResetCodeAnswer.tooMany,
+              message: "You've asked for a lot of codes. Wait a while, then "
+                  'try again.');
+        case 503:
+          if (body['unavailable'] == true) {
+            return ResetCodeAsk(ResetCodeAnswer.unavailable,
+                message: said.isEmpty
+                    ? "Resetting a password by email isn't working right "
+                        'now. Email ${AppConstants.supportEmail} and we\'ll '
+                        'help you get back in.'
+                    : said);
+          }
+      }
+      if (res.statusCode >= 400 && res.statusCode < 500) {
+        return ResetCodeAsk(ResetCodeAnswer.refused,
+            message: said.isEmpty
+                ? 'Check your username or email, and try again.'
+                : said);
+      }
+      if (res.statusCode == 200) {
+        _unreadable('askResetCode', 'a 200 without "sent"');
+      }
+      return const ResetCodeAsk(ResetCodeAnswer.serverError);
+    } catch (e) {
+      _unreadable('askResetCode', e);
+      return const ResetCodeAsk(ResetCodeAnswer.unreachable);
+    }
+  }
+
+  /// POST /password/reset — the code from the email, and a new password.
+  /// Changing it signs out every sign-in. It signs nobody in itself: the app
+  /// signs in afterwards the ordinary way, with [login]'s username.
+  static Future<PasswordReset> resetPassword(
+      String login, String code, String newPassword) async {
+    try {
+      final res = await _authHttp.post(
+        Uri.parse('$_base/password/reset'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(
+            {'login': login, 'code': code, 'newPassword': newPassword}),
+      );
+      final body = _answerOf(res);
+      final said = '${body['error'] ?? ''}'.trim();
+      if (res.statusCode == 200 && body['reset'] == true) {
+        final name = '${body['username'] ?? ''}'.trim();
+        return PasswordReset(PasswordResetAnswer.reset,
+            username: name.isEmpty ? login : name);
+      }
+      if (res.statusCode == 429) {
+        return const PasswordReset(PasswordResetAnswer.tooMany,
+            message: 'Too many tries. Wait a while, then try again.');
+      }
+      if (res.statusCode >= 400 && res.statusCode < 500) {
+        switch (body['field']) {
+          case 'code':
+            return PasswordReset(
+                body['expired'] == true
+                    ? PasswordResetAnswer.expired
+                    : PasswordResetAnswer.wrongCode,
+                message: said.isEmpty ? "That code isn't right." : said);
+          case 'newPassword':
+            return PasswordReset(PasswordResetAnswer.badPassword,
+                message: said.isEmpty ? "That password can't be used." : said);
+        }
+        return PasswordReset(PasswordResetAnswer.refused,
+            message: said.isEmpty ? "Couldn't reset your password." : said);
+      }
+      if (res.statusCode == 200) {
+        _unreadable('resetPassword', 'a 200 without "reset"');
+      }
+      return const PasswordReset(PasswordResetAnswer.serverError);
+    } catch (e) {
+      _unreadable('resetPassword', e);
+      return const PasswordReset(PasswordResetAnswer.unreachable);
+    }
+  }
+
+  /// The JSON object an answer carries, or nothing when it carries none: a
+  /// proxy page or a plain-text error.
+  static Map<String, dynamic> _answerOf(http.Response res) {
+    try {
+      final said = json.decode(res.body);
+      if (said is Map<String, dynamic>) return said;
+    } catch (_) {
+      // Not JSON. The status still says what happened.
+    }
+    return const {};
   }
 
   /// Posts [body] and reads the answer the way every sign-in-shaped call

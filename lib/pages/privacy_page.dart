@@ -87,12 +87,13 @@ class _PrivacyPageState extends State<PrivacyPage>
       backgroundColor: settingsBackground(context),
       appBar: AppBar(
         title: const Text('Privacy'),
-        backgroundColor: settingsBackground(context),
+        backgroundColor: settingsBarColor(context),
         surfaceTintColor: Colors.transparent,
       ),
       body: ListView(
         padding: const EdgeInsets.only(bottom: AppTheme.space32),
         children: [
+          const _PrivacyIntro(),
           SettingsGroup(
             title: 'Account',
             footer: _private
@@ -103,7 +104,7 @@ class _PrivacyPageState extends State<PrivacyPage>
               SettingsSwitchTile(
                 key: const ValueKey('privacy_private'),
                 icon: Icons.lock_rounded,
-                color: const Color(0xFF5E5CE6),
+                color: AppTheme.primary,
                 title: 'Private account',
                 value: _private,
                 onChanged: (v) {
@@ -178,8 +179,8 @@ class _PrivacyPageState extends State<PrivacyPage>
             children: [
               SettingsSwitchTile(
                 key: const ValueKey('privacy_activity'),
-                icon: Icons.circle,
-                color: AppTheme.success,
+                icon: Icons.visibility_rounded,
+                color: AppTheme.primary,
                 title: "Show when you're active",
                 value: _showActivity,
                 onChanged: (v) {
@@ -199,7 +200,7 @@ class _PrivacyPageState extends State<PrivacyPage>
               SettingsTile(
                 key: const ValueKey('privacy_blocked'),
                 icon: Icons.block_rounded,
-                color: AppTheme.error,
+                color: AppTheme.primary,
                 title: 'Blocked accounts',
                 subtitle: "They can't see your profile or message you",
                 onTap: () => Navigator.of(context).push(
@@ -209,6 +210,72 @@ class _PrivacyPageState extends State<PrivacyPage>
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The top of the Privacy page: what it is for, in one line.
+class _PrivacyIntro extends StatelessWidget {
+  const _PrivacyIntro();
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = settingsMuted(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+          AppTheme.space16, AppTheme.space8, AppTheme.space16, AppTheme.space8),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: settingsCard(context),
+        child: Row(
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFF3DA5FF), Color(0xFF0050D0)],
+                ),
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppTheme.primary.withValues(alpha: 0.28),
+                    blurRadius: 14,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: const Icon(Icons.shield_rounded,
+                  color: Colors.white, size: 26),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'You choose who sees you',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    'Who sees your videos, who can reach you, and when '
+                    "you're shown as active. The server keeps every choice, "
+                    'not just the app.',
+                    style:
+                        TextStyle(fontSize: 13, height: 1.35, color: muted),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -77,8 +77,21 @@ class AppConstants {
   /// Number of posts loaded per page in the home feed.
   static const int defaultPageSize = 20;
 
-  /// App display name shown in AppBar & titles
-  static const String appName = 'Battle Arena';
+  /// The app's name, wherever the app says it.
+  static const String appName = 'Flex';
+
+  /// The version people see (About, the foot of Settings). The same as
+  /// `version:` in pubspec.yaml, before the "+": a test holds the two
+  /// together, so raise both.
+  static const String appVersion = '1.0.0';
+
+  /// Where people write for help. The server gives the same address
+  /// (supportEmail in its mailer.go). One place each, so it changes in one
+  /// place each.
+  static const String supportEmail = 'support@devf.app';
+
+  /// Where people write about their personal data.
+  static const String privacyEmail = 'privacy@devf.app';
 }
 
 /// What a video can be about.

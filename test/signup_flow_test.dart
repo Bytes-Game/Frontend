@@ -370,11 +370,18 @@ void main() {
     stopReporter();
   });
 
-  testWidgets('"Forgot password?" says how to get back in', (t) async {
+  testWidgets('"Forgot password?" opens the reset, starting from what was '
+      'typed (the whole reset: forgot_password_test.dart)', (t) async {
     await openApp(t);
+    await t.enterText(find.byKey(const ValueKey('login_username')), 'maya');
     await tapKey(t, 'login_forgot');
-    expect(find.byKey(const ValueKey('forgot_password_sheet')), findsOneWidget);
-    expect(find.textContaining('support@devf.app'), findsOneWidget);
+    expect(find.byKey(const ValueKey('forgot_step_find')), findsOneWidget);
+    expect(
+        t
+            .widget<TextField>(find.byKey(const ValueKey('forgot_login')))
+            .controller!
+            .text,
+        'maya');
   });
 
   testWidgets('Settings → Create a new account signs you out and opens '
