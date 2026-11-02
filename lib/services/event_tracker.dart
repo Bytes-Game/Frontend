@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:uuid/uuid.dart';
@@ -61,9 +62,27 @@ class EventTracker {
   static const _flushInterval = Duration(seconds: 5);
   static const _sessionTimeout = Duration(minutes: 30);
 
+  /// Sends that failed in a row, and how many ticks of [_flushTimer] to sit
+  /// out before the next try: 1, 2, 4, … up to [_maxWaitTicks]. A server
+  /// that cannot be reached (no network, the app in the background, the
+  /// server asleep) is tried less and less often, instead of every five
+  /// seconds — and every new event — for as long as it lasts. A send that
+  /// works puts it back to every tick.
+  int _failures = 0;
+  int _waitTicks = 0;
+  static const _maxWaitTicks = 60; // 60 ticks of 5 s: five minutes
+
+  /// A send is on its way. Never two at once: a slow server (one waking up
+  /// takes half a minute) would otherwise get a new one every tick.
+  bool _sending = false;
+
   /// Initialize with the current user ID. Call on login.
   void init(String userId) {
     _userId = userId;
+    // A new sign-in starts with no wait, even when the last person's final
+    // send (on signing out) failed after they had gone.
+    _failures = 0;
+    _waitTicks = 0;
     _rotateSessionIfNeeded();
     _startFlushTimer();
   }
@@ -71,7 +90,7 @@ class EventTracker {
   /// Reset on logout.
   void dispose() {
     _flushTimer?.cancel();
-    _flush();
+    _flush(force: true);
     _userId = null;
     _sessionPosition = 0;
   }
@@ -1043,8 +1062,10 @@ class EventTracker {
     }
     _eventQueue.add(event);
 
-    // Flush immediately if batch is full
-    if (_eventQueue.length >= _batchSize) {
+    // Flush immediately if batch is full — but not while waiting after a
+    // failed send: the failed batch is back in the queue, so it is always
+    // full then, and every new event would try again.
+    if (_eventQueue.length >= _batchSize && _waitTicks == 0) {
       _flush();
     }
   }
@@ -1061,17 +1082,30 @@ class EventTracker {
 
   void _startFlushTimer() {
     _flushTimer?.cancel();
-    _flushTimer = Timer.periodic(_flushInterval, (_) => _flush());
+    _flushTimer = Timer.periodic(_flushInterval, (_) => _tick());
+  }
+
+  /// One tick of [_flushTimer]: send, unless still waiting after a failure.
+  void _tick() {
+    if (_waitTicks > 0) {
+      _waitTicks--;
+      return;
+    }
+    _flush();
   }
 
   static const _maxQueueSize = 200;
 
-  Future<void> _flush() async {
+  /// Sends what is queued. [force] (signing out) sends even while another
+  /// send is on its way, so nothing is left behind for the next account.
+  Future<void> _flush({bool force = false}) async {
     if (_eventQueue.isEmpty) return;
+    if (_sending && !force) return;
 
     // Take current batch and clear queue
     final batch = List<Map<String, dynamic>>.from(_eventQueue);
     _eventQueue.clear();
+    _sending = true;
 
     // trackEventsBatch swallows its own exceptions and reports failure
     // via the returned bool — it never throws. An earlier version of
@@ -1088,9 +1122,25 @@ class EventTracker {
         print('EventTracker flush threw: $e');
       }
       ok = false;
+    } finally {
+      _sending = false;
     }
-    if (!ok) {
-      _requeue(batch);
+    if (ok) {
+      _failures = 0;
+      _waitTicks = 0;
+      return;
+    }
+    _requeue(batch);
+    _failures++;
+    _waitTicks = _failures > 7
+        ? _maxWaitTicks
+        : math.min(1 << (_failures - 1), _maxWaitTicks);
+    // Said each time while the wait is still growing, then about once an
+    // hour: a night offline is a few lines in the log, not a hundred.
+    if (_failures <= 7 || _failures % 12 == 0) {
+      debugPrint('[events] ${batch.length} activity events not sent '
+          '(${_failures == 1 ? 'first try' : '$_failures tries in a row'}); '
+          'trying again in ${(_waitTicks + 1) * _flushInterval.inSeconds}s');
     }
   }
 
@@ -1098,9 +1148,6 @@ class EventTracker {
   /// the next flush, dropping the oldest events past [_maxQueueSize] to
   /// bound memory during long offline stretches.
   void _requeue(List<Map<String, dynamic>> batch) {
-    if (kDebugMode) {
-      print('EventTracker flush failed — re-queueing ${batch.length} events');
-    }
     if (_eventQueue.length + batch.length <= _maxQueueSize) {
       _eventQueue.insertAll(0, batch);
     } else {

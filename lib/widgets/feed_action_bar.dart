@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
@@ -403,7 +404,7 @@ class _VoteButton extends StatelessWidget {
                   icon: const Icon(Icons.person),
                   label: Text(responses.first.responderUsername),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.blue,
+                    foregroundColor: AppTheme.primary,
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
                 ),
@@ -563,7 +564,7 @@ class _VoteSide extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const blue = Color(0xFF0A84FF);
+    const blue = AppTheme.primary;
     return Material(
       color: const Color(0xFF2C2C2E),
       borderRadius: BorderRadius.circular(18),
@@ -682,7 +683,7 @@ class _Sheet {
   static const field = Color(0xFF232326);
   static const line = Color(0xFF2C2C30);
   static const muted = Color(0xFF8E8E93);
-  static const accent = Color(0xFF0A84FF);
+  static const accent = AppTheme.primary;
 }
 
 class _ChallengeCommentSheetState extends State<ChallengeCommentSheet> {

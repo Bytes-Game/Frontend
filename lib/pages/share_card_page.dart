@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import 'package:myapp/config/constants.dart';
+import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/services/device_gallery.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/widgets/arena_ui.dart';
@@ -256,7 +257,7 @@ class _Card extends StatelessWidget {
     required this.qrSize,
   });
 
-  static const _blue = Color(0xFF0A84FF);
+  static const _blue = AppTheme.primary;
 
   @override
   Widget build(BuildContext context) {
@@ -371,7 +372,7 @@ class ShareQr extends StatelessWidget {
       backgroundColor: Colors.white,
       eyeStyle: const QrEyeStyle(
         eyeShape: QrEyeShape.circle,
-        color: Color(0xFF0A84FF),
+        color: AppTheme.primary,
       ),
       dataModuleStyle: const QrDataModuleStyle(
         dataModuleShape: QrDataModuleShape.circle,
@@ -447,7 +448,7 @@ class _BigButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bg = filled
-        ? const Color(0xFF0A84FF)
+        ? AppTheme.primary
         : Colors.white.withValues(alpha: 0.10);
     return Material(
       color: bg,

@@ -7,12 +7,10 @@ import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 
-/// Appearance settings — theme picker. Persists the choice into the
-/// user's `settings.theme` field on the backend so it syncs across
-/// devices. App-level theming wiring (reading this value in
-/// MaterialApp.themeMode) is intentionally a separate task because
-/// we don't want to ship a half-applied theme toggle that updates
-/// the user record but doesn't actually repaint until a re-launch.
+/// Appearance settings — theme picker. The app repaints at once, and the
+/// choice is kept in the account's `settings.theme` on the server, so it
+/// comes back at every sign-in, on any phone (AuthProvider._applyTheme).
+/// Nothing picked yet means dark (ThemeProvider.defaultMode).
 class AppearancePage extends StatefulWidget {
   const AppearancePage({super.key});
 
@@ -25,7 +23,7 @@ class _AppearancePageState extends State<AppearancePage>
   @override
   String get pageName => 'appearance_page';
 
-  String _selected = 'system';
+  String _selected = ThemeProvider.defaultSetting;
   bool _saving = false;
 
   @override
@@ -34,7 +32,13 @@ class _AppearancePageState extends State<AppearancePage>
     final settings =
         Provider.of<DataProvider>(context, listen: false).user?.settings ??
             const {};
-    _selected = (settings['theme'] as String?) ?? 'system';
+    // Nothing picked yet: the app is showing the default, so that is
+    // what is ticked here.
+    final saved = settings['theme'];
+    _selected =
+        saved is String && const ['system', 'light', 'dark'].contains(saved)
+            ? saved
+            : ThemeProvider.defaultSetting;
   }
 
   Future<void> _save(String value) async {
@@ -54,7 +58,7 @@ class _AppearancePageState extends State<AppearancePage>
     // to the server right after; on failure we keep the local state
     // and surface a toast so the user knows to retry.
     final tp = Provider.of<ThemeProvider>(context, listen: false);
-    tp.setThemeMode(_themeModeFor(value));
+    tp.setThemeMode(ThemeProvider.modeFor(value));
 
     final newSettings = {...user.settings, 'theme': value};
     final result = await ApiService.updateUserProfile(
@@ -80,20 +84,6 @@ class _AppearancePageState extends State<AppearancePage>
           behavior: SnackBarBehavior.floating,
         ),
       );
-    }
-  }
-
-  /// Map the wire-format string ("system"/"light"/"dark") to the
-  /// Flutter ThemeMode enum. Anything unrecognized falls back to
-  /// `system` so a forward-compat blob never breaks rendering.
-  static ThemeMode _themeModeFor(String s) {
-    switch (s) {
-      case 'light':
-        return ThemeMode.light;
-      case 'dark':
-        return ThemeMode.dark;
-      default:
-        return ThemeMode.system;
     }
   }
 

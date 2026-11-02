@@ -185,7 +185,7 @@ class ArenaHeroHeader extends SliverPersistentHeaderDelegate {
                             height: 24,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              color: const Color(0xFF0A84FF),
+                              color: AppTheme.primary,
                               border: Border.all(color: page, width: 2),
                             ),
                             child: const Icon(Icons.photo_camera_rounded,

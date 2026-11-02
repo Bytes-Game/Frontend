@@ -1508,16 +1508,16 @@ class _BugReportPageState extends State<BugReportPage>
           labelText: label,
           hintText: hint,
           filled: true,
-          fillColor: dark ? const Color(0x990B1A2E) : Colors.white,
+          fillColor: dark ? const Color(0x99101030) : Colors.white,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(14),
             borderSide: BorderSide(
-                color: dark ? const Color(0x2664D2FF) : const Color(0xFFE5EAF2)),
+                color: dark ? const Color(0x269C9DFC) : const Color(0xFFE4E4F4)),
           ),
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(14),
             borderSide: BorderSide(
-                color: dark ? const Color(0x2664D2FF) : const Color(0xFFE5EAF2)),
+                color: dark ? const Color(0x269C9DFC) : const Color(0xFFE4E4F4)),
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(14),
@@ -1568,13 +1568,13 @@ class _BugReportPageState extends State<BugReportPage>
                   showCheckmark: false,
                   selectedColor: AppTheme.primary,
                   backgroundColor:
-                      dark ? const Color(0x990B1A2E) : Colors.white,
+                      dark ? const Color(0x99101030) : Colors.white,
                   side: BorderSide(
                     color: _topic == id
                         ? AppTheme.primary
                         : (dark
-                            ? const Color(0x2664D2FF)
-                            : const Color(0xFFE5EAF2)),
+                            ? const Color(0x269C9DFC)
+                            : const Color(0xFFE4E4F4)),
                   ),
                   labelStyle: TextStyle(
                     fontWeight: FontWeight.w600,
@@ -1679,7 +1679,7 @@ class _GradientTile extends StatelessWidget {
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF3DA5FF), Color(0xFF0050D0)],
+          colors: [Color(0xFF7478FB), Color(0xFF2F34C6)],
         ),
         borderRadius: BorderRadius.circular(size * 0.3),
         boxShadow: [

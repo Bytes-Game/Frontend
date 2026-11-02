@@ -1,17 +1,17 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
-/// The blue glow behind every page in dark mode: the app's blue, soft,
-/// from the top, fading to black. The same glow as behind the QR code on
-/// the share page.
+/// The violet-blue glow behind every page: the app's colour, soft, from the
+/// top. Deep and fading to black in dark mode (the same glow as behind the
+/// QR code on the share page); pale and fading to white in light mode.
 ///
 /// ## How every page gets it
 ///
 /// Each page the app opens goes through [BackdropPageTransitionsBuilder],
-/// which puts the glow under it. In dark mode the theme's page colour
-/// (scaffoldBackgroundColor) is see-through, so a page shows the glow
-/// unless it paints its own background. The video screens do: they set
-/// black themselves, so a video is never lit blue from behind.
+/// which puts the glow under it. The theme's page colour
+/// (scaffoldBackgroundColor) is see-through in both modes, so a page shows
+/// the glow unless it paints its own background. The video screens do:
+/// they set black themselves, so a video is never lit from behind.
 ///
 /// Widgets that need a solid colour the shape of "the page" (a ring cut
 /// around a badge, a header that content scrolls under) use
@@ -21,20 +21,30 @@ class PageBackdrop extends StatelessWidget {
 
   final Widget child;
 
-  /// The glow itself.
+  /// The glow in dark mode: deep violet-blue to black.
   static const glow = RadialGradient(
     center: Alignment(0, -0.85),
     radius: 1.15,
-    colors: [Color(0xFF0B3D73), Color(0xFF051425), Colors.black],
+    colors: [Color(0xFF2B2E82), Color(0xFF0B0C2D), Colors.black],
+    stops: [0, 0.45, 1],
+  );
+
+  /// The glow in light mode: the same, pale, to white.
+  static const lightGlow = RadialGradient(
+    center: Alignment(0, -0.85),
+    radius: 1.15,
+    colors: [Color(0xFFDEDFFF), Color(0xFFF0F0FF), Colors.white],
     stops: [0, 0.45, 1],
   );
 
   @override
   Widget build(BuildContext context) {
-    if (Theme.of(context).brightness != Brightness.dark) return child;
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return DecoratedBox(
       key: const ValueKey('page_backdrop'),
-      decoration: const BoxDecoration(color: Colors.black, gradient: glow),
+      decoration: dark
+          ? const BoxDecoration(color: Colors.black, gradient: glow)
+          : const BoxDecoration(color: Colors.white, gradient: lightGlow),
       child: child,
     );
   }

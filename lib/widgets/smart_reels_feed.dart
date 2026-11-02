@@ -6437,7 +6437,7 @@ class _VsMedal extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFFFF375F), Color(0xFF0A84FF)],
+          colors: [AppTheme.accentPink, AppTheme.primary],
         ),
         boxShadow: [BoxShadow(color: Color(0x66000000), blurRadius: 6)],
       ),

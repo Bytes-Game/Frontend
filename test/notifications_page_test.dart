@@ -304,7 +304,7 @@ void main() {
       ),
       findsOneWidget,
     );
-    // A white @ on a blue badge, on nina's picture.
+    // A white @ on a violet-blue badge, on nina's picture.
     expect(
       find.descendant(
         of: row,
@@ -317,7 +317,7 @@ void main() {
     );
     expect(
       (badge.decoration! as BoxDecoration).color,
-      const Color(0xFF0A84FF),
+      const Color(0xFF6064F0),
     );
     await t.tap(row);
     for (var i = 0; i < 8; i++) {

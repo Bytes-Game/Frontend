@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:myapp/config/app_theme.dart';
 
 import 'package:myapp/models/video_about.dart';
 import 'package:myapp/services/api_service.dart';
@@ -45,7 +46,7 @@ class VideoAboutRow extends StatefulWidget {
 // The comment sheet's own colours: it is dark whatever the phone's theme.
 const _white = Colors.white;
 const _muted = Color(0xFF8E8E93);
-const _accent = Color(0xFF0A84FF);
+const _accent = AppTheme.primary;
 
 class _VideoAboutRowState extends State<VideoAboutRow> {
   bool _open = false;

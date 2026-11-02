@@ -311,22 +311,12 @@ class AuthProvider with ChangeNotifier {
   /// Apply the user's saved theme preference so the app paints in the
   /// right mode from first frame after auth. The settings JSON ships
   /// alongside the user record so there's no extra round-trip.
+  ///
+  /// An account that never picked gets the default (dark), not whatever
+  /// the last person signed in on this phone had picked.
   void _applyTheme(BuildContext context, UserModel user) {
-    final tp = Provider.of<ThemeProvider>(context, listen: false);
-    final savedTheme = user.settings['theme'];
-    if (savedTheme is String) {
-      switch (savedTheme) {
-        case 'dark':
-          tp.setThemeMode(ThemeMode.dark);
-          break;
-        case 'light':
-          tp.setThemeMode(ThemeMode.light);
-          break;
-        case 'system':
-          tp.setThemeMode(ThemeMode.system);
-          break;
-      }
-    }
+    Provider.of<ThemeProvider>(context, listen: false)
+        .setThemeMode(ThemeProvider.modeFor(user.settings['theme']));
   }
 
   /// Clears all state and returns to login screen.
