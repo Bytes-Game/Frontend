@@ -13,8 +13,8 @@ import 'package:myapp/services/api_service.dart';
 /// one product: the soft glow behind them, the logo, the big button, the
 /// strength bar under a new password, and the Terms and Privacy links.
 
-/// A second, softer violet-blue glow low on the right. The page already
-/// glows violet-blue from the top, in both modes (PageBackdrop).
+/// A second, softer blue glow low on the right. The page already
+/// glows blue from the top, in both modes (PageBackdrop).
 class AuthBackdrop extends StatelessWidget {
   final Widget child;
 

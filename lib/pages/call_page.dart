@@ -346,7 +346,7 @@ class _Backdrop extends StatelessWidget {
 
   static const _tints = [
     AppTheme.primary,
-    Color(0xFF8B5CF6),
+    Color(0xFF5E5CE6),
     Color(0xFF30D158),
     Color(0xFFFF375F),
     AppTheme.primarySoft,

@@ -237,7 +237,7 @@ class _PrivacyIntro extends StatelessWidget {
                 gradient: const LinearGradient(
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
-                  colors: [Color(0xFF7478FB), Color(0xFF2F34C6)],
+                  colors: [Color(0xFF5B8CFF), Color(0xFF1A47C9)],
                 ),
                 borderRadius: BorderRadius.circular(14),
                 boxShadow: [

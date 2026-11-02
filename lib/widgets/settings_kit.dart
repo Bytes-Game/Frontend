@@ -4,10 +4,10 @@ import 'package:myapp/config/app_theme.dart';
 
 /// The pieces every settings page is built from, so they all look the same:
 /// rounded groups on the page, each row with its icon on a small
-/// violet-blue tile like the app's own icon.
+/// blue tile like the app's own icon.
 ///
-/// The groups sit over the violet-blue glow behind every page
-/// (PageBackdrop): deep violet-blue glass in dark mode, white cards in
+/// The groups sit over the blue glow behind every page
+/// (PageBackdrop): deep blue glass in dark mode, white cards in
 /// light mode.
 
 /// The page background behind the groups: clear, so the glow shows.
@@ -22,17 +22,17 @@ Color? settingsBarColor(BuildContext context) => null;
 BoxDecoration settingsCard(BuildContext context, {double radius = 18}) {
   final dark = Theme.of(context).brightness == Brightness.dark;
   return BoxDecoration(
-    color: dark ? const Color(0xB8101030) : Colors.white,
+    color: dark ? const Color(0xB80E1834) : Colors.white,
     borderRadius: BorderRadius.circular(radius),
     border: Border.all(
-      color: dark ? const Color(0x269C9DFC) : const Color(0xFFE4E4F4),
+      color: dark ? const Color(0x268FB0FF) : const Color(0xFFE3E8F4),
       width: 0.8,
     ),
     boxShadow: dark
         ? null
         : const [
             BoxShadow(
-              color: Color(0x146064F0),
+              color: Color(0x142F6AFF),
               blurRadius: 18,
               offset: Offset(0, 6),
             ),
@@ -40,10 +40,10 @@ BoxDecoration settingsCard(BuildContext context, {double radius = 18}) {
   );
 }
 
-/// The muted colour for headings and notes: a violet-grey in dark mode.
+/// The muted colour for headings and notes: a blue-grey in dark mode.
 Color settingsMuted(BuildContext context) =>
     Theme.of(context).brightness == Brightness.dark
-        ? const Color(0xFF8E8EBE)
+        ? const Color(0xFF8A9BC4)
         : AppTheme.textMutedLight;
 
 /// A rounded group of rows, with an optional heading above and a note below.

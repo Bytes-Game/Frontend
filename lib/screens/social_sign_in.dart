@@ -140,13 +140,13 @@ class _ProviderButton extends StatelessWidget {
     final apple = provider == SocialProvider.apple;
     final Color fill = apple
         ? (dark ? Colors.white : Colors.black)
-        : (dark ? const Color(0xCC101030) : Colors.white);
+        : (dark ? const Color(0xCC0E1834) : Colors.white);
     final Color ink = apple
         ? (dark ? Colors.black : Colors.white)
         : (dark ? Colors.white : const Color(0xFF1F1F1F));
     final Color edge = apple
         ? fill
-        : (dark ? const Color(0x339C9DFC) : const Color(0xFFDADCE0));
+        : (dark ? const Color(0x338FB0FF) : const Color(0xFFDADCE0));
     return SizedBox(
       height: 52,
       child: OutlinedButton(

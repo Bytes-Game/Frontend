@@ -1,7 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
-/// The violet-blue glow behind every page: the app's colour, soft, from the
+/// The blue glow behind every page: the app's colour, soft, from the
 /// top. Deep and fading to black in dark mode (the same glow as behind the
 /// QR code on the share page); pale and fading to white in light mode.
 ///
@@ -21,11 +21,11 @@ class PageBackdrop extends StatelessWidget {
 
   final Widget child;
 
-  /// The glow in dark mode: deep violet-blue to black.
+  /// The glow in dark mode: deep blue to black.
   static const glow = RadialGradient(
     center: Alignment(0, -0.85),
     radius: 1.15,
-    colors: [Color(0xFF2B2E82), Color(0xFF0B0C2D), Colors.black],
+    colors: [Color(0xFF1C3784), Color(0xFF0A1430), Colors.black],
     stops: [0, 0.45, 1],
   );
 
@@ -33,7 +33,7 @@ class PageBackdrop extends StatelessWidget {
   static const lightGlow = RadialGradient(
     center: Alignment(0, -0.85),
     radius: 1.15,
-    colors: [Color(0xFFDEDFFF), Color(0xFFF0F0FF), Colors.white],
+    colors: [Color(0xFFDCE6FF), Color(0xFFEEF3FF), Colors.white],
     stops: [0, 0.45, 1],
   );
 
