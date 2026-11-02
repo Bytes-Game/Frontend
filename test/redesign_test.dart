@@ -15,6 +15,7 @@ import 'package:provider/provider.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
 import 'package:myapp/models/user_model.dart';
+import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/pages/challenge_metadata_page.dart';
 import 'package:myapp/pages/create_page.dart';
 import 'package:myapp/pages/edit_profile_page.dart';
@@ -814,7 +815,7 @@ void main() {
       expect(deco.color, kAccent);
       expect(deco.gradient, isNull, reason: 'no rainbow gradients');
       expect(deco.boxShadow, isNull, reason: 'no glow');
-      expect(kAccent, const Color(0xFF6064F0), reason: "Flex's violet-blue");
+      expect(kAccent, AppTheme.primary, reason: "Flex's blue");
     });
 
     testWidgets('an empty notifications page says what will appear', (t) async {

@@ -341,7 +341,7 @@ void main() {
     });
   });
 
-  group('the violet-blue glow behind the pages', () {
+  group('the blue glow behind the pages', () {
     Widget settings() => SettingsPage(
           onEditProfile: () {},
           onShareProfile: () {},
@@ -352,7 +352,7 @@ void main() {
     testWidgets('shows behind a page, in the drawn colours', (t) async {
       await open(t, settings(), mode: ThemeMode.dark, appThemes: true);
       expect(find.byKey(const ValueKey('page_backdrop')), findsOneWidget);
-      // Beside the cards, level with the glow's middle: violet-blue, not
+      // Beside the cards, level with the glow's middle: blue, not
       // black.
       final c = await pixelAt(t, 8, 120);
       expect(c.b, greaterThan(0.12), reason: '$c');
@@ -388,7 +388,7 @@ void main() {
     testWidgets('light mode has the same glow, pale', (t) async {
       await open(t, settings(), mode: ThemeMode.light, appThemes: true);
       expect(find.byKey(const ValueKey('page_backdrop')), findsOneWidget);
-      // Light, and tinted violet-blue: more blue than red, not plain white.
+      // Light, and tinted blue: more blue than red, not plain white.
       final c = await pixelAt(t, 8, 120);
       expect(c.r, greaterThan(0.85), reason: '$c');
       expect(c.b, greaterThan(c.r + 0.03), reason: '$c');

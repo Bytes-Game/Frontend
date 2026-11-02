@@ -5,9 +5,9 @@ import 'package:myapp/widgets/page_backdrop.dart';
 /// Single source of truth for the app's design system.
 ///
 /// Aesthetic: calm and professional. Black and white, greys for anything
-/// secondary, and one colour — Flex's violet-blue — for the thing on a
+/// secondary, and one colour — Flex's blue — for the thing on a
 /// screen you are meant to press, the same in light and dark. Behind every
-/// page (but the videos) a soft glow of the same violet-blue: deep in dark
+/// page (but the videos) a soft glow of the same blue: deep in dark
 /// mode, pale in light (PageBackdrop). Red, green and orange appear only
 /// where they MEAN something: a like, a win, a loss, a warning.
 ///
@@ -21,20 +21,20 @@ class AppTheme {
   // CORE PALETTE
   // ═══════════════════════════════════════════════════════════════════════
 
-  /// The one accent: Flex's violet-blue, in light and dark alike. Buttons,
+  /// The one accent: Flex's blue, in light and dark alike. Buttons,
   /// links, selection, your own chat bubbles.
   ///
   /// Picked to read as well on black as on white, and under white letters:
   /// 4.6 to 1 each way, past the 4.5 that small text needs. (The blue it
   /// replaced managed 3.6 under white letters.)
-  static const Color primary = Color(0xFF6064F0);
+  static const Color primary = Color(0xFF2F6AFF);
 
-  /// The violet-blue, deeper: the foot of [gradientPrimary], a pressed look.
-  static const Color primaryDeep = Color(0xFF3A3FDF);
+  /// The blue, deeper: the foot of [gradientPrimary], a pressed look.
+  static const Color primaryDeep = Color(0xFF1D4ED8);
 
-  /// The violet-blue, soft and light: small details like read ticks and
+  /// The blue, soft and light: small details like read ticks and
   /// online state, faint edges, the second glow on the sign-in screens.
-  static const Color primarySoft = Color(0xFF9C9DFC);
+  static const Color primarySoft = Color(0xFF8FB0FF);
 
   /// Red, for likes and anything that needs attention. (The name is kept
   /// from the old palette so existing screens keep compiling.)
@@ -44,7 +44,7 @@ class AppTheme {
   /// compiling. It is not cyan any more.
   static const Color accentCyan = primarySoft;
 
-  /// Links and info: the same violet-blue as [primary].
+  /// Links and info: the same blue as [primary].
   static const Color accentBlue = primary;
 
   /// Success green.
@@ -84,7 +84,7 @@ class AppTheme {
   /// For a widget that must cover what is behind it in the page's colour:
   /// a ring cut around a badge, a header that content scrolls under. The
   /// theme's own page colour is see-through in both modes, to show the
-  /// violet-blue glow (PageBackdrop), so it cannot do that job.
+  /// blue glow (PageBackdrop), so it cannot do that job.
   static Color pageColor(BuildContext context) =>
       Theme.of(context).brightness == Brightness.dark ? bgDark : bgLight;
 
@@ -106,7 +106,7 @@ class AppTheme {
     colors: [Color(0xFF1C1C1E), Color(0xFF000000)],
   );
 
-  /// Secondary accent: the violet-blue to its soft, light version.
+  /// Secondary accent: the blue to its soft, light version.
   static const LinearGradient gradientCyber = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
@@ -369,7 +369,7 @@ class AppTheme {
   static final ThemeData darkTheme = ThemeData(
     useMaterial3: true,
     brightness: Brightness.dark,
-    // See-through, so a page shows the violet-blue glow under it
+    // See-through, so a page shows the blue glow under it
     // (PageBackdrop).
     // A page that wants black (the video screens) sets it itself, and a
     // widget that needs the page's colour as a solid uses [pageColor].
@@ -396,11 +396,11 @@ class AppTheme {
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: true,
-      // Clear over the glow; a deep violet-blue once the page scrolls under
+      // Clear over the glow; a deep blue once the page scrolls under
       // it, so the title never sits on top of the content.
       backgroundColor: WidgetStateColor.resolveWith(
         (states) => states.contains(WidgetState.scrolledUnder)
-            ? const Color(0xF20B0C2D)
+            ? const Color(0xF20A1430)
             : Colors.transparent,
       ),
       foregroundColor: Colors.white,
@@ -521,8 +521,8 @@ class AppTheme {
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      // Deep violet-blue glass, to sit on the glow behind the pages.
-      fillColor: const Color(0xCC101030),
+      // Deep blue glass, to sit on the glow behind the pages.
+      fillColor: const Color(0xCC0E1834),
       hintStyle: GoogleFonts.inter(
         fontSize: 14,
         color: textMutedDark,
@@ -540,11 +540,11 @@ class AppTheme {
       ),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(radiusMd),
-        borderSide: const BorderSide(color: Color(0x339C9DFC), width: 1),
+        borderSide: const BorderSide(color: Color(0x338FB0FF), width: 1),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(radiusMd),
-        borderSide: const BorderSide(color: Color(0x339C9DFC), width: 1),
+        borderSide: const BorderSide(color: Color(0x338FB0FF), width: 1),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(radiusMd),
@@ -657,13 +657,13 @@ class AppTheme {
   );
 
   // ═══════════════════════════════════════════════════════════════════════
-  // LIGHT THEME (the same violet-blue, on white)
+  // LIGHT THEME (the same blue, on white)
   // ═══════════════════════════════════════════════════════════════════════
 
   static final ThemeData lightTheme = ThemeData(
     useMaterial3: true,
     brightness: Brightness.light,
-    // See-through, as in dark mode, so a page shows the pale violet-blue
+    // See-through, as in dark mode, so a page shows the pale blue
     // glow under it (PageBackdrop); [pageColor] is the solid white.
     scaffoldBackgroundColor: Colors.transparent,
     canvasColor: bgLight,

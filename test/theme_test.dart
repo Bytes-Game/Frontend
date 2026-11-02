@@ -1,5 +1,5 @@
 // The app's look: dark until the person picks otherwise, and one
-// violet-blue everywhere, in both modes.
+// blue everywhere, in both modes.
 //
 // Through the real app root, the real sign-in and the real Appearance page;
 // the colour checks read the real themes and the real files the phones use.
@@ -295,9 +295,9 @@ void main() {
     });
   });
 
-  group('one violet-blue everywhere', () {
+  group('one blue everywhere', () {
     test('the same colour leads both themes', () {
-      expect(AppTheme.primary, const Color(0xFF6064F0));
+      expect(AppTheme.primary, const Color(0xFF2F6AFF));
       for (final theme in [AppTheme.lightTheme, AppTheme.darkTheme]) {
         expect(theme.colorScheme.primary, AppTheme.primary);
         expect(
@@ -315,16 +315,33 @@ void main() {
           reason: 'white words on a button');
       expect(contrast(AppTheme.primary, black), greaterThanOrEqualTo(4.5),
           reason: 'a link in dark mode');
-      // The blue it replaced, for comparison: under 4.5.
+      // The first blue, for comparison: under 4.5.
       expect(contrast(white, const Color(0xFF0A84FF)), lessThan(4.5));
     });
 
-    test('no other blue is left in the app', () {
-      // The old blues, written out, anywhere in the app's code.
+    test('it is blue with a touch of violet: not the first blue, not violet',
+        () {
+      // The shade on the colour wheel, in degrees: the first blue sat at
+      // 210, the violet at 238. This one is a little way from the blue
+      // towards violet, and well short of it.
+      double shade(Color c) => HSVColor.fromColor(c).hue;
+      expect(shade(AppTheme.primary), inInclusiveRange(218, 228));
+      expect(shade(const Color(0xFF0A84FF)), lessThan(218),
+          reason: 'the first blue');
+      expect(shade(const Color(0xFF6064F0)), greaterThan(228),
+          reason: 'the violet');
+    });
+
+    test('neither old colour is left in the app: the first blue or the '
+        'violet', () {
+      // The old shades, written out, anywhere in the app's code: the first
+      // blue's family, then the violet's.
       final old = RegExp(
           r'0A84FF|64D2FF|0071E3|0B3D73|051425|0B1A2E|061322|3DA5FF|0050D0|'
           r'A5E3FF|8DA2BD|E5EAF2|F2F4F8|00337F|Colors\.(blue|lightBlue|cyan|'
-          r'indigo)\b',
+          r'indigo)\b|'
+          r'6064F0|3A3FDF|9C9DFC|2B2E82|0B0C2D|101030|8E8EBE|1B1E80|DEDFFF|'
+          r'F0F0FF|E4E4F4|7478FB|2F34C6|C2C4FF',
           caseSensitive: false);
       final found = <String>[];
       for (final f in Directory('lib').listSync(recursive: true)) {
@@ -337,9 +354,9 @@ void main() {
       expect(found, isEmpty);
     });
 
-    test("the phones' own colours are the same violet-blue", () {
+    test("the phones' own colours are the same blue", () {
       final want = hex(AppTheme.primary);
-      expect(want, '#6064F0');
+      expect(want, '#2F6AFF');
       expect(
           File('android/app/src/main/res/values/colors.xml').readAsStringSync(),
           contains('<color name="notification_accent">$want</color>'),

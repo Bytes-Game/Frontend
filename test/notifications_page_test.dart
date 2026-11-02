@@ -12,6 +12,7 @@ import 'package:http/testing.dart';
 import 'package:provider/provider.dart';
 
 import 'package:myapp/models/notification_model.dart';
+import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/challenge_detail_page.dart';
 import 'package:myapp/pages/notifications_page.dart';
@@ -304,7 +305,7 @@ void main() {
       ),
       findsOneWidget,
     );
-    // A white @ on a violet-blue badge, on nina's picture.
+    // A white @ on a blue badge, on nina's picture.
     expect(
       find.descendant(
         of: row,
@@ -317,7 +318,7 @@ void main() {
     );
     expect(
       (badge.decoration! as BoxDecoration).color,
-      const Color(0xFF6064F0),
+      AppTheme.primary,
     );
     await t.tap(row);
     for (var i = 0; i < 8; i++) {

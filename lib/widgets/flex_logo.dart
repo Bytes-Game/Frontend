@@ -45,22 +45,22 @@ class FlexMark {
   /// it holds its own at the size of a home-screen icon.
   static const presence = 1.1;
 
-  /// The violet-blues, from the top-left corner of the tile to the
+  /// The blues, from the top-left corner of the tile to the
   /// bottom-right. The middle one is the app's own colour
   /// (AppTheme.primary), the one on the QR code's corners.
   static const tileColors = [
-    Color(0xFF7478FB),
+    Color(0xFF5B8CFF),
     AppTheme.primary,
-    Color(0xFF2F34C6),
+    Color(0xFF1A47C9),
   ];
 
-  /// The play button's light violet-blue, at its tip. The app's soft
-  /// violet-blue (AppTheme.primarySoft), lightened so it stays bright on
+  /// The play button's light blue, at its tip. The app's soft
+  /// blue (AppTheme.primarySoft), lightened so it stays bright on
   /// the tile.
-  static const playTip = Color(0xFFC2C4FF);
+  static const playTip = Color(0xFFBFD0FF);
 
-  /// The deep violet-blue under the mark, for its shadow.
-  static const shadow = Color(0xFF1B1E80);
+  /// The deep blue under the mark, for its shadow.
+  static const shadow = Color(0xFF13307F);
 
   /// The F without its middle arm: the stem and the top arm, as one stroke
   /// with a smooth bend.

@@ -15,6 +15,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
+import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/config/constants.dart';
 import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/providers/data_provider.dart';
@@ -111,15 +112,18 @@ double onIcon(double u, {double markScale = 1}) =>
     (50 + (u - 50) * FlexMark.presence * markScale) / 100;
 
 bool isWhite(Color c) => c.r > 0.94 && c.g > 0.94 && c.b > 0.94;
-/// The app's violet-blue, as on the tile: blue well above red and green,
-/// with red and green about equal. The old bright blue had almost no red
-/// and far more green, so it does not pass.
-bool isVioletBlue(Color c) =>
-    c.b > 0.75 &&
-    c.b - c.r > 0.35 &&
-    c.b - c.g > 0.35 &&
-    (c.r - c.g).abs() < 0.1 &&
+/// The app's own blue (AppTheme.primary, the middle of the tile), give or
+/// take the tile's fade. Both earlier icons, the bright blue and the
+/// violet, are too far from it to pass.
+bool isAppBlue(Color c) =>
+    (c.r - AppTheme.primary.r).abs() < 0.08 &&
+    (c.g - AppTheme.primary.g).abs() < 0.08 &&
+    (c.b - AppTheme.primary.b).abs() < 0.08 &&
     c.a > 0.99;
+
+/// A colour as Android's drawing files write it: #AARRGGBB.
+String argb(Color c) =>
+    '#${c.toARGB32().toRadixString(16).padLeft(8, '0').toUpperCase()}';
 
 /// The PNG's colour type, from its header: 2 is colour without a
 /// see-through layer, 6 is colour with one.
@@ -205,8 +209,8 @@ void main() {
       expect(File('android/app/src/main/AndroidManifest.xml').readAsStringSync(),
           contains('android:icon="@mipmap/ic_launcher"'));
       expect(File('$res/drawable/ic_launcher_background.xml').readAsStringSync(),
-          contains('#FF6064F0'),
-          reason: "the tile is the app's violet-blue");
+          contains(argb(AppTheme.primary)),
+          reason: "the tile is the app's blue");
     });
 
     test('the notification mark is the F too', () {
@@ -227,7 +231,7 @@ void main() {
       expect(differ, lessThanOrEqualTo(3));
     });
 
-    test('the picture icons: a white F on the violet-blue, every size',
+    test('the picture icons: a white F on the blue, every size',
         () async {
       final files = <String, int>{
         '$res/mipmap-mdpi/ic_launcher.png': 48,
@@ -253,7 +257,7 @@ void main() {
         expect(isWhite(at(onIcon(38.5), onIcon(60))), isTrue,
             reason: '${e.key}: the F');
         // Between the arm and the play button, right of the stem: the tile.
-        expect(isVioletBlue(at(onIcon(60), onIcon(43.5))), isTrue,
+        expect(isAppBlue(at(onIcon(60), onIcon(43.5))), isTrue,
             reason: '${e.key}: the tile');
       }
     });

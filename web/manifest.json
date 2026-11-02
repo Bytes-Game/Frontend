@@ -4,7 +4,7 @@
     "start_url": ".",
     "display": "standalone",
     "background_color": "#000000",
-    "theme_color": "#6064F0",
+    "theme_color": "#2F6AFF",
     "description": "Flex: short video battles. Post a video, challenge anyone, and let people vote.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- The app's violet-blue, on notifications. Same as AppTheme.primary. -->
-    <color name="notification_accent">#6064F0</color>
+    <!-- The app's blue, on notifications. Same as AppTheme.primary. -->
+    <color name="notification_accent">#2F6AFF</color>
 </resources>
