@@ -345,11 +345,11 @@ class _Backdrop extends StatelessWidget {
   const _Backdrop({required this.drift, required this.name});
 
   static const _tints = [
-    Color(0xFF0A84FF),
-    Color(0xFF5E5CE6),
+    AppTheme.primary,
+    Color(0xFF8B5CF6),
     Color(0xFF30D158),
     Color(0xFFFF375F),
-    Color(0xFF64D2FF),
+    AppTheme.primarySoft,
     Color(0xFFFF9F0A),
   ];
 

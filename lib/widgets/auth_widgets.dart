@@ -13,9 +13,8 @@ import 'package:myapp/services/api_service.dart';
 /// one product: the soft glow behind them, the logo, the big button, the
 /// strength bar under a new password, and the Terms and Privacy links.
 
-/// A quiet blue glow at the top and a cyan one low on the right, over the
-/// page's own background. In dark mode the page already glows blue from
-/// the top (PageBackdrop), so only the cyan one is added.
+/// A second, softer violet-blue glow low on the right. The page already
+/// glows violet-blue from the top, in both modes (PageBackdrop).
 class AuthBackdrop extends StatelessWidget {
   final Widget child;
 
@@ -25,24 +24,9 @@ class AuthBackdrop extends StatelessWidget {
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     return Stack(
-      // Fills the page, so the glows reach its foot however short the form.
+      // Fills the page, so the glow reaches its foot however short the form.
       fit: StackFit.expand,
       children: [
-        if (!dark)
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  center: const Alignment(0, -1.1),
-                  radius: 1.1,
-                  colors: [
-                    AppTheme.primary.withValues(alpha: 0.14),
-                    AppTheme.primary.withValues(alpha: 0),
-                  ],
-                ),
-              ),
-            ),
-          ),
         Positioned.fill(
           child: DecoratedBox(
             decoration: BoxDecoration(
@@ -50,8 +34,8 @@ class AuthBackdrop extends StatelessWidget {
                 center: const Alignment(1.2, 1.1),
                 radius: 0.9,
                 colors: [
-                  AppTheme.accentCyan.withValues(alpha: dark ? 0.14 : 0.10),
-                  AppTheme.accentCyan.withValues(alpha: 0),
+                  AppTheme.primarySoft.withValues(alpha: dark ? 0.16 : 0.18),
+                  AppTheme.primarySoft.withValues(alpha: 0),
                 ],
               ),
             ),

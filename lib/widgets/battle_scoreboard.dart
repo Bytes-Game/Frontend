@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:myapp/config/app_theme.dart';
 
 import 'package:myapp/models/battle_model.dart';
 import 'package:myapp/services/api_service.dart';
@@ -486,7 +487,7 @@ class _SideRow extends StatelessWidget {
     // sides you can tell apart without the orange that clashed with the
     // rest of the app.
     final accent =
-        side.isCreator ? const Color(0xFF0A84FF) : const Color(0xFF64D2FF);
+        side.isCreator ? AppTheme.primary : AppTheme.primarySoft;
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(
@@ -567,7 +568,7 @@ class _SideRow extends StatelessWidget {
                 FilledButton(
                   onPressed: onVote,
                   style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF0A84FF),
+                    backgroundColor: AppTheme.primary,
                     foregroundColor: Colors.white,
                     visualDensity: VisualDensity.compact,
                     padding: const EdgeInsets.symmetric(horizontal: 14),

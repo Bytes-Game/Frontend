@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:myapp/config/app_theme.dart';
 
 /// The Flex logo: a bold white F whose middle arm is a play button, on the
 /// app's blue.
@@ -44,21 +45,22 @@ class FlexMark {
   /// it holds its own at the size of a home-screen icon.
   static const presence = 1.1;
 
-  /// The blues, from the top-left corner of the tile to the bottom-right.
-  /// The middle one is the app's own blue (AppTheme.primary), the one on the
-  /// QR code's corners.
+  /// The violet-blues, from the top-left corner of the tile to the
+  /// bottom-right. The middle one is the app's own colour
+  /// (AppTheme.primary), the one on the QR code's corners.
   static const tileColors = [
-    Color(0xFF3DA5FF),
-    Color(0xFF0A84FF),
-    Color(0xFF0050D0),
+    Color(0xFF7478FB),
+    AppTheme.primary,
+    Color(0xFF2F34C6),
   ];
 
-  /// The play button's light blue, at its tip. The app's soft blue
-  /// (AppTheme.accentCyan), lightened so it stays bright on the tile.
-  static const playTip = Color(0xFFA5E3FF);
+  /// The play button's light violet-blue, at its tip. The app's soft
+  /// violet-blue (AppTheme.primarySoft), lightened so it stays bright on
+  /// the tile.
+  static const playTip = Color(0xFFC2C4FF);
 
-  /// The deep blue under the mark, for its shadow.
-  static const shadow = Color(0xFF00337F);
+  /// The deep violet-blue under the mark, for its shadow.
+  static const shadow = Color(0xFF1B1E80);
 
   /// The F without its middle arm: the stem and the top arm, as one stroke
   /// with a smooth bend.
@@ -330,7 +332,7 @@ class FlexLogo extends StatelessWidget {
                 borderRadius: BorderRadius.circular(size * 0.235),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFF0A84FF).withValues(alpha: 0.38),
+                    color: AppTheme.primary.withValues(alpha: 0.38),
                     blurRadius: size * 0.5,
                     offset: Offset(0, size * 0.06),
                   ),

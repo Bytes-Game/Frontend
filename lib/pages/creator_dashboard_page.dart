@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/config/constants.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
@@ -565,7 +566,7 @@ class _HistogramBar extends StatelessWidget {
                 minHeight: 18,
                 backgroundColor:
                     Theme.of(context).colorScheme.surfaceContainerHighest,
-                valueColor: AlwaysStoppedAnimation(Colors.indigo.shade400),
+                valueColor: const AlwaysStoppedAnimation(AppTheme.primary),
               ),
             ),
           ),

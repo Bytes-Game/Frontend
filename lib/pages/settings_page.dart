@@ -14,6 +14,7 @@ import 'package:myapp/pages/two_factor_setup_page.dart';
 import 'package:myapp/pages/watch_history_page.dart';
 import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/providers/data_provider.dart';
+import 'package:myapp/providers/theme_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
@@ -184,13 +185,15 @@ class _SettingsPageState extends State<SettingsPage>
     ));
   }
 
+  /// What the app is showing, by the same rule it uses to show it: nothing
+  /// picked yet is Dark, not Automatic.
   static String _themeLabel(Map<String, dynamic> settings) {
-    switch (settings['theme']) {
-      case 'light':
+    switch (ThemeProvider.modeFor(settings['theme'])) {
+      case ThemeMode.light:
         return 'Light';
-      case 'dark':
+      case ThemeMode.dark:
         return 'Dark';
-      default:
+      case ThemeMode.system:
         return 'Automatic';
     }
   }

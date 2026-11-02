@@ -112,7 +112,7 @@ the day it is added.
    Several things are tied to the id, so after changing it:
    - Push notifications: register the new id as an app in Firebase and use
      its new `FIREBASE_APP_ID`, or notifications stop.
-   - Google sign-in: the Android OAuth client (item 9) is made for the id.
+   - Google sign-in: the Android OAuth client (item 10) is made for the id.
    - Apple sign-in: the iPhone id goes in `APPLE_CLIENT_IDS` (item 6), and
      the Android id in `ANDROID_PACKAGE_NAME` on Render (item 6).
 2. **Make the release signing key.** Without it, release builds are signed
@@ -120,7 +120,7 @@ the day it is added.
    are in the comment at the top of `android/app/build.gradle.kts`: make the
    key once, write `android/key.properties`, keep both safe and out of git.
    Losing the key means the app can never be updated on Play. Its SHA-1
-   fingerprint is needed for Google sign-in (item 9).
+   fingerprint is needed for Google sign-in (item 10).
 3. **Version number.** `version:` in `pubspec.yaml` (now `1.0.0+1`). The
    number after `+` must go up for every upload to the stores. The part
    before it is also `appVersion` in `lib/config/constants.dart` (shown in
@@ -136,10 +136,10 @@ the day it is added.
    Brevo, Resend, a Gmail app password). Without them no reset code is ever
    sent, and the app tells people to email support instead.
 6. **Google and Apple sign-in, the server's half.**
-   - `GOOGLE_CLIENT_IDS`: the Web and iOS OAuth client ids from item 9,
+   - `GOOGLE_CLIENT_IDS`: the Web and iOS OAuth client ids from item 10,
      separated by a comma.
    - `APPLE_CLIENT_IDS`: the iPhone app id and the Apple Services ID from
-     item 10, separated by a comma.
+     item 11, separated by a comma.
    - `ANDROID_PACKAGE_NAME`: the new Android id from item 1 (Apple sign-in
      on Android comes back to the app through it).
    Without them, those buttons say "isn't set up yet".
@@ -147,21 +147,33 @@ the day it is added.
    that needs it.
 8. **After the store listing exists:** set `APP_DOWNLOAD_URL` to the store
    link, so the shared profile and video web pages show a "Get Flex" button.
+9. **Keep the server awake.** Render's free plan puts the server to sleep
+   after about 15 minutes with nobody using it. The next person to open the
+   app then waits 30 to 60 seconds while it wakes, and the feed can fail to
+   load at all: a phone log on 2 November showed exactly that. The GitHub
+   job meant to keep it awake (`keepalive.yml` in the server repo) asks for
+   every 10 minutes but runs only every few hours, because GitHub drops most
+   scheduled runs. Pick one:
+   - free: an UptimeRobot monitor (type HTTP(s), address
+     `https://gobackend-9nd8.onrender.com/health`, every 5 minutes). Render's
+     free hours cover one server awake all month;
+   - or a paid Render plan, which never sleeps. Then delete `keepalive.yml`
+     and the monitor.
 
 ### C. Google and Apple accounts
 
-9. **Google Cloud** (the same project as Firebase) → APIs & Services:
-   - the OAuth consent screen: app name Flex, the support email, the logo;
-   - three OAuth client ids: **Web** (goes to `GOOGLE_SERVER_CLIENT_ID` in
-     the build and `GOOGLE_CLIENT_IDS` on Render), **Android** (the new app
-     id, and the SHA-1 of the release key from item 2, plus Google Play's
-     app-signing key SHA-1 once Play signs the app), and **iOS** (the new
-     iPhone id; goes to `GOOGLE_IOS_CLIENT_ID` and `GOOGLE_CLIENT_IDS`).
-   - Put the iOS client id, reversed (`com.googleusercontent.apps.<the
-     part before .apps.googleusercontent.com>`), in
-     `GOOGLE_REVERSED_CLIENT_ID` in `ios/Flutter/Release.xcconfig` and
-     `Debug.xcconfig`.
-10. **Apple Developer** (needs the paid account):
+10. **Google Cloud** (the same project as Firebase) → APIs & Services:
+    - the OAuth consent screen: app name Flex, the support email, the logo;
+    - three OAuth client ids: **Web** (goes to `GOOGLE_SERVER_CLIENT_ID` in
+      the build and `GOOGLE_CLIENT_IDS` on Render), **Android** (the new app
+      id, and the SHA-1 of the release key from item 2, plus Google Play's
+      app-signing key SHA-1 once Play signs the app), and **iOS** (the new
+      iPhone id; goes to `GOOGLE_IOS_CLIENT_ID` and `GOOGLE_CLIENT_IDS`).
+    - Put the iOS client id, reversed (`com.googleusercontent.apps.<the
+      part before .apps.googleusercontent.com>`), in
+      `GOOGLE_REVERSED_CLIENT_ID` in `ios/Flutter/Release.xcconfig` and
+      `Debug.xcconfig`.
+11. **Apple Developer** (needs the paid account):
     - turn on "Sign in with Apple" for the iPhone app id. The app already
       asks for it (`ios/Runner/Runner.entitlements`), so an iPhone build
       will not sign until this is on;
@@ -171,14 +183,14 @@ the day it is added.
       `APPLE_SERVICE_ID` in the build and `APPLE_CLIENT_IDS` on Render.
     - The App Store requires Sign in with Apple on iPhone when Google
       sign-in is offered, so iPhone builds with Google need Apple too.
-11. **iPhone push notifications.** In Xcode, Signing & Capabilities: add
+12. **iPhone push notifications.** In Xcode, Signing & Capabilities: add
     Push Notifications (the app has no permission for them yet), and upload
     an APNs key to Firebase (Project settings → Cloud Messaging). Without
     both, iPhones get no notifications.
 
 ### D. Build settings
 
-12. **Build with the real settings.** The release build needs these passed
+13. **Build with the real settings.** The release build needs these passed
     as `--dart-define`s:
     - `FIREBASE_API_KEY`, `FIREBASE_APP_ID`, `FIREBASE_IOS_APP_ID`,
       `FIREBASE_PROJECT_ID`, `FIREBASE_SENDER_ID` (or push notifications are
@@ -189,23 +201,23 @@ the day it is added.
     - `APPLE_SIGN_IN=true` on iPhone, and `APPLE_SERVICE_ID` on Android (or
       no Apple button).
     `API_BASE_URL` and `WS_BASE_URL` default to the Render server.
-13. **Optional, once there is a website:** build with
+14. **Optional, once there is a website:** build with
     `--dart-define=SHARE_BASE_URL=https://<the site>` so shared links and QR
     codes use it instead of the Render address.
 
 ### E. Emails and pages the stores ask for
 
-14. **Help and privacy emails.** The Help Center, the Terms, the Privacy
+15. **Help and privacy emails.** The Help Center, the Terms, the Privacy
     Policy, the two-step code screen and "Forgot password?" (when email
     can't be sent) give support@devf.app and privacy@devf.app. They live in
     one place each: `supportEmail` and `privacyEmail` in
     `lib/config/constants.dart`, and `supportEmail` in the server's
     `mailer.go`. Make sure that domain is owned and those inboxes work, or
     change the addresses in both.
-15. **The privacy policy at a web address.** Both stores ask for a link to
+16. **The privacy policy at a web address.** Both stores ask for a link to
     it, and the policy is only inside the app today. Publish it on a website,
     or ask for it to be served by the server.
-16. **A web address for deleting an account.** Google Play asks for a page
+17. **A web address for deleting an account.** Google Play asks for a page
     where people can ask to delete their account without the app. The app
     can delete accounts already; the page does not exist yet. Ask for one,
     or give the support email with the steps.

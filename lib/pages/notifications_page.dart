@@ -204,7 +204,7 @@ class _Heading extends StatelessWidget {
     case 'follow':
       return (
         icon: Icons.person_add_alt_1_rounded,
-        color: const Color(0xFF0A84FF),
+        color: AppTheme.primary,
       );
     case 'friend_challenge':
       return (icon: Icons.bolt_rounded, color: const Color(0xFFFF375F));
@@ -236,7 +236,7 @@ class _Heading extends StatelessWidget {
       return (icon: Icons.chat_bubble_rounded, color: const Color(0xFF30D158));
     // Somebody named you with an @ in a comment.
     case 'mention':
-      return (icon: Icons.alternate_email_rounded, color: const Color(0xFF0A84FF));
+      return (icon: Icons.alternate_email_rounded, color: AppTheme.primary);
     default:
       return (
         icon: Icons.notifications_rounded,

@@ -3,44 +3,36 @@ import 'package:flutter/material.dart';
 import 'package:myapp/config/app_theme.dart';
 
 /// The pieces every settings page is built from, so they all look the same:
-/// rounded groups on the page, each row with its icon on a small blue
-/// tile like the app's own icon.
+/// rounded groups on the page, each row with its icon on a small
+/// violet-blue tile like the app's own icon.
 ///
-/// In dark mode the groups are deep-blue glass over the blue glow behind
-/// every page (PageBackdrop). In light mode they are white cards on a soft
-/// blue-grey.
+/// The groups sit over the violet-blue glow behind every page
+/// (PageBackdrop): deep violet-blue glass in dark mode, white cards in
+/// light mode.
 
-/// The page background behind the groups: clear in dark mode, so the glow
-/// shows; a soft blue-grey in light mode.
-Color settingsBackground(BuildContext context) =>
-    Theme.of(context).brightness == Brightness.dark
-        ? Colors.transparent
-        : const Color(0xFFF2F4F8);
+/// The page background behind the groups: clear, so the glow shows.
+Color settingsBackground(BuildContext context) => Colors.transparent;
 
-/// The top bar's colour on a settings page: the theme's in dark mode (clear
-/// over the glow, deep blue once the page scrolls under it), the page's
-/// blue-grey in light mode.
-Color? settingsBarColor(BuildContext context) =>
-    Theme.of(context).brightness == Brightness.dark
-        ? null
-        : settingsBackground(context);
+/// The top bar's colour on a settings page: the theme's (clear over the
+/// glow, solid once the page scrolls under it).
+Color? settingsBarColor(BuildContext context) => null;
 
 /// The look of a settings card, light or dark: its fill, its edge and its
 /// shadow. Shared, so a page's own cards match the groups.
 BoxDecoration settingsCard(BuildContext context, {double radius = 18}) {
   final dark = Theme.of(context).brightness == Brightness.dark;
   return BoxDecoration(
-    color: dark ? const Color(0xB80B1A2E) : Colors.white,
+    color: dark ? const Color(0xB8101030) : Colors.white,
     borderRadius: BorderRadius.circular(radius),
     border: Border.all(
-      color: dark ? const Color(0x2664D2FF) : const Color(0xFFE5EAF2),
+      color: dark ? const Color(0x269C9DFC) : const Color(0xFFE4E4F4),
       width: 0.8,
     ),
     boxShadow: dark
         ? null
         : const [
             BoxShadow(
-              color: Color(0x0F0A84FF),
+              color: Color(0x146064F0),
               blurRadius: 18,
               offset: Offset(0, 6),
             ),
@@ -48,10 +40,10 @@ BoxDecoration settingsCard(BuildContext context, {double radius = 18}) {
   );
 }
 
-/// The muted colour for headings and notes: a blue-grey in dark mode.
+/// The muted colour for headings and notes: a violet-grey in dark mode.
 Color settingsMuted(BuildContext context) =>
     Theme.of(context).brightness == Brightness.dark
-        ? const Color(0xFF8DA2BD)
+        ? const Color(0xFF8E8EBE)
         : AppTheme.textMutedLight;
 
 /// A rounded group of rows, with an optional heading above and a note below.
