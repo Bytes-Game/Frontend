@@ -718,6 +718,7 @@ class ApiService {
   /// POST /password/forgot — "Forgot password?". A 6-digit code goes to the
   /// email on the account that [login] (a username or an email) names.
   static Future<ResetCodeAsk> askResetCode(String login) async {
+    final took = Stopwatch()..start();
     try {
       final res = await _authHttp.post(
         Uri.parse('$_base/password/forgot'),
@@ -759,6 +760,12 @@ class ApiService {
                   'try again.');
         case 503:
           if (body['unavailable'] == true) {
+            // Why, in the log, and how long it took. On 7 November the only
+            // clue that the server could not reach its email service was an
+            // answer eleven seconds late, worked out from screen taps.
+            debugPrint('[forgot] no code was sent: '
+                '${_whyNoCode(body['reason'])} (the server answered in '
+                '${took.elapsedMilliseconds} ms)');
             return ResetCodeAsk(ResetCodeAnswer.unavailable,
                 message: said.isEmpty
                     ? "Resetting a password by email isn't working right "
@@ -782,6 +789,14 @@ class ApiService {
       return const ResetCodeAsk(ResetCodeAnswer.unreachable);
     }
   }
+
+  /// What the server's reason for not sending a reset code means.
+  static String _whyNoCode(Object? reason) => switch (reason) {
+        'notSetUp' => 'email is not set up on the server',
+        'notSent' =>
+          'the server tried to email it, and the email service did not take it',
+        _ => 'the server says email is not working',
+      };
 
   /// POST /password/reset — the code from the email, and a new password.
   /// Changing it signs out every sign-in. It signs nobody in itself: the app

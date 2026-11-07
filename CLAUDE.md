@@ -132,13 +132,24 @@ the day it is added.
 
 ### B. Settings on Render (the server)
 
-5. **Email, for "Forgot password?".** Set `SMTP_HOST`, `SMTP_PORT`,
-   `SMTP_USERNAME`, `SMTP_PASSWORD` and `MAIL_FROM` (any email service:
-   Brevo, Resend, a Gmail app password). Without them no reset code is ever
-   sent, and the app tells people to email support instead. Send from your
-   own address, for example `MAIL_FROM=Flexete <no-reply@flexete.com>`: the
-   email service then gives you a few DNS records to add in Cloudflare
-   (flexete.com → DNS → Records). Without those, the codes land in spam.
+5. **Email, for "Forgot password?".** Render's free plan blocks the ports
+   ordinary email goes out on (25, 465 and 587), so on it Gmail and every
+   other SMTP service simply never answer. A phone log on 7 November
+   showed exactly that: Gmail set up right, and the reset code failing
+   after ten seconds. So:
+   - **on the free plan, Resend** (resend.com, free for 100 emails a day).
+     It works over the web, which the free plan allows. Add flexete.com
+     under Domains, put the records it shows in Cloudflare (flexete.com →
+     DNS → Records), and make an API key. On Render set `RESEND_API_KEY`
+     and `MAIL_FROM=Flexete <no-reply@flexete.com>`. Resend's records go
+     beside the Email Routing ones from item 15; leave those as they are.
+   - **or, on a paid Render plan, any SMTP service:** `SMTP_HOST`,
+     `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` and `MAIL_FROM` (a Gmail
+     app password works).
+   When both are set, Resend is used. Without either, no reset code is
+   ever sent, and the app tells people to email support instead. At every
+   start the server says how email is set up and whether it can get out:
+   Render → the service → Logs, the line starting `email:`.
 6. **Google and Apple sign-in, the server's half.**
    - `GOOGLE_CLIENT_IDS`: the Web and iOS OAuth client ids from item 10,
      separated by a comma.

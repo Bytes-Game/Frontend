@@ -454,6 +454,32 @@ void main() {
           PasswordResetAnswer.tooMany);
     });
 
+    test('why no code was sent is in the log, with how long the server took',
+        () async {
+      final said = <String>[];
+      final realPrint = debugPrint;
+      debugPrint = (String? m, {int? wrapWidth}) => said.add(m ?? '');
+      addTearDown(() => debugPrint = realPrint);
+
+      for (final reason in ['notSent', 'notSetUp', null]) {
+        forgotAnswer = jsonAnswer({
+          'error': 'Email support.',
+          'unavailable': true,
+          'reason': ?reason,
+        }, 503);
+        expect((await ApiService.askResetCode('maya')).answer,
+            ResetCodeAnswer.unavailable);
+      }
+      final lines = said.where((l) => l.startsWith('[forgot]')).toList();
+      expect(lines, hasLength(3), reason: said.join('\n'));
+      expect(lines[0], contains('the server tried to email it'));
+      expect(lines[1], contains('email is not set up on the server'));
+      expect(lines[2], contains('the server says email is not working'));
+      for (final line in lines) {
+        expect(line, matches(RegExp(r'\(the server answered in \d+ ms\)$')));
+      }
+    });
+
     test('no connection is "unreachable", never "wrong"', () async {
       offline = true;
       expect((await ApiService.askResetCode('maya')).answer,
