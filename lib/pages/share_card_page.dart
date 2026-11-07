@@ -12,7 +12,7 @@ import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/services/device_gallery.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/widgets/arena_ui.dart';
-import 'package:myapp/widgets/flex_logo.dart';
+import 'package:myapp/widgets/flexete_logo.dart';
 import 'package:myapp/widgets/page_backdrop.dart';
 
 /// Sharing a profile or a video: a QR code to scan and the link to send.
@@ -332,7 +332,7 @@ class _Card extends StatelessWidget {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const FlexLogo(size: 18, glow: false),
+              const FlexeteLogo(size: 18, glow: false),
               const SizedBox(width: 6),
               const Text(
                 AppConstants.appName,

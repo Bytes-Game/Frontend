@@ -225,7 +225,7 @@ void main() {
       await t.pageBack();
       await settle(t);
       expect(find.byKey(const ValueKey('settings_version')), findsOneWidget);
-      expect(find.text('Flex ${AppConstants.appVersion}'), findsOneWidget);
+      expect(find.text('Flexete ${AppConstants.appVersion}'), findsOneWidget);
     });
   });
 
@@ -285,8 +285,8 @@ void main() {
   testWidgets('About shows the logo, the name and the version, and leads on',
       (t) async {
     await open(t, const AboutPage());
-    expect(find.byKey(const ValueKey('flex_logo')), findsOneWidget);
-    expect(find.text('Flex'), findsOneWidget);
+    expect(find.byKey(const ValueKey('flexete_logo')), findsOneWidget);
+    expect(find.text('Flexete'), findsOneWidget);
     expect(find.text('Version ${AppConstants.appVersion}'), findsOneWidget);
     await tapKey(t, 'about_contact');
     expect(copied, AppConstants.supportEmail);

@@ -1,4 +1,4 @@
-// Makes every app icon from the logo's one drawing (lib/widgets/flex_logo.dart).
+// Makes every app icon from the logo's one drawing (lib/widgets/flexete_logo.dart).
 //
 // Run it after changing the logo:
 //
@@ -19,9 +19,9 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:myapp/widgets/flex_logo.dart';
+import 'package:myapp/widgets/flexete_logo.dart';
 
-Future<void> _png(String path, int px, FlexLogoPainter painter) async {
+Future<void> _png(String path, int px, FlexeteLogoPainter painter) async {
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder);
   painter.paint(canvas, Size.square(px.toDouble()));
@@ -43,7 +43,7 @@ String _hex(Color c) =>
 
 const _res = 'android/app/src/main/res';
 const _made = '<!-- Made by tool/make_app_icons_test.dart from the logo in\n'
-    '     lib/widgets/flex_logo.dart. Change the logo there and run that;\n'
+    '     lib/widgets/flexete_logo.dart. Change the logo there and run that;\n'
     '     do not edit this by hand. -->';
 
 void main() {
@@ -53,9 +53,9 @@ void main() {
     // The tile's 100 units are that 72; the F is drawn bigger by its
     // presence, about the middle.
     const shown = 72.0, edge = (108 - shown) / 2;
-    const fScale = shown * FlexMark.presence;
+    const fScale = shown * FlexeteMark.presence;
     const fOffset = edge + shown / 2 - fScale / 2;
-    final play = FlexMark.playButton().getBounds();
+    final play = FlexeteMark.playButton().getBounds();
     double at(double u) => fOffset + u * fScale / 100;
 
     _text('$_res/drawable/ic_launcher_background.xml', '''
@@ -75,9 +75,9 @@ $_made
                 android:startY="$edge"
                 android:endX="${edge + shown}"
                 android:endY="${edge + shown}">
-                <item android:offset="0" android:color="${_hex(FlexMark.tileColors[0])}" />
-                <item android:offset="0.48" android:color="${_hex(FlexMark.tileColors[1])}" />
-                <item android:offset="1" android:color="${_hex(FlexMark.tileColors[2])}" />
+                <item android:offset="0" android:color="${_hex(FlexeteMark.tileColors[0])}" />
+                <item android:offset="0.48" android:color="${_hex(FlexeteMark.tileColors[1])}" />
+                <item android:offset="1" android:color="${_hex(FlexeteMark.tileColors[2])}" />
             </gradient>
         </aapt:attr>
     </path>
@@ -107,7 +107,7 @@ $_made
     android:viewportWidth="108"
     android:viewportHeight="108">
     <!-- The play button: white, fading to light blue at its tip. -->
-    <path android:pathData="${FlexMark.pathData(scale: fScale, dx: fOffset, dy: fOffset, frame: false)}">
+    <path android:pathData="${FlexeteMark.pathData(scale: fScale, dx: fOffset, dy: fOffset, frame: false)}">
         <aapt:attr name="android:fillColor">
             <gradient
                 android:type="linear"
@@ -116,14 +116,14 @@ $_made
                 android:endX="${at(play.right).toStringAsFixed(3)}"
                 android:endY="${at(play.center.dy).toStringAsFixed(3)}">
                 <item android:offset="0" android:color="#FFFFFFFF" />
-                <item android:offset="1" android:color="${_hex(FlexMark.playTip)}" />
+                <item android:offset="1" android:color="${_hex(FlexeteMark.playTip)}" />
             </gradient>
         </aapt:attr>
     </path>
     <!-- The stem and top arm of the F. -->
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="${FlexMark.pathData(scale: fScale, dx: fOffset, dy: fOffset, play: false)}" />
+        android:pathData="${FlexeteMark.pathData(scale: fScale, dx: fOffset, dy: fOffset, play: false)}" />
 </vector>
 ''');
 
@@ -138,7 +138,7 @@ $_made
     android:viewportHeight="108">
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="${FlexMark.pathData(scale: fScale, dx: fOffset, dy: fOffset)}" />
+        android:pathData="${FlexeteMark.pathData(scale: fScale, dx: fOffset, dy: fOffset)}" />
 </vector>
 ''');
 
@@ -154,14 +154,14 @@ $_made
 
     // The small mark at the top of every notification: the F alone, 20 of
     // its 24 units tall. Android shows it white, or tinted the app's blue.
-    final bounds = FlexMark.path().getBounds();
+    final bounds = FlexeteMark.path().getBounds();
     final nScale = 20 / bounds.height * 100;
     final nx = 12 - bounds.center.dx * nScale / 100;
     final ny = 12 - bounds.center.dy * nScale / 100;
     _text('$_res/drawable/ic_notification.xml', '''
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The small mark at the top of every notification from the app: the
-     Flex F, with its play button. Android shows it white (or tinted with
+     Flexete F, with its play button. Android shows it white (or tinted with
      the app's blue), so only its shape matters. -->
 $_made
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -171,7 +171,7 @@ $_made
     android:viewportHeight="24">
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="${FlexMark.pathData(scale: nScale, dx: nx, dy: ny)}" />
+        android:pathData="${FlexeteMark.pathData(scale: nScale, dx: nx, dy: ny)}" />
 </vector>
 ''');
 
@@ -185,7 +185,7 @@ $_made
     };
     for (final e in android.entries) {
       await _png('$_res/mipmap-${e.key}/ic_launcher.png', e.value,
-          const FlexLogoPainter(tileRadius: 0.22));
+          const FlexeteLogoPainter(tileRadius: 0.22));
     }
 
     // ── iPhone and iPad: plain squares. iOS rounds the corners itself ───
@@ -209,26 +209,26 @@ $_made
     };
     for (final e in ios.entries) {
       await _png('$iosDir/${e.key}', e.value,
-          const FlexLogoPainter(tileRadius: 0));
+          const FlexeteLogoPainter(tileRadius: 0));
     }
 
     // ── The web ──────────────────────────────────────────────────────────
     // Rounded for browsers. "Maskable" ones are cropped by the phone to its
     // own shape, so the F is smaller inside a full square.
-    await _png('web/icons/Icon-192.png', 192, const FlexLogoPainter());
-    await _png('web/icons/Icon-512.png', 512, const FlexLogoPainter());
+    await _png('web/icons/Icon-192.png', 192, const FlexeteLogoPainter());
+    await _png('web/icons/Icon-512.png', 512, const FlexeteLogoPainter());
     await _png('web/icons/Icon-maskable-192.png', 192,
-        const FlexLogoPainter(tileRadius: 0, markScale: 0.8));
+        const FlexeteLogoPainter(tileRadius: 0, markScale: 0.8));
     await _png('web/icons/Icon-maskable-512.png', 512,
-        const FlexLogoPainter(tileRadius: 0, markScale: 0.8));
-    await _png('web/favicon.png', 32, const FlexLogoPainter(shadow: false));
+        const FlexeteLogoPainter(tileRadius: 0, markScale: 0.8));
+    await _png('web/favicon.png', 32, const FlexeteLogoPainter(shadow: false));
 
     // ── Mac ──────────────────────────────────────────────────────────────
     for (final px in [16, 32, 64, 128, 256, 512, 1024]) {
       await _png(
           'macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_$px.png',
           px,
-          FlexLogoPainter(shadow: px >= 64));
+          FlexeteLogoPainter(shadow: px >= 64));
     }
 
     // ── Windows: the sizes its .ico holds ────────────────────────────────
@@ -236,7 +236,7 @@ $_made
     final winPngs = <String>[];
     for (final px in winSizes) {
       final path = 'build/icons/win_$px.png';
-      await _png(path, px, FlexLogoPainter(shadow: px >= 64));
+      await _png(path, px, FlexeteLogoPainter(shadow: px >= 64));
       winPngs.add(path);
     }
 
@@ -246,7 +246,7 @@ $_made
         [
           '$iosDir/$name',
           '-background',
-          _hex(FlexMark.tileColors[1]).replaceFirst('#FF', '#'),
+          _hex(FlexeteMark.tileColors[1]).replaceFirst('#FF', '#'),
           '-alpha',
           'remove',
           '-alpha',

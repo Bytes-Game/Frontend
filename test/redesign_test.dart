@@ -815,7 +815,7 @@ void main() {
       expect(deco.color, kAccent);
       expect(deco.gradient, isNull, reason: 'no rainbow gradients');
       expect(deco.boxShadow, isNull, reason: 'no glow');
-      expect(kAccent, AppTheme.primary, reason: "Flex's blue");
+      expect(kAccent, AppTheme.primary, reason: "Flexete's blue");
     });
 
     testWidgets('an empty notifications page says what will appear', (t) async {

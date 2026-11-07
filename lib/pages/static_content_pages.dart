@@ -8,7 +8,7 @@ import 'package:myapp/pages/legal_texts.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/page_tracker.dart';
-import 'package:myapp/widgets/flex_logo.dart';
+import 'package:myapp/widgets/flexete_logo.dart';
 import 'package:myapp/widgets/settings_kit.dart';
 
 /// Support and about: the Help Center, Terms and policies (with the Terms
@@ -34,13 +34,13 @@ void _push(BuildContext context, Widget page) =>
 
 /// The open-source licences of everything the app is built from, on
 /// Flutter's own licence page.
-void showFlexLicences(BuildContext context) => showLicensePage(
+void showFlexeteLicences(BuildContext context) => showLicensePage(
       context: context,
       applicationName: AppConstants.appName,
       applicationVersion: AppConstants.appVersion,
       applicationIcon: const Padding(
         padding: EdgeInsets.all(12),
-        child: FlexLogo(size: 56, glow: false),
+        child: FlexeteLogo(size: 56, glow: false),
       ),
     );
 
@@ -517,7 +517,7 @@ class _TermsAndPoliciesPageState extends State<TermsAndPoliciesPage>
                 color: AppTheme.primary,
                 title: 'Open-source licences',
                 subtitle: 'The software ${AppConstants.appName} is built with',
-                onTap: () => showFlexLicences(context),
+                onTap: () => showFlexeteLicences(context),
               ),
             ],
           ),
@@ -924,7 +924,7 @@ class _HelpSearch extends StatelessWidget {
           gradient: const LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: FlexMark.tileColors,
+            colors: FlexeteMark.tileColors,
             stops: [0, 0.5, 1],
           ),
           boxShadow: [
@@ -1319,7 +1319,7 @@ class _AboutPageState extends State<AboutPage> with PageTracker<AboutPage> {
         padding: const EdgeInsets.only(bottom: 40),
         children: [
           const SizedBox(height: 18),
-          const Center(child: FlexLogo(size: 96)),
+          const Center(child: FlexeteLogo(size: 96)),
           const SizedBox(height: 18),
           const Text(
             AppConstants.appName,
@@ -1387,7 +1387,7 @@ class _AboutPageState extends State<AboutPage> with PageTracker<AboutPage> {
                 icon: Icons.code_rounded,
                 color: AppTheme.primary,
                 title: 'Open-source licences',
-                onTap: () => showFlexLicences(context),
+                onTap: () => showFlexeteLicences(context),
               ),
               SettingsTile(
                 key: const ValueKey('about_contact'),
