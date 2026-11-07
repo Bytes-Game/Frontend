@@ -20,7 +20,7 @@ import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/save_to_phone.dart';
 import 'package:myapp/widgets/arena_ui.dart';
-import 'package:myapp/widgets/flex_logo.dart';
+import 'package:myapp/widgets/flexete_logo.dart';
 import 'package:myapp/widgets/settings_kit.dart';
 
 /// Settings and privacy, as a page of its own.
@@ -418,7 +418,7 @@ class _AccountCard extends StatelessWidget {
           gradient: const LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: FlexMark.tileColors,
+            colors: FlexeteMark.tileColors,
             stops: [0, 0.5, 1],
           ),
           boxShadow: [
@@ -529,7 +529,7 @@ class _VersionFoot extends StatelessWidget {
     final muted = settingsMuted(context);
     return Column(
       children: [
-        const FlexLogo(size: 30, glow: false),
+        const FlexeteLogo(size: 30, glow: false),
         const SizedBox(height: 8),
         Text(
           '${AppConstants.appName} ${AppConstants.appVersion}',

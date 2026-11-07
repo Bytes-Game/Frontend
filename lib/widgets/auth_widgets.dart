@@ -4,7 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/config/constants.dart';
 import 'package:myapp/config/dates.dart';
-import 'package:myapp/widgets/flex_logo.dart';
+import 'package:myapp/widgets/flexete_logo.dart';
 import 'package:myapp/pages/static_content_pages.dart';
 import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/services/api_service.dart';
@@ -59,7 +59,7 @@ class AuthBrand extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Column(
       children: [
-        const FlexLogo(size: 76),
+        const FlexeteLogo(size: 76),
         const SizedBox(height: 20),
         Text(
           AppConstants.appName,

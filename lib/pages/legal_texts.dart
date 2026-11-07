@@ -1,6 +1,6 @@
 import 'package:myapp/config/constants.dart';
 
-/// The words of Flex's Terms of Service, Privacy Policy and Community
+/// The words of Flexete's Terms of Service, Privacy Policy and Community
 /// Guidelines, kept apart from the pages that show them (legal_pages.dart).
 ///
 /// They say what the app and the server really do. When either changes how

@@ -78,7 +78,7 @@ class AppConstants {
   static const int defaultPageSize = 20;
 
   /// The app's name, wherever the app says it.
-  static const String appName = 'Flex';
+  static const String appName = 'Flexete';
 
   /// The version people see (About, the foot of Settings). The same as
   /// `version:` in pubspec.yaml, before the "+": a test holds the two
@@ -88,10 +88,10 @@ class AppConstants {
   /// Where people write for help. The server gives the same address
   /// (supportEmail in its mailer.go). One place each, so it changes in one
   /// place each.
-  static const String supportEmail = 'support@devf.app';
+  static const String supportEmail = 'support@flexete.com';
 
   /// Where people write about their personal data.
-  static const String privacyEmail = 'privacy@devf.app';
+  static const String privacyEmail = 'privacy@flexete.com';
 
   // —— Signing in with Google or Apple ——————————————————————————————————
   //

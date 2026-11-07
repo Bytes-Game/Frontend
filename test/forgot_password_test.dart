@@ -244,7 +244,7 @@ void main() {
         {
           'field': 'login',
           'error': "This account has no email address, so we can't send it a "
-              'code. Email support@devf.app from your email address and tell '
+              'code. Email support@flexete.com from your email address and tell '
               'us your username.',
           'noEmail': true,
         },
@@ -260,7 +260,7 @@ void main() {
     forgotAnswer = jsonAnswer(
         {
           'error': "Resetting a password by email isn't working right now. "
-              "Email support@devf.app and we'll help you get back in.",
+              "Email support@flexete.com and we'll help you get back in.",
           'unavailable': true,
         },
         503);

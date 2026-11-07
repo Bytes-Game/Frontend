@@ -2,8 +2,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:myapp/config/app_theme.dart';
+import 'package:myapp/config/constants.dart';
 
-/// The Flex logo: a bold white F whose middle arm is a play button, on the
+/// The Flexete logo: a bold white F whose middle arm is a play button, on the
 /// app's blue.
 ///
 /// The F is the name. The play button is what the app is: videos. It points
@@ -16,8 +17,8 @@ import 'package:myapp/config/app_theme.dart';
 /// every icon follows.
 ///
 /// Everything is measured on a 100 × 100 tile, then scaled.
-class FlexMark {
-  FlexMark._();
+class FlexeteMark {
+  FlexeteMark._();
 
   /// The F's left edge, and its top.
   static const left = 32.0;
@@ -104,23 +105,23 @@ abstract class _Pen {
   void close();
 
   void _frame() {
-    const left = FlexMark.left, top = FlexMark.top, bend = FlexMark.bend;
-    const r = FlexMark.stroke / 2;
-    const right = left + FlexMark.stroke;
-    const under = top + FlexMark.stroke;
-    const inner = FlexMark.innerBend;
+    const left = FlexeteMark.left, top = FlexeteMark.top, bend = FlexeteMark.bend;
+    const r = FlexeteMark.stroke / 2;
+    const right = left + FlexeteMark.stroke;
+    const under = top + FlexeteMark.stroke;
+    const inner = FlexeteMark.innerBend;
     // Each round tip is two quarter turns, not one half turn: written out
     // as text, a half turn's centre moves a long way for a tiny rounding of
     // its numbers, and the tip comes out flat.
     moveTo(left + bend, top);
-    lineTo(FlexMark.armEnd - r, top);
-    arcTo(FlexMark.armEnd, top + r, r);
-    arcTo(FlexMark.armEnd - r, under, r);
+    lineTo(FlexeteMark.armEnd - r, top);
+    arcTo(FlexeteMark.armEnd, top + r, r);
+    arcTo(FlexeteMark.armEnd - r, under, r);
     lineTo(right + inner, under);
     arcTo(right, under + inner, inner, clockwise: false);
-    lineTo(right, FlexMark.foot - r);
-    arcTo(left + r, FlexMark.foot, r);
-    arcTo(left, FlexMark.foot - r, r);
+    lineTo(right, FlexeteMark.foot - r);
+    arcTo(left + r, FlexeteMark.foot, r);
+    arcTo(left, FlexeteMark.foot - r, r);
     lineTo(left, top + bend);
     arcTo(left + bend, top, bend);
     close();
@@ -128,8 +129,8 @@ abstract class _Pen {
 
   /// The play button: a triangle with each corner rounded.
   void _play() {
-    const points = FlexMark.play;
-    const radius = FlexMark.playRadius;
+    const points = FlexeteMark.play;
+    const radius = FlexeteMark.playRadius;
     final n = points.length;
     for (var i = 0; i < n; i++) {
       final prev = points[(i - 1 + n) % n];
@@ -207,8 +208,8 @@ class _TextPen extends _Pen {
 /// Paints the logo. With [tile], the blue rounded square behind the F; without
 /// it, the F alone (for a notification, or an icon layer the phone puts on
 /// its own background).
-class FlexLogoPainter extends CustomPainter {
-  const FlexLogoPainter({
+class FlexeteLogoPainter extends CustomPainter {
+  const FlexeteLogoPainter({
     this.tile = true,
     this.tileRadius = 0.235,
     this.markColor = Colors.white,
@@ -256,7 +257,7 @@ class FlexLogoPainter extends CustomPainter {
           ..shader = const LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: FlexMark.tileColors,
+            colors: FlexeteMark.tileColors,
             stops: [0, 0.48, 1],
           ).createShader(rect),
       );
@@ -278,32 +279,32 @@ class FlexLogoPainter extends CustomPainter {
 
     // The F, scaled about the tile's middle.
     canvas.translate(side / 2, side / 2);
-    canvas.scale(unit * FlexMark.presence * markScale);
+    canvas.scale(unit * FlexeteMark.presence * markScale);
     canvas.translate(-50, -50);
     if (shadow) {
       canvas.drawPath(
-        FlexMark.path().shift(const Offset(0, 1.6)),
+        FlexeteMark.path().shift(const Offset(0, 1.6)),
         Paint()
-          ..color = FlexMark.shadow.withValues(alpha: 0.45)
+          ..color = FlexeteMark.shadow.withValues(alpha: 0.45)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.2),
       );
     }
-    final play = FlexMark.playButton();
+    final play = FlexeteMark.playButton();
     canvas.drawPath(
       play,
       Paint()
         ..shader = tinted
-            ? LinearGradient(colors: [markColor, FlexMark.playTip])
+            ? LinearGradient(colors: [markColor, FlexeteMark.playTip])
                 .createShader(play.getBounds())
             : null
         ..color = markColor,
     );
-    canvas.drawPath(FlexMark.frame(), Paint()..color = markColor);
+    canvas.drawPath(FlexeteMark.frame(), Paint()..color = markColor);
     canvas.restore();
   }
 
   @override
-  bool shouldRepaint(FlexLogoPainter old) =>
+  bool shouldRepaint(FlexeteLogoPainter old) =>
       old.tile != tile ||
       old.tileRadius != tileRadius ||
       old.markColor != markColor ||
@@ -313,8 +314,8 @@ class FlexLogoPainter extends CustomPainter {
 }
 
 /// The logo, [size] across, with a soft blue glow under it.
-class FlexLogo extends StatelessWidget {
-  const FlexLogo({super.key, this.size = 76, this.glow = true});
+class FlexeteLogo extends StatelessWidget {
+  const FlexeteLogo({super.key, this.size = 76, this.glow = true});
 
   final double size;
   final bool glow;
@@ -322,7 +323,7 @@ class FlexLogo extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Semantics(
-      label: 'Flex',
+      label: AppConstants.appName,
       image: true,
       child: Container(
         width: size,
@@ -340,9 +341,9 @@ class FlexLogo extends StatelessWidget {
               )
             : null,
         child: CustomPaint(
-          key: const ValueKey('flex_logo'),
+          key: const ValueKey('flexete_logo'),
           size: Size.square(size),
-          painter: const FlexLogoPainter(),
+          painter: const FlexeteLogoPainter(),
         ),
       ),
     );

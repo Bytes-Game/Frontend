@@ -5,7 +5,7 @@ import 'package:myapp/widgets/page_backdrop.dart';
 /// Single source of truth for the app's design system.
 ///
 /// Aesthetic: calm and professional. Black and white, greys for anything
-/// secondary, and one colour — Flex's blue — for the thing on a
+/// secondary, and one colour — Flexete's blue — for the thing on a
 /// screen you are meant to press, the same in light and dark. Behind every
 /// page (but the videos) a soft glow of the same blue: deep in dark
 /// mode, pale in light (PageBackdrop). Red, green and orange appear only
@@ -21,7 +21,7 @@ class AppTheme {
   // CORE PALETTE
   // ═══════════════════════════════════════════════════════════════════════
 
-  /// The one accent: Flex's blue, in light and dark alike. Buttons,
+  /// The one accent: Flexete's blue, in light and dark alike. Buttons,
   /// links, selection, your own chat bubbles.
   ///
   /// Picked to read as well on black as on white, and under white letters:

@@ -28,7 +28,7 @@ import 'package:myapp/screens/login_screen.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/session_store.dart';
-import 'package:myapp/widgets/flex_logo.dart';
+import 'package:myapp/widgets/flexete_logo.dart';
 
 /// What the stand-in server answers /login with: an account whose
 /// settings are [settings].
@@ -364,7 +364,7 @@ void main() {
       final manifest = json.decode(File('web/manifest.json').readAsStringSync())
           as Map<String, dynamic>;
       expect(manifest['theme_color'], want);
-      expect(FlexMark.tileColors[1], AppTheme.primary,
+      expect(FlexeteMark.tileColors[1], AppTheme.primary,
           reason: "the icon's middle colour is the app's");
     });
 

@@ -1,5 +1,5 @@
-// The app is called Flex, and its icons are the Flex logo, made from the
-// logo's one drawing (lib/widgets/flex_logo.dart).
+// The app is called Flexete, and its icons are the Flexete logo, made from the
+// logo's one drawing (lib/widgets/flexete_logo.dart).
 //
 // The icons themselves are checked, not the code that makes them: the files
 // a phone actually shows are read back and compared with the logo. A logo
@@ -22,12 +22,12 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/providers/theme_provider.dart';
 import 'package:myapp/screens/login_screen.dart';
 import 'package:myapp/services/event_tracker.dart';
-import 'package:myapp/widgets/flex_logo.dart';
+import 'package:myapp/widgets/flexete_logo.dart';
 
 const res = 'android/app/src/main/res';
 
 /// Reads back the path text the logo writes for Android's vector files
-/// (FlexMark.pathData: M, L, A and Z only).
+/// (FlexeteMark.pathData: M, L, A and Z only).
 Path readPathData(String d) {
   final path = Path();
   for (final m in RegExp(r'([MLAZ])([^MLAZ]*)').allMatches(d)) {
@@ -81,7 +81,7 @@ Path shapeIn(String file) {
 
 /// The logo's F, placed the way an icon of [scale] units per tile, starting
 /// at [offset], places it.
-Path logoAt(double scale, double offset) => FlexMark.path().transform(
+Path logoAt(double scale, double offset) => FlexeteMark.path().transform(
     (Matrix4.identity()
           ..translateByDouble(offset, offset, 0, 1)
           ..scaleByDouble(scale / 100, scale / 100, 1, 1))
@@ -109,7 +109,7 @@ Future<(int, int, Color Function(double, double))> pixels(String file) async {
 /// Where a point of the 100-unit tile lands on an icon, as a share of its
 /// side, with the F drawn at its presence about the middle.
 double onIcon(double u, {double markScale = 1}) =>
-    (50 + (u - 50) * FlexMark.presence * markScale) / 100;
+    (50 + (u - 50) * FlexeteMark.presence * markScale) / 100;
 
 bool isWhite(Color c) => c.r > 0.94 && c.g > 0.94 && c.b > 0.94;
 /// The app's own blue (AppTheme.primary, the middle of the tile), give or
@@ -130,24 +130,29 @@ String argb(Color c) =>
 int pngColourType(String file) => File(file).readAsBytesSync()[25];
 
 void main() {
-  group('the name is Flex', () {
+  group('the name is Flexete', () {
     test('under the icon on Android and iPhone, and on the web', () {
       expect(File('android/app/src/main/AndroidManifest.xml').readAsStringSync(),
-          contains('android:label="Flex"'));
+          contains('android:label="Flexete"'));
       final plist = File('ios/Runner/Info.plist').readAsStringSync();
       expect(
-          RegExp(r'<key>CFBundleDisplayName</key>\s*<string>Flex</string>')
+          RegExp(r'<key>CFBundleDisplayName</key>\s*<string>Flexete</string>')
               .hasMatch(plist),
           isTrue);
-      expect(RegExp(r'<key>CFBundleName</key>\s*<string>Flex</string>')
+      expect(RegExp(r'<key>CFBundleName</key>\s*<string>Flexete</string>')
           .hasMatch(plist), isTrue);
       final web = json.decode(File('web/manifest.json').readAsStringSync())
           as Map<String, dynamic>;
-      expect(web['name'], 'Flex');
-      expect(web['short_name'], 'Flex');
+      expect(web['name'], 'Flexete');
+      expect(web['short_name'], 'Flexete');
       expect(File('web/index.html').readAsStringSync(),
-          contains('<title>Flex</title>'));
-      expect(AppConstants.appName, 'Flex');
+          contains('<title>Flexete</title>'));
+      expect(AppConstants.appName, 'Flexete');
+    });
+
+    test('the help and privacy addresses are on the app\'s own domain', () {
+      expect(AppConstants.supportEmail, 'support@flexete.com');
+      expect(AppConstants.privacyEmail, 'privacy@flexete.com');
     });
 
     test('no screen says the old names', () {
@@ -161,16 +166,19 @@ void main() {
           final line = lines[i].trim();
           if (line.startsWith('//')) continue;
           // Internal names a person never sees stay: file names (devf_…),
-          // channels to the phone's own code (devf/…), links into the app
-          // (devf://…), and the support addresses at devf.app.
+          // channels to the phone's own code (devf/…) and links into the
+          // app (devf://…).
           final visible = line
               .replaceAll(RegExp(r'devf_\w*'), '')
               .replaceAll(RegExp(r'devf/\w+'), '')
               .replaceAll(RegExp(r'devf://'), '')
-              .replaceAll(RegExp(r'@devf\.app'), '')
               .replaceAll('media.devf.com', '');
           if (RegExp(r'\bdevf\b|Battle Arena|BattleArena', caseSensitive: false)
-              .hasMatch(visible)) {
+                  .hasMatch(visible) ||
+              // The name before Flexete, as a whole word. Flutter's own
+              // Flex widget, a layout tool, would be Flex( and is not a
+              // name; nor are Flexible or flex: (lower case).
+              RegExp(r'\bFlex\b(?!\s*\()').hasMatch(visible)) {
             said.add('${f.path}:${i + 1}: $line');
           }
         }
@@ -179,11 +187,11 @@ void main() {
     });
   });
 
-  group('the icons are the Flex logo', () {
+  group('the icons are the Flexete logo', () {
     test("Android's own icon shape: the F, where the logo puts it", () {
       // The middle 72 of the 108 canvas shows; the tile's 100 units are
       // that 72, and the F is drawn bigger by its presence.
-      const scale = 72 * FlexMark.presence;
+      const scale = 72 * FlexeteMark.presence;
       const offset = 54 - scale / 2;
       final want = logoAt(scale, offset);
 
@@ -214,14 +222,14 @@ void main() {
     });
 
     test('the notification mark is the F too', () {
-      final bounds = FlexMark.path().getBounds();
+      final bounds = FlexeteMark.path().getBounds();
       final scale = 20 / bounds.height * 100;
       final shape = shapeIn('$res/drawable/ic_notification.xml');
       final got = shape.getBounds();
       expect(got.height, closeTo(20, 0.05));
       expect(got.center.dx, closeTo(12, 0.05));
       expect(got.center.dy, closeTo(12, 0.05));
-      final want = FlexMark.path().transform((Matrix4.identity()
+      final want = FlexeteMark.path().transform((Matrix4.identity()
             ..translateByDouble(12 - bounds.center.dx * scale / 100,
                 12 - bounds.center.dy * scale / 100, 0, 1)
             ..scaleByDouble(scale / 100, scale / 100, 1, 1))
@@ -291,7 +299,7 @@ void main() {
       child: const MaterialApp(home: LoginScreen()),
     ));
     await t.pump(const Duration(milliseconds: 300));
-    expect(find.byKey(const ValueKey('flex_logo')), findsOneWidget);
-    expect(find.text('Flex'), findsOneWidget);
+    expect(find.byKey(const ValueKey('flexete_logo')), findsOneWidget);
+    expect(find.text('Flexete'), findsOneWidget);
   });
 }

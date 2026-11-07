@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Made by tool/make_app_icons_test.dart from the logo in
-     lib/widgets/flex_logo.dart. Change the logo there and run that;
+     lib/widgets/flexete_logo.dart. Change the logo there and run that;
      do not edit this by hand. -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@drawable/ic_launcher_background" />

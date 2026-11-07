@@ -220,6 +220,28 @@ Future<void> work(WidgetTester t) async {
   }
 }
 
+/// Lets the app's real file work run, one short real pause at a time,
+/// until [done], then lets the screen settle as [work] does.
+///
+/// Why not a fixed number of pauses: here, real file steps (write the
+/// photo, flush it to disk, measure it, read it back) only move forward
+/// during a pause, one step each. Saving a photo takes nine pauses on a
+/// quiet machine, and [work] gives twelve. On a busy GitHub machine on
+/// 7 November a few steps landed late, the twelve ran out, and the test
+/// looked for the save before it was sent. A save that never happens
+/// still fails, after a hundred pauses.
+Future<void> workUntil(WidgetTester t, bool Function() done) async {
+  for (var i = 0; i < 100 && !done(); i++) {
+    await t.runAsync(() => Future<void>.delayed(
+          const Duration(milliseconds: 30),
+        ));
+    await t.pump(const Duration(milliseconds: 100));
+  }
+  await work(t);
+}
+
+bool photoSaved() => sentTo('PATCH', '/api/v1/users/1').isNotEmpty;
+
 /// Runs out the toasts and the photo book's save, so nothing is left
 /// ticking when the test ends. Saving your profile signs you in again
 /// (DataProvider.setUser), which starts the event uploader's timer.
@@ -597,7 +619,7 @@ void main() {
       // No photo yet: nothing to remove.
       expect(find.byKey(const ValueKey('profile_photo_remove')), findsNothing);
       await t.tap(find.byKey(const ValueKey('profile_photo_gallery')));
-      await work(t);
+      await workUntil(t, photoSaved);
 
       expect(photos.askedCamera, isFalse);
       expect(sentTo('POST', '/api/v1/media/presign'), hasLength(1));
@@ -622,7 +644,7 @@ void main() {
       await t.tap(find.byKey(const ValueKey('edit_photo_avatar')));
       await settle(t);
       await t.tap(find.byKey(const ValueKey('profile_photo_camera')));
-      await work(t);
+      await workUntil(t, photoSaved);
       expect(photos.askedCamera, isTrue);
       expect(dp.user!.avatarUrl, myPhoto);
       await finish(t);
@@ -666,7 +688,9 @@ void main() {
       await t.tap(find.byKey(const ValueKey('edit_photo')));
       await settle(t);
       await t.tap(find.byKey(const ValueKey('profile_photo_gallery')));
-      await work(t);
+      // Until it has asked for somewhere to put the photo, and been told no.
+      await workUntil(
+          t, () => sentTo('POST', '/api/v1/media/presign').isNotEmpty);
       expect(
         find.text("Couldn't upload your photo. Check your connection and "
             'try again.'),
@@ -719,7 +743,7 @@ void main() {
       expect(find.byKey(const ValueKey('profile_photo_gallery')),
           findsOneWidget);
       await t.tap(find.byKey(const ValueKey('profile_photo_gallery')));
-      await work(t);
+      await workUntil(t, photoSaved);
 
       final saved = sentTo('PATCH', '/api/v1/users/1');
       expect(saved, hasLength(1));

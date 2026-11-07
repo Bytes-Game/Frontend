@@ -93,7 +93,7 @@ Future<void> main() async {
         cacheMode: CacheMode.disabled,
         enableQuic: true,
         enableHttp2: true,
-        userAgent: 'Flex/1.0',
+        userAgent: 'Flexete/1.0',
       );
       ApiService.useClient(CronetClient.fromCronetEngine(engine));
     } catch (e) {
