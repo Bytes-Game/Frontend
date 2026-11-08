@@ -21,8 +21,12 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
+  final _passwordFocus = FocusNode();
   bool _isLoading = false;
   String? _error;
+
+  /// Good news to show above the form: "Password changed", after a reset.
+  String? _notice;
   bool _obscure = true;
 
   @override
@@ -40,6 +44,7 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     _usernameCtrl.dispose();
     _passwordCtrl.dispose();
+    _passwordFocus.dispose();
     super.dispose();
   }
 
@@ -54,14 +59,17 @@ class _LoginScreenState extends State<LoginScreen> {
     final user = _usernameCtrl.text.trim();
     final pass = _passwordCtrl.text;
     if (user.isEmpty || pass.isEmpty) {
-      setState(() =>
-          _error = 'Enter your username or email, and your password.');
+      setState(() {
+        _notice = null;
+        _error = 'Enter your username or email, and your password.';
+      });
       return;
     }
     FocusScope.of(context).unfocus();
     setState(() {
       _isLoading = true;
       _error = null;
+      _notice = null;
     });
 
     final auth = Provider.of<AuthProvider>(context, listen: false);
@@ -98,10 +106,14 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   /// "Forgot password?": a code by email, then a new password. Coming back
-  /// with one signs in with it, the ordinary way, so everything signing in
-  /// checks (an account waiting to be deleted, say) is still checked.
+  /// from a reset signs nobody in. It says the password changed, fills in
+  /// the username, and waits for the person to type the new password and
+  /// sign in, the ordinary way.
   Future<void> _forgotPassword() async {
-    setState(() => _error = null);
+    setState(() {
+      _error = null;
+      _notice = null;
+    });
     final done = await Navigator.of(context).push<PasswordResetDone>(
       MaterialPageRoute(
         builder: (_) =>
@@ -110,14 +122,10 @@ class _LoginScreenState extends State<LoginScreen> {
     );
     if (!mounted || done == null) return;
     _usernameCtrl.text = done.username;
-    _passwordCtrl.text = done.password;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        key: ValueKey('password_reset_done'),
-        content: Text('Password changed. Signing you in…'),
-      ),
-    );
-    await _submit();
+    _passwordCtrl.clear();
+    setState(() =>
+        _notice = 'Password changed. Sign in with your new password.');
+    _passwordFocus.requestFocus();
   }
 
   @override
@@ -144,6 +152,10 @@ class _LoginScreenState extends State<LoginScreen> {
                         subtitle: 'Sign in to keep battling.',
                       ),
                       const SizedBox(height: 36),
+                      if (_notice != null) ...[
+                        AuthNoticeBox(message: _notice!),
+                        const SizedBox(height: 18),
+                      ],
                       TextField(
                         key: const ValueKey('login_username'),
                         controller: _usernameCtrl,
@@ -164,6 +176,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       TextField(
                         key: const ValueKey('login_password'),
                         controller: _passwordCtrl,
+                        focusNode: _passwordFocus,
                         enabled: !_isLoading,
                         obscureText: _obscure,
                         autocorrect: false,

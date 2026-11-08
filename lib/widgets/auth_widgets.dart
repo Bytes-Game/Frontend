@@ -197,6 +197,43 @@ class AuthErrorBox extends StatelessWidget {
   }
 }
 
+/// Good news above the form, in a soft green box: "Password changed".
+class AuthNoticeBox extends StatelessWidget {
+  final String message;
+
+  const AuthNoticeBox({super.key, required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const ValueKey('auth_notice'),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppTheme.success.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+        border: Border.all(color: AppTheme.success.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.check_circle_outline_rounded,
+              color: AppTheme.success, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurface,
+                fontSize: 13.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// How strong a new password is, 0 to 4. The server's minimum — 8
 /// characters with a letter and a number — is 2; under it is at most 1.
 int passwordScore(String password) {

@@ -517,6 +517,44 @@ class PasswordReset {
   final String? message;
 }
 
+/// Every answer to "is this code right?". See [ApiService.verifyResetCode].
+enum ResetCodeCheckAnswer {
+  /// Right. On to choosing the new password.
+  right,
+
+  /// The server is older than this check and cannot say. On to the new
+  /// password anyway: the reset itself checks the code.
+  notChecked,
+
+  /// That code isn't right. Another try is allowed.
+  wrong,
+
+  /// The code ran out, or had too many wrong tries. A new one is needed.
+  expired,
+
+  /// Too many tries from this phone. Wait a while.
+  tooMany,
+
+  /// Some other "no" from the server, in [ResetCodeCheck.message].
+  refused,
+
+  /// The server failed. Nothing is known about the code.
+  serverError,
+
+  /// The server could not be reached.
+  unreachable,
+}
+
+/// What checking a password reset code came to.
+class ResetCodeCheck {
+  const ResetCodeCheck(this.answer, {this.message});
+
+  final ResetCodeCheckAnswer answer;
+
+  /// What the server said, in words for the person.
+  final String? message;
+}
+
 class ApiService {
   ApiService._();
 
@@ -798,9 +836,57 @@ class ApiService {
         _ => 'the server says email is not working',
       };
 
+  /// POST /password/verify — is the code from the email right? Asked before
+  /// the box for the new password is shown. Nothing changes on the server,
+  /// and the code still works for [resetPassword], which needs it too.
+  static Future<ResetCodeCheck> verifyResetCode(
+      String login, String code) async {
+    try {
+      final res = await _authHttp.post(
+        Uri.parse('$_base/password/verify'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'login': login, 'code': code}),
+      );
+      final body = _answerOf(res);
+      final said = '${body['error'] ?? ''}'.trim();
+      if (res.statusCode == 200 && body['valid'] == true) {
+        return const ResetCodeCheck(ResetCodeCheckAnswer.right);
+      }
+      if (res.statusCode == 429) {
+        return const ResetCodeCheck(ResetCodeCheckAnswer.tooMany,
+            message: 'Too many tries. Wait a while, then try again.');
+      }
+      // No such address: a server from before this check, which never
+      // answers 404 itself. The reset checks the code all the same.
+      if (res.statusCode == 404) {
+        debugPrint('[forgot] the server cannot check codes yet; the reset '
+            'will check it');
+        return const ResetCodeCheck(ResetCodeCheckAnswer.notChecked);
+      }
+      if (res.statusCode >= 400 && res.statusCode < 500) {
+        if (body['field'] == 'code') {
+          return ResetCodeCheck(
+              body['expired'] == true
+                  ? ResetCodeCheckAnswer.expired
+                  : ResetCodeCheckAnswer.wrong,
+              message: said.isEmpty ? "That code isn't right." : said);
+        }
+        return ResetCodeCheck(ResetCodeCheckAnswer.refused,
+            message: said.isEmpty ? "Couldn't check that code." : said);
+      }
+      if (res.statusCode == 200) {
+        _unreadable('verifyResetCode', 'a 200 without "valid"');
+      }
+      return const ResetCodeCheck(ResetCodeCheckAnswer.serverError);
+    } catch (e) {
+      _unreadable('verifyResetCode', e);
+      return const ResetCodeCheck(ResetCodeCheckAnswer.unreachable);
+    }
+  }
+
   /// POST /password/reset — the code from the email, and a new password.
-  /// Changing it signs out every sign-in. It signs nobody in itself: the app
-  /// signs in afterwards the ordinary way, with [login]'s username.
+  /// Changing it signs out every sign-in, and signs nobody in: the person
+  /// signs in afterwards themselves, with the new password.
   static Future<PasswordReset> resetPassword(
       String login, String code, String newPassword) async {
     try {
