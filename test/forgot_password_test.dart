@@ -36,6 +36,10 @@ http.Response? forgotAnswer;
 /// code is right and the password is changed.
 late List<http.Response> resetAnswers;
 
+/// What the server answers "is this code right?", in order. Empty: right
+/// when it is [theCode].
+late List<http.Response> verifyAnswers;
+
 /// The server cannot be reached at all.
 bool offline = false;
 
@@ -53,6 +57,7 @@ void fakeServer() {
   password = 'sunset42';
   forgotAnswer = null;
   resetAnswers = [];
+  verifyAnswers = [];
   offline = false;
   ApiService.useClient(MockClient((req) async {
     if (offline) throw http.ClientException('no connection');
@@ -73,6 +78,14 @@ void fakeServer() {
             'resendIn': 60,
           },
           200);
+    }
+    if (path.endsWith('/password/verify')) {
+      if (verifyAnswers.isNotEmpty) return verifyAnswers.removeAt(0);
+      if (body['code'] != theCode) {
+        return jsonAnswer(
+            {'field': 'code', 'error': "That code isn't right."}, 400);
+      }
+      return jsonAnswer({'valid': true}, 200);
     }
     if (path.endsWith('/password/reset')) {
       if (resetAnswers.isNotEmpty) return resetAnswers.removeAt(0);
@@ -158,9 +171,8 @@ Future<void> askForCode(WidgetTester t, String login) async {
   await tapKey(t, 'forgot_send');
 }
 
-/// Signing in starts the app's activity reporter, which keeps a timer, and
-/// the "signing you in" note keeps another. A test that signed in lets both
-/// finish, as the app would.
+/// Signing in starts the app's activity reporter, which keeps a timer. A
+/// test that signed in lets it finish, as the app would.
 Future<void> finishSigningIn(WidgetTester t) async {
   await t.pump(const Duration(seconds: 5));
   EventTracker.instance.dispose();
@@ -170,8 +182,8 @@ void main() {
   setUp(fakeServer);
   tearDown(() => ApiService.useClient(http.Client()));
 
-  testWidgets('by username: a code by email, a new password, and signed in '
-      'with it', (t) async {
+  testWidgets('by username: a code by email, checked first, then a new '
+      'password, and back to sign in with it', (t) async {
     final auth = await openApp(t);
     await askForCode(t, 'maya');
 
@@ -180,34 +192,70 @@ void main() {
 
     // Step 2 says where the code went, so only its owner knows it.
     expect(byKey('forgot_step_code'), findsOneWidget);
+    expect(find.text('Step 2 of 3'), findsOneWidget);
     expect(find.textContaining('m•••a@example.com', findRichText: true),
         findsOneWidget);
     expect(resendButton(t), ('Resend in 1:00', false));
+    // No box for a new password until the code is checked.
+    expect(byKey('forgot_new_password'), findsNothing);
 
-    // The six boxes show the code as it is typed.
+    // The six boxes show the code as it is typed, and the sixth digit
+    // checks it.
     await t.enterText(byKey('forgot_code'), theCode);
     await t.pump();
     for (final digit in theCode.split('')) {
       expect(find.text(digit), findsOneWidget);
     }
+    await settle(t);
+    expect(sent['/password/verify']!.single,
+        {'login': 'maya', 'code': theCode});
+    expect(sent['/password/reset'], isNull,
+        reason: 'checking the code changes nothing');
+
+    // Step 3: only now, a new password.
+    expect(byKey('forgot_step_password'), findsOneWidget);
+    expect(find.text('Step 3 of 3'), findsOneWidget);
     await t.enterText(byKey('forgot_new_password'), 'Moonrise77');
     await tapKey(t, 'forgot_reset');
-
     expect(sent['/password/reset']!.single, {
       'login': 'maya',
       'code': theCode,
       'newPassword': 'Moonrise77',
     });
-    // Signed in with the new password, through the ordinary sign-in.
-    expect(sent['/login']!.single['username'], 'maya');
-    expect(sent['/login']!.single['password'], 'Moonrise77');
+
+    // Back on the sign-in screen: told so, the username filled in, the
+    // password box empty and ready, and nobody signed in.
+    expect(byKey('login_submit'), findsOneWidget);
+    expect(find.text('Password changed. Sign in with your new password.'),
+        findsOneWidget);
+    expect(t.widget<TextField>(byKey('login_username')).controller!.text,
+        'maya');
+    final passwordBox = t.widget<TextField>(byKey('login_password'));
+    expect(passwordBox.controller!.text, '');
+    expect(passwordBox.focusNode!.hasFocus, isTrue);
+    expect(sent['/login'], isNull);
+    expect(auth.isAuthenticated, isFalse);
+
+    // The old password no longer works, and saying so replaces the good
+    // news.
+    await t.enterText(byKey('login_password'), 'sunset42');
+    await tapKey(t, 'login_submit');
+    expect(auth.isAuthenticated, isFalse);
+    expect(byKey('auth_error'), findsOneWidget);
+    expect(byKey('auth_notice'), findsNothing);
+
+    // The person signs in with the new one, themselves.
+    await t.enterText(byKey('login_password'), 'Moonrise77');
+    await tapKey(t, 'login_submit');
+    expect(sent['/login']!.last['username'], 'maya');
+    expect(sent['/login']!.last['password'], 'Moonrise77');
     expect(auth.isAuthenticated, isTrue);
     expect(find.text('the app'), findsOneWidget);
     await finishSigningIn(t);
   });
 
-  testWidgets('by email: never confirmed nor denied, and signed in with the '
-      "account's username", (t) async {
+  testWidgets('by email: never confirmed nor denied, and the sign-in screen '
+      "gets the account's username", (t) async {
     final auth = await openApp(t);
     await askForCode(t, 'maya@example.com');
 
@@ -219,21 +267,26 @@ void main() {
     expect(find.textContaining('•••', findRichText: true), findsNothing);
 
     await t.enterText(byKey('forgot_code'), theCode);
+    await settle(t);
+    expect(sent['/password/verify']!.single['login'], 'maya@example.com');
     await t.enterText(byKey('forgot_new_password'), 'Moonrise77');
     await tapKey(t, 'forgot_reset');
 
     expect(sent['/password/reset']!.single['login'], 'maya@example.com');
-    expect(sent['/login']!.single['username'], 'maya',
+    expect(t.widget<TextField>(byKey('login_username')).controller!.text,
+        'maya',
         reason: 'the server says which account the code was for');
-    expect(auth.isAuthenticated, isTrue);
-    await finishSigningIn(t);
+    expect(find.text('Password changed. Sign in with your new password.'),
+        findsOneWidget);
+    expect(sent['/login'], isNull);
+    expect(auth.isAuthenticated, isFalse);
   });
 
   testWidgets('no such username, and no email on the account: each said in '
       'plain words', (t) async {
     await openApp(t);
     forgotAnswer = jsonAnswer(
-        
+
             {'field': 'login', 'error': 'No account has that username.'},
         404);
     await askForCode(t, 'nobody_here');
@@ -276,19 +329,28 @@ void main() {
     expect(find.textContaining(AppConstants.supportEmail), findsWidgets);
   });
 
-  testWidgets('a wrong code, then a spent one: each said, and a new code can '
-      'be asked for at once', (t) async {
+  testWidgets('a wrong code is caught at the check, before any new '
+      'password; a spent one can be replaced at once', (t) async {
     await openApp(t);
     await askForCode(t, 'maya');
 
     await t.enterText(byKey('forgot_code'), '111111');
-    await t.enterText(byKey('forgot_new_password'), 'Moonrise77');
-    await tapKey(t, 'forgot_reset');
+    await settle(t);
     expect(t.widget<Text>(byKey('forgot_code_error')).data,
         "That code isn't right.");
+    // Still on the code: no box for a new password, and nothing changed.
+    expect(byKey('forgot_step_code'), findsOneWidget);
+    expect(byKey('forgot_new_password'), findsNothing);
+    expect(sent['/password/reset'], isNull);
     expect(password, 'sunset42');
 
-    resetAnswers.add(jsonAnswer(
+    // The button checks it too.
+    await tapKey(t, 'forgot_verify');
+    expect(sent['/password/verify']!.length, 2);
+    expect(t.widget<Text>(byKey('forgot_code_error')).data,
+        "That code isn't right.");
+
+    verifyAnswers.add(jsonAnswer(
         {
           'field': 'code',
           'error': 'Too many wrong codes. Ask for a new one.',
@@ -296,7 +358,7 @@ void main() {
         },
         400));
     await t.enterText(byKey('forgot_code'), '222222');
-    await tapKey(t, 'forgot_reset');
+    await settle(t);
     expect(t.widget<Text>(byKey('forgot_code_error')).data,
         'Too many wrong codes. Ask for a new one.');
     // The spent code is cleared, and Resend works without waiting.
@@ -311,23 +373,29 @@ void main() {
     expect(resendButton(t), ('Resend in 1:00', false));
   });
 
+  testWidgets('half a code is caught before anything is sent', (t) async {
+    await openApp(t);
+    await askForCode(t, 'maya');
+
+    await t.enterText(byKey('forgot_code'), '483');
+    await tapKey(t, 'forgot_verify');
+    expect(t.widget<Text>(byKey('forgot_code_error')).data,
+        'Enter the 6-digit code from the email.');
+    expect(sent['/password/verify'], isNull);
+    expect(byKey('forgot_step_code'), findsOneWidget);
+  });
+
   testWidgets('a weak password is caught before anything is sent; the '
       "server's own refusal lands under the password box", (t) async {
     await openApp(t);
     await askForCode(t, 'maya');
-
     await t.enterText(byKey('forgot_code'), theCode);
+    await settle(t);
+    expect(byKey('forgot_step_password'), findsOneWidget);
+
     await t.enterText(byKey('forgot_new_password'), 'short1');
     await tapKey(t, 'forgot_reset');
     expect(find.text('Use at least 8 characters.'), findsOneWidget);
-    expect(sent['/password/reset'], isNull);
-
-    // Half a code is caught too.
-    await t.enterText(byKey('forgot_code'), '483');
-    await t.enterText(byKey('forgot_new_password'), 'Moonrise77');
-    await tapKey(t, 'forgot_reset');
-    expect(t.widget<Text>(byKey('forgot_code_error')).data,
-        'Enter the 6-digit code from the email.');
     expect(sent['/password/reset'], isNull);
 
     resetAnswers.add(jsonAnswer(
@@ -336,17 +404,83 @@ void main() {
           'error': "Don't put your username in your password.",
         },
         400));
-    await t.enterText(byKey('forgot_code'), theCode);
     await t.enterText(byKey('forgot_new_password'), 'maya12345');
     await tapKey(t, 'forgot_reset');
     // Under the password box itself, not somewhere on the page.
     expect(
         t.widget<TextField>(byKey('forgot_new_password')).decoration!.errorText,
         "Don't put your username in your password.");
-    // Still on step 2 with the code kept: fix the password and go again.
+    // Still choosing a password, with the checked code kept: fix it and go
+    // again.
+    expect(byKey('forgot_step_password'), findsOneWidget);
+    await t.enterText(byKey('forgot_new_password'), 'Moonrise77');
+    await tapKey(t, 'forgot_reset');
+    expect(sent['/password/reset']!.last,
+        {'login': 'maya', 'code': theCode, 'newPassword': 'Moonrise77'});
+    expect(byKey('login_submit'), findsOneWidget);
+  });
+
+  testWidgets('the code runs out while a password is chosen: back to the '
+      'code, with a new one a tap away', (t) async {
+    await openApp(t);
+    await askForCode(t, 'maya');
+    await t.enterText(byKey('forgot_code'), theCode);
+    await settle(t);
+
+    resetAnswers.add(jsonAnswer(
+        {
+          'field': 'code',
+          'error': 'That code has expired. Ask for a new one.',
+          'expired': true,
+        },
+        400));
+    await t.enterText(byKey('forgot_new_password'), 'Moonrise77');
+    await tapKey(t, 'forgot_reset');
+    expect(byKey('forgot_step_code'), findsOneWidget);
+    expect(t.widget<Text>(byKey('forgot_code_error')).data,
+        'That code has expired. Ask for a new one.');
+    expect(t.widget<TextField>(byKey('forgot_code')).controller!.text, '');
+    expect(resendButton(t), ('Resend code', true));
+    expect(byKey('login_submit'), findsNothing);
+  });
+
+  testWidgets('a server from before the check: on to the new password, and '
+      'the reset checks the code', (t) async {
+    verifyAnswers.add(http.Response('404 page not found', 404));
+    await openApp(t);
+    await askForCode(t, 'maya');
+    await t.enterText(byKey('forgot_code'), theCode);
+    await settle(t);
+    expect(byKey('forgot_step_password'), findsOneWidget);
+
+    await t.enterText(byKey('forgot_new_password'), 'Moonrise77');
+    await tapKey(t, 'forgot_reset');
+    expect(sent['/password/reset']!.single['code'], theCode);
+    expect(find.text('Password changed. Sign in with your new password.'),
+        findsOneWidget);
+  });
+
+  testWidgets('the server failing at the check: said as such, and the code '
+      'stays to try again', (t) async {
+    await openApp(t);
+    await askForCode(t, 'maya');
+
+    verifyAnswers.add(http.Response('<html>proxy</html>', 502));
+    await t.enterText(byKey('forgot_code'), theCode);
+    await settle(t);
+    expect(find.textContaining('The server had a problem'), findsOneWidget);
     expect(byKey('forgot_step_code'), findsOneWidget);
     expect(t.widget<TextField>(byKey('forgot_code')).controller!.text,
         theCode);
+
+    offline = true;
+    await tapKey(t, 'forgot_verify');
+    expect(find.textContaining("Couldn't reach the server"), findsOneWidget);
+    expect(byKey('forgot_step_code'), findsOneWidget);
+
+    offline = false;
+    await tapKey(t, 'forgot_verify');
+    expect(byKey('forgot_step_password'), findsOneWidget);
   });
 
   testWidgets('Resend waits out its minute, then sends a new code',
@@ -381,11 +515,18 @@ void main() {
     expect(resendButton(t), ('Resend in 0:42', false));
   });
 
-  testWidgets('Back on the code step goes to the first step, then out',
-      (t) async {
+  testWidgets('Back goes one step back: from the new password to the code, '
+      'still filled in, to the first step, then out', (t) async {
     await openApp(t);
     await askForCode(t, 'maya');
+    await t.enterText(byKey('forgot_code'), theCode);
+    await settle(t);
+    expect(byKey('forgot_step_password'), findsOneWidget);
+
+    await tapKey(t, 'forgot_back');
     expect(byKey('forgot_step_code'), findsOneWidget);
+    expect(t.widget<TextField>(byKey('forgot_code')).controller!.text,
+        theCode);
 
     await tapKey(t, 'forgot_back');
     expect(byKey('forgot_step_find'), findsOneWidget);
@@ -395,6 +536,8 @@ void main() {
     await tapKey(t, 'forgot_back');
     expect(byKey('login_submit'), findsOneWidget);
     expect(byKey('forgot_step_find'), findsNothing);
+    // Leaving without a reset says nothing about a password.
+    expect(byKey('auth_notice'), findsNothing);
   });
 
   group('the answers, read the way the server gives them', () {
@@ -452,6 +595,34 @@ void main() {
       expect(weak.message, 'Too short.');
       expect((await ApiService.resetPassword('x', theCode, 'p')).answer,
           PasswordResetAnswer.tooMany);
+    });
+
+    test('every answer to "is this code right?" is read as what it is',
+        () async {
+      verifyAnswers.addAll([
+        jsonAnswer({'valid': true}, 200),
+        jsonAnswer({'field': 'code', 'error': "That code isn't right."}, 400),
+        jsonAnswer({'field': 'code', 'error': 'Expired.', 'expired': true},
+            400),
+        http.Response('{"error":"rate limited"}', 429),
+        http.Response('404 page not found', 404),
+        http.Response('{}', 200),
+        http.Response('<html>proxy</html>', 502),
+      ]);
+      Future<ResetCodeCheckAnswer> next() async =>
+          (await ApiService.verifyResetCode('maya', theCode)).answer;
+      expect(await next(), ResetCodeCheckAnswer.right);
+      final wrong = await ApiService.verifyResetCode('maya', '111111');
+      expect(wrong.answer, ResetCodeCheckAnswer.wrong);
+      expect(wrong.message, "That code isn't right.");
+      expect(await next(), ResetCodeCheckAnswer.expired);
+      expect(await next(), ResetCodeCheckAnswer.tooMany);
+      expect(await next(), ResetCodeCheckAnswer.notChecked);
+      expect(await next(), ResetCodeCheckAnswer.serverError,
+          reason: 'a 200 without "valid" is not taken for right');
+      expect(await next(), ResetCodeCheckAnswer.serverError);
+      offline = true;
+      expect(await next(), ResetCodeCheckAnswer.unreachable);
     });
 
     test('why no code was sent is in the log, with how long the server took',

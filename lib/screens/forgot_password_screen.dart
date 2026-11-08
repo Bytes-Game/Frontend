@@ -7,23 +7,26 @@ import 'package:myapp/services/api_service.dart';
 import 'package:myapp/widgets/auth_widgets.dart';
 
 /// What a finished reset hands back to the sign-in screen: the account's
-/// username and its new password, to sign in with the ordinary way.
+/// username, to fill in. Not the new password: the person signs in with it
+/// themselves.
 class PasswordResetDone {
-  const PasswordResetDone({required this.username, required this.password});
+  const PasswordResetDone({required this.username});
 
   final String username;
-  final String password;
 }
 
-/// "Forgot password?", in two steps:
+/// The three steps of [ForgotPasswordScreen].
+enum _Step { find, code, password }
+
+/// "Forgot password?", in three steps:
 ///
 ///  1. Your username or email. A 6-digit code goes to the email address on
 ///     the account.
-///  2. The code, and a new password.
+///  2. The code. The server checks it before anything else is asked.
+///  3. A new password: only once the code is right.
 ///
-/// Finishing hands a [PasswordResetDone] back, and the sign-in screen signs
-/// in with it. The server signs nobody in by itself, so everything that
-/// signing in checks is still checked.
+/// Finishing hands a [PasswordResetDone] back. Nobody is signed in: the
+/// sign-in screen asks for the new password, and the person signs in.
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key, this.login = ''});
 
@@ -40,8 +43,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   final _codeFocus = FocusNode();
   final _password = TextEditingController();
 
-  /// False: the first step. True: the code and the new password.
-  bool _codeSent = false;
+  /// Which step is showing.
+  _Step _step = _Step.find;
 
   /// The username or email the code was sent for. The second step uses this
   /// one, whatever is in the first step's box by then.
@@ -135,7 +138,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         // "Too soon" means a code went out under a minute ago, and that one
         // still works: on to entering it.
         setState(() {
-          _codeSent = true;
+          _step = _Step.code;
           _sentFor = login;
           _sentTo = ask.sentTo;
           _alreadySent = ask.answer == ResetCodeAnswer.tooSoon;
@@ -189,17 +192,24 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     return null;
   }
 
-  /// Step 2: the code and the new password.
-  Future<void> _reset() async {
+  /// A code that is finished with: said under the boxes, which are emptied,
+  /// and a new one can be asked for straight away.
+  void _codeSpent(String? why) {
+    _tick?.cancel();
+    setState(() {
+      _step = _Step.code;
+      _codeError = why;
+      _code.clear();
+      _resendIn = 0;
+    });
+  }
+
+  /// Step 2: is the code right? Only then is a new password asked for.
+  Future<void> _verify() async {
     final code = _code.text.trim();
-    final password = _password.text;
-    final codeProblem =
-        code.length == 6 ? null : 'Enter the 6-digit code from the email.';
-    final passwordProblem = _passwordProblem(password);
-    if (codeProblem != null || passwordProblem != null) {
+    if (code.length != 6) {
       setState(() {
-        _codeError = codeProblem;
-        _passwordError = passwordProblem;
+        _codeError = 'Enter the 6-digit code from the email.';
         _error = null;
       });
       return;
@@ -209,29 +219,68 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       _busy = true;
       _error = null;
       _codeError = null;
+    });
+    final check = await ApiService.verifyResetCode(_sentFor, code);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    switch (check.answer) {
+      case ResetCodeCheckAnswer.right:
+      case ResetCodeCheckAnswer.notChecked:
+        setState(() {
+          _step = _Step.password;
+          _password.clear();
+          _passwordError = null;
+        });
+      case ResetCodeCheckAnswer.wrong:
+        setState(() => _codeError = check.message);
+      case ResetCodeCheckAnswer.expired:
+        _codeSpent(check.message);
+      case ResetCodeCheckAnswer.tooMany:
+      case ResetCodeCheckAnswer.refused:
+        setState(() => _error = check.message);
+      case ResetCodeCheckAnswer.serverError:
+        setState(() => _error = _serverFailed);
+      case ResetCodeCheckAnswer.unreachable:
+        setState(() => _error = _unreachable);
+    }
+  }
+
+  /// Step 3: the new password, with the code that was checked.
+  Future<void> _reset() async {
+    final password = _password.text;
+    final problem = _passwordProblem(password);
+    if (problem != null) {
+      setState(() {
+        _passwordError = problem;
+        _error = null;
+      });
+      return;
+    }
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _busy = true;
+      _error = null;
       _passwordError = null;
     });
-    final result = await ApiService.resetPassword(_sentFor, code, password);
+    final result =
+        await ApiService.resetPassword(_sentFor, _code.text.trim(), password);
     if (!mounted) return;
     setState(() => _busy = false);
     switch (result.answer) {
       case PasswordResetAnswer.reset:
         _tick?.cancel();
-        Navigator.of(context).pop(PasswordResetDone(
-          username: result.username ?? _sentFor,
-          password: password,
-        ));
+        Navigator.of(context)
+            .pop(PasswordResetDone(username: result.username ?? _sentFor));
       case PasswordResetAnswer.wrongCode:
-        setState(() => _codeError = result.message);
-      case PasswordResetAnswer.expired:
-        // That code is finished with. A new one can be asked for straight
-        // away.
-        _tick?.cancel();
+        // The code stopped working after it was checked: back to it.
         setState(() {
+          _step = _Step.code;
           _codeError = result.message;
-          _code.clear();
-          _resendIn = 0;
         });
+      case PasswordResetAnswer.expired:
+        // It ran out while the password was chosen. Back to the code, with
+        // a new one a tap away.
+        _codeSpent(result.message);
       case PasswordResetAnswer.badPassword:
         setState(() => _passwordError = result.message);
       case PasswordResetAnswer.tooMany:
@@ -248,7 +297,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   void _restart() {
     _tick?.cancel();
     setState(() {
-      _codeSent = false;
+      _step = _Step.find;
       _resendIn = 0;
       _error = null;
       _codeError = null;
@@ -262,10 +311,20 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return PopScope(
-      // Back on step 2 goes to step 1, not out.
-      canPop: !_codeSent,
+      // Back goes one step back: from the new password to the code (still
+      // filled in), from the code to step 1, and only then out.
+      canPop: _step == _Step.find,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && !_busy) _restart();
+        if (didPop || _busy) return;
+        if (_step == _Step.password) {
+          setState(() {
+            _step = _Step.code;
+            _error = null;
+            _passwordError = null;
+          });
+        } else {
+          _restart();
+        }
       },
       child: Scaffold(
         extendBodyBehindAppBar: true,
@@ -290,7 +349,11 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                   constraints: const BoxConstraints(maxWidth: 420),
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 250),
-                    child: _codeSent ? _codeStep(scheme) : _findStep(scheme),
+                    child: switch (_step) {
+                      _Step.find => _findStep(scheme),
+                      _Step.code => _codeStep(scheme),
+                      _Step.password => _passwordStep(scheme),
+                    },
                   ),
                 ),
               ),
@@ -405,8 +468,10 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
           focus: _codeFocus,
           enabled: !_busy,
           error: _codeError != null,
-          onChanged: (_) {
+          onChanged: (value) {
             if (_codeError != null) setState(() => _codeError = null);
+            // All six typed: checked at once, as the sign-in code is.
+            if (value.length == 6 && !_busy) _verify();
           },
         ),
         if (_codeError != null) ...[
@@ -441,11 +506,47 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
             ),
           ],
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 24),
+        AuthPrimaryButton(
+          key: const ValueKey('forgot_verify'),
+          label: 'Verify code',
+          loading: _busy,
+          onPressed: _verify,
+        ),
+        if (_error != null) ...[
+          const SizedBox(height: 14),
+          AuthErrorBox(message: _error!),
+        ],
+        const SizedBox(height: 10),
+        TextButton(
+          key: const ValueKey('forgot_restart'),
+          onPressed: _busy ? null : _restart,
+          child: const Text('Use a different username or email'),
+        ),
+      ],
+    );
+  }
+
+  Widget _passwordStep(ColorScheme scheme) {
+    return Column(
+      key: const ValueKey('forgot_step_password'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _StepHeader(
+          step: 3,
+          icon: Icons.password_rounded,
+          title: 'Choose a new password',
+          subtitle: Text(
+            "Your code is right. Choose a new password, then you'll sign in "
+            'with it.',
+          ),
+        ),
+        const SizedBox(height: 28),
         TextField(
           key: const ValueKey('forgot_new_password'),
           controller: _password,
           enabled: !_busy,
+          autofocus: true,
           obscureText: _obscure,
           autocorrect: false,
           enableSuggestions: false,
@@ -486,18 +587,12 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
           const SizedBox(height: 14),
           AuthErrorBox(message: _error!),
         ],
-        const SizedBox(height: 10),
-        TextButton(
-          key: const ValueKey('forgot_restart'),
-          onPressed: _busy ? null : _restart,
-          child: const Text('Use a different username or email'),
-        ),
       ],
     );
   }
 }
 
-/// "Step 1 of 2" with two bars, an icon, a big title and a line under it.
+/// "Step 1 of 3" with three bars, an icon, a big title and a line under it.
 class _StepHeader extends StatelessWidget {
   const _StepHeader({
     required this.step,
@@ -505,6 +600,9 @@ class _StepHeader extends StatelessWidget {
     required this.title,
     required this.subtitle,
   });
+
+  /// How many steps there are: [_Step]'s.
+  static final _steps = _Step.values.length;
 
   final int step;
   final IconData icon;
@@ -519,7 +617,7 @@ class _StepHeader extends StatelessWidget {
       children: [
         Row(
           children: [
-            for (var i = 1; i <= 2; i++) ...[
+            for (var i = 1; i <= _steps; i++) ...[
               Expanded(
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 250),
@@ -532,13 +630,13 @@ class _StepHeader extends StatelessWidget {
                   ),
                 ),
               ),
-              if (i < 2) const SizedBox(width: 6),
+              if (i < _steps) const SizedBox(width: 6),
             ],
           ],
         ),
         const SizedBox(height: 8),
         Text(
-          'Step $step of 2',
+          'Step $step of $_steps',
           style: TextStyle(
             fontSize: 12.5,
             fontWeight: FontWeight.w600,
