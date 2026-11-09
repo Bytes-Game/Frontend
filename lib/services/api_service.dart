@@ -517,6 +517,25 @@ class PasswordReset {
   final String? message;
 }
 
+/// What came of a report. See [ApiService.reportContent].
+enum ReportOutcome {
+  /// Kept, for a person to read.
+  sent,
+
+  /// This person had already reported it, and that report is still
+  /// waiting. Nothing new was kept.
+  alreadySent,
+
+  /// It is not there any more.
+  gone,
+
+  /// Three reports in a row is all one person may send at once.
+  tooMany,
+
+  /// No connection, or the server could not keep it. Worth trying again.
+  failed,
+}
+
 /// Every answer to "is this code right?". See [ApiService.verifyResetCode].
 enum ResetCodeCheckAnswer {
   /// Right. On to choosing the new password.
@@ -2383,11 +2402,14 @@ class ApiService {
 
   // —— Reports ————————————————————————————————————————————————————
 
-  /// POST /api/v1/report -> report content or user
-  static Future<bool> reportContent({
-    required String reporterId,
-    required String targetId,
+  /// POST /api/v1/report — report a video, an answer, a comment or an
+  /// account as harmful. [targetType] is `challenge`, `response`,
+  /// `comment` or `user`; [reason] one of the codes in report_sheet.dart.
+  /// The server knows who is reporting from the sign-in, and waits the
+  /// report for a person to read (/admin/reports).
+  static Future<ReportOutcome> reportContent({
     required String targetType,
+    required String targetId,
     required String reason,
     String description = '',
   }) async {
@@ -2396,17 +2418,28 @@ class ApiService {
         Uri.parse('$_base/api/v1/report'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
-          'reporterId': reporterId,
           'targetId': targetId,
           'targetType': targetType,
           'reason': reason,
           'description': description,
         }),
       );
-      return res.statusCode == 201;
+      switch (res.statusCode) {
+        case 201:
+          return ReportOutcome.sent;
+        case 200:
+          return ReportOutcome.alreadySent;
+        case 404:
+          return ReportOutcome.gone;
+        case 429:
+          return ReportOutcome.tooMany;
+      }
+      debugPrint('[report] $targetType $targetId: the server answered '
+          '${res.statusCode}: ${res.body}');
+      return ReportOutcome.failed;
     } catch (e) {
       _unreadable('reportContent', e);
-      return false;
+      return ReportOutcome.failed;
     }
   }
 

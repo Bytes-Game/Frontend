@@ -175,6 +175,13 @@ the day it is added.
      free hours cover one server awake all month;
    - or a paid Render plan, which never sleeps. Then delete `keepalive.yml`
      and the monitor.
+9b. **`TEST_SERVER` stays off on the live server.** It allows the "wipe
+    everything" button and lets the ten demo accounts (`player1`/`pass1`
+    and so on, whose passwords are in the public code) sign in. Without it,
+    each start gives those accounts random passwords and signs them out.
+    Set `TEST_SERVER=true` only on a separate server for testing. The App
+    Store and Play reviewers need a sign-in to look around: make them a
+    normal account with its own password, never a demo one.
 
 ### C. Google and Apple accounts
 
@@ -225,24 +232,32 @@ the day it is added.
 
 ### E. Emails and pages the stores ask for
 
-15. **Make the help and privacy inboxes work.** The Help Center, the
-    Terms, the Privacy Policy, the two-step code screen and "Forgot
-    password?" (when email can't be sent) give support@flexete.com and
-    privacy@flexete.com. Nothing receives mail there until you turn it on.
-    In Cloudflare: flexete.com → Email → Email Routing → add `support` and
-    `privacy`, and forward both to your own inbox (free, about five
+15. **Make the help, privacy and complaints inboxes work.** The Help
+    Center, the Terms, the Privacy Policy, the report sheet, the two-step
+    code screen and "Forgot password?" (when email can't be sent) give
+    support@flexete.com, privacy@flexete.com and grievance@flexete.com.
+    Nothing receives mail there until you turn it on. In Cloudflare:
+    flexete.com → Email → Email Routing → add `support`, `privacy` and
+    `grievance`, and forward all three to your own inbox (free, about five
     minutes; Cloudflare adds the records it needs). The addresses live in
-    one place each: `supportEmail` and `privacyEmail` in
+    one place each: `supportEmail`, `privacyEmail` and `grievanceEmail` in
     `lib/config/constants.dart`, and `supportEmail` in the server's
     `mailer.go`.
-16. **The privacy policy at a web address.** Both stores ask for a link to
-    it, and the policy is only inside the app today. Once item 18 is done,
-    ask for the server to show it at flexete.com/privacy.
-17. **A web address for deleting an account.** Google Play asks for a page
-    where people can ask to delete their account without the app. The app
-    can delete accounts already; the page does not exist yet. Ask for one
-    (for example flexete.com/delete-account), or give the support email
-    with the steps.
+16. **The web pages the stores ask for: done, on the server.** No sign-in
+    needed: `/privacy`, `/terms`, `/community-guidelines`,
+    `/delete-account` and `/child-safety`, at the server's address (today
+    `https://gobackend-9nd8.onrender.com/privacy`; `https://flexete.com/
+    privacy` once item 18 is done). Put those links in the store forms.
+    The words are the app's own: change them in `lib/pages/legal_texts.dart`,
+    then in the server repo run
+    `python3 tools/legal_from_app.py ../Frontend/lib/pages/legal_texts.dart`
+    and commit `legal/texts.json`, so the web pages say the same.
+17. **Name the Grievance Officer.** India's IT Rules (2021) ask an app
+    where people post to publish the name of a Grievance Officer and how
+    to reach them. The documents give grievance@flexete.com and say "our
+    Grievance Officer"; the name is empty. Put it in `grievanceOfficer` in
+    `lib/config/constants.dart`, then run the tool in item 16 so the web
+    pages say it too. It can be you.
 
 ### F. Your web address, flexete.com (on Cloudflare)
 
@@ -273,6 +288,67 @@ shared links and everything below stop working.
     - New videos then load from Cloudflare's cache near each viewer. Old
       videos keep their old address, which still works; moving them over
       needs a small server change, so ask.
+
+### G. Running it once people use it
+
+20. **Read the reports.** People can now report videos, accounts and
+    comments (More ⋯ → Report; press and hold a comment). Each waits on
+    `https://<the server>/admin/reports`, behind the admin sign-in, oldest
+    first, with anything urgent (a child at risk, nudity, pretending to be
+    someone, self-harm, violence) on top. Each has: "Nothing wrong",
+    "Remove", "Suspend" and "Remove + suspend"; a suspended account is
+    signed out, cannot sign in, and is hidden everywhere until you press
+    "Unsuspend" in the list below. India's rules: answer a complaint within
+    24 hours, settle it within 15 days, and take down nudity or
+    impersonation within 24 hours of the person's complaint. Child sexual
+    abuse material must also be reported to the police or
+    cybercrime.gov.in. Look every day.
+21. **The Play Console forms.** They are answered by hand, in the Play
+    Console, and must match what the app does:
+    - Data safety: the app collects name, username, email, birth date,
+      photos and videos people post, what they watch and like, messages,
+      the phone's push-notification address, and crash reports (Sentry,
+      without personal details). Nothing is sold; nothing is used for ads.
+      Account deletion link: `/delete-account` (item 16).
+    - Child safety standards: link `/child-safety` (item 16), contact
+      support@flexete.com.
+    - Content rating questionnaire: people share videos and talk to each
+      other; content is moderated and can be reported.
+    - Target audience: 13 and over. The Terms already say 13+.
+    - Photo and video permissions: the app reads the phone's photos and
+      videos to pick one to post (its own gallery screen), so it needs the
+      declaration for READ_MEDIA_IMAGES / READ_MEDIA_VIDEO.
+    - App access: the reviewers' sign-in from item 9b.
+    App Store Connect asks the same in App Privacy, and for an age rating.
+22. **Make both GitHub repositories private.** Both are public today:
+    anyone can read the server's code and the app's. No password or
+    private key is in either (checked, history included: the server's keys
+    live only on Render), but there is no reason to show the code. GitHub → each repository →
+    Settings → General → Danger Zone → Change visibility. GitHub Actions
+    keeps working; the free plan gives private repositories 2,000 minutes
+    a month, which the video worker can use up — so either move the worker
+    to its own machine (item 23) or watch the minutes.
+23. **Optional: the video worker always on.** Today it runs as a GitHub
+    job, started when a video is posted and every 30 minutes, which spends
+    a minute or two setting up each time. `cmd/hls-worker/Dockerfile` in
+    the server repo is the same worker as a container that never stops:
+    put it on a machine with at least 8 GB of memory and 4 cores (the two
+    AI models need it), with the settings listed at the top of that file.
+    Then switch off the GitHub job's schedule.
+24. **Ask a lawyer about keeping deleted accounts.** India's IT Rules also
+    say an app must keep a deleted account's registration details for 180
+    days. Flexete deletes everything 30 days after the person asks. The
+    privacy policy says some records may be kept where the law requires;
+    whether to keep them, and how, is a legal decision.
+25. **Restrict the Firebase key.** The app carries a Firebase key
+    (`lib/services/push_service.dart`) for push notifications. Every app's
+    is readable inside the app, so it is not a secret, but without limits
+    anyone can use it against your Firebase project's allowance. Google
+    Cloud → APIs & Services → Credentials → that key → Application
+    restrictions: Android apps, the app id from item 1 and the release
+    key's SHA-1 (item 2); API restrictions: only the Firebase APIs the app
+    uses (Firebase Cloud Messaging and Firebase Installations). Do the
+    same for the iPhone key with the iPhone id.
 
 Not on this list on purpose: the admin password. The owner has said they
 will change it themselves and does not want reminding.

@@ -93,6 +93,16 @@ class AppConstants {
   /// Where people write about their personal data.
   static const String privacyEmail = 'privacy@flexete.com';
 
+  /// Where complaints go. India's IT Rules (2021) ask every app where
+  /// people post to name a Grievance Officer and publish how to reach them;
+  /// the Terms, Privacy Policy and Community Guidelines all give this.
+  static const String grievanceEmail = 'grievance@flexete.com';
+
+  /// The Grievance Officer's name, which those rules ask to be published.
+  /// Empty until the owner names somebody (the before-release list); the
+  /// documents then say "our Grievance Officer" with no name.
+  static const String grievanceOfficer = '';
+
   // —— Signing in with Google or Apple ——————————————————————————————————
   //
   // Each is passed to the build with --dart-define. A button only shows

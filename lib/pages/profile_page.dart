@@ -35,6 +35,7 @@ import 'package:myapp/widgets/profile_arena_header.dart';
 import 'package:myapp/widgets/scroll_reveal.dart';
 import 'package:myapp/widgets/video_grid_tile.dart';
 import 'package:myapp/widgets/follow_flow.dart';
+import 'package:myapp/widgets/report_sheet.dart';
 
 /// A profile built around the person's battles.
 ///
@@ -975,6 +976,7 @@ class _ProfilePageState extends State<ProfilePage>
               },
             ),
             ListTile(
+              key: const ValueKey('profile_report'),
               leading: const Icon(Icons.flag_outlined,
                   color: Colors.redAccent),
               title: const Text(
@@ -983,8 +985,11 @@ class _ProfilePageState extends State<ProfilePage>
               ),
               onTap: () {
                 Navigator.pop(ctx);
-                _toast(
-                  'Use the report flow on a specific post for now.',
+                reportHarm(
+                  context,
+                  target: ReportTarget.account,
+                  targetId: widget.user.id,
+                  whose: widget.user.username,
                 );
               },
             ),

@@ -27,6 +27,7 @@ import 'package:myapp/widgets/people_list_sheet.dart';
 import 'package:myapp/widgets/match_warning.dart';
 import 'package:myapp/widgets/open_to_battles.dart';
 import 'package:myapp/widgets/photo_choice.dart';
+import 'package:myapp/widgets/report_sheet.dart';
 import 'package:myapp/widgets/report_video.dart';
 import 'package:myapp/widgets/video_grid_tile.dart' show openVideoPlaylist;
 import 'package:myapp/widgets/arena_ui.dart' show PersonPhoto;
@@ -346,6 +347,36 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
     setState(() => _scoreVersion++);
   }
 
+  /// The videos on this page the signed-in person may report as harmful
+  /// (report_sheet.dart): every one that isn't theirs, still up, on any
+  /// kind of post. Each is (answer id, whose it is) — an empty id is the
+  /// challenge's own video.
+  List<(String, String)> _harmReportable(ChallengeModel c, String? me) {
+    if (me == null || me.isEmpty || c.status == 'removed') return const [];
+    return [
+      if (c.creatorId != me) ('', c.creatorUsername),
+      for (final r in _responses)
+        if (r.responderId != me) (r.id, r.responderUsername),
+    ];
+  }
+
+  /// Report one video on this page as harmful.
+  Future<void> _reportHarm(String responseId, String whose) async {
+    final c = _challenge;
+    if (c == null) return;
+    EventTracker.instance.trackTap(
+      target: 'challenge_report_harm_open',
+      pageName: 'challenge_detail_page',
+      params: {'challengeId': c.id, 'responseId': responseId},
+    );
+    await reportHarm(
+      context,
+      target: responseId.isEmpty ? ReportTarget.video : ReportTarget.answer,
+      targetId: responseId.isEmpty ? c.id : responseId,
+      whose: whose,
+    );
+  }
+
   /// The videos on this page the signed-in person may report as not
   /// matching the challenge: every one that isn't theirs, still up. Each is
   /// (answer id, whose it is) — an empty id is the challenge's own video.
@@ -649,7 +680,10 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
           style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
         ),
         actions: [
-          if (c != null && (isOwner || _reportable(c, me).isNotEmpty))
+          if (c != null &&
+              (isOwner ||
+                  _reportable(c, me).isNotEmpty ||
+                  _harmReportable(c, me).isNotEmpty))
             PopupMenuButton<String>(
               key: const ValueKey('detail_more'),
               icon: const Icon(Icons.more_horiz_rounded),
@@ -658,8 +692,33 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
               onSelected: (v) {
                 if (v == 'delete') _delete();
                 if (v.startsWith('report:')) _report(v.substring(7));
+                if (v.startsWith('harm:')) {
+                  final rid = v.substring(5);
+                  final whose = _harmReportable(c, me)
+                      .firstWhere((x) => x.$1 == rid, orElse: () => (rid, ''))
+                      .$2;
+                  _reportHarm(rid, whose);
+                }
               },
               itemBuilder: (_) => [
+                // Harmful: one line per video that isn't yours.
+                for (final (rid, whose) in _harmReportable(c, me))
+                  PopupMenuItem<String>(
+                    key: ValueKey('harm_$rid'),
+                    value: 'harm:$rid',
+                    child: Row(
+                      children: [
+                        const Icon(Icons.report_outlined, color: Colors.white),
+                        const SizedBox(width: 10),
+                        Flexible(
+                          child: Text(
+                            "Report $whose's ${c.isPhoto ? 'photo' : 'video'}",
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 // One line per video that isn't yours: the challenge's own,
                 // and each answer, by whose it is.
                 for (final (rid, whose) in _reportable(c, me))

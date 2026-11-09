@@ -112,6 +112,9 @@ List<Map<String, dynamic>> watchesSent = [];
 /// which answer it named.
 List<(String, String)> reportsSent = [];
 
+/// Every harmful-content report sent (POST /api/v1/report), as sent.
+List<Map<String, dynamic>> harmSent = [];
+
 /// "What's this video about?" questions: the answer each one named, or ""
 /// for the challenger's video.
 List<String> aboutAsked = [];
@@ -127,6 +130,7 @@ void fakeServer(Map<String, dynamic> first) {
   chatSends = [];
   watchesSent = [];
   reportsSent = [];
+  harmSent = [];
   aboutAsked = [];
   battlesSent = [];
   standingsAsked = 0;
@@ -159,6 +163,10 @@ void fakeServer(Map<String, dynamic> first) {
       }
       if (req.url.path.endsWith('/challenges/vote')) {
         lastVote = json.decode(req.body) as Map<String, dynamic>;
+      }
+      if (req.url.path == '/api/v1/report') {
+        harmSent.add(json.decode(req.body) as Map<String, dynamic>);
+        return http.Response(json.encode({'id': '4'}), 201);
       }
       if (req.url.path.endsWith('/report')) {
         final body = json.decode(req.body) as Map<String, dynamic>;
@@ -377,6 +385,20 @@ Future<void> closeReel(WidgetTester t) async {
   EventTracker.instance.dispose();
 }
 
+/// Opens a reel's "more" menu and waits until it has finished opening.
+///
+/// The menu grows open over 300 ms, counted from the first frame after the
+/// tap, and only the part already open takes taps. With one line in it, two
+/// frames were enough; with "Report" above "Doesn't match the challenge",
+/// the second line is still closed after two.
+Future<void> openMoreMenu(WidgetTester t) async {
+  await t.tap(find.byKey(const ValueKey('reel_more')));
+  await t.pump(const Duration(milliseconds: 400));
+  for (var i = 0; i < 4; i++) {
+    await t.pump(const Duration(milliseconds: 100));
+  }
+}
+
 void main() {
   setUp(() {
     SmartReelsFeed.debugForgetAppOpen();
@@ -389,12 +411,84 @@ void main() {
     feedDelay = Duration.zero;
   });
 
+  group('reporting a harmful video', () {
+    Future<void> openReport(WidgetTester t) async {
+      await openMoreMenu(t);
+      await t.tap(find.byKey(const ValueKey('reel_report_harm')));
+      for (var i = 0; i < 5; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    Future<void> send(WidgetTester t, String reason) async {
+      await t.tap(find.byKey(ValueKey('report_reason_$reason')));
+      await t.pump(const Duration(milliseconds: 400));
+      await t.tap(find.byKey(const ValueKey('report_send')));
+      for (var i = 0; i < 8; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    testWidgets("somebody else's video: Report sends the challenge's own, and "
+        'the video leaves the feed', (t) async {
+      await openReel(t, battle());
+      expect(find.textContaining('dance on a moving bus'), findsWidgets);
+      await openReport(t);
+      expect(find.text("Report maya's video"), findsOneWidget);
+      await send(t, 'hate');
+      expect(harmSent, [
+        {
+          'targetId': '1',
+          'targetType': 'challenge',
+          'reason': 'hate',
+          'description': '',
+        },
+      ]);
+      expect(find.textContaining('Thanks for telling us'), findsOneWidget);
+      expect(find.textContaining('dance on a moving bus'), findsNothing);
+      await closeReel(t);
+    });
+
+    testWidgets("on the answer's side it reports the answer", (t) async {
+      answerLeads = true;
+      await openReel(t, battle());
+      await openReport(t);
+      expect(find.text("Report leo_beats's video"), findsOneWidget);
+      await send(t, 'violence');
+      expect(harmSent.single['targetType'], 'response');
+      expect(harmSent.single['targetId'], '77');
+      await closeReel(t);
+    });
+
+    testWidgets('changing your mind sends nothing, and the video stays',
+        (t) async {
+      await openReel(t, battle());
+      await openReport(t);
+      expect(find.byKey(const ValueKey('report_sheet')), findsOneWidget);
+      await t.tapAt(const Offset(10, 10)); // outside the sheet
+      for (var i = 0; i < 6; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+      expect(harmSent, isEmpty);
+      expect(find.textContaining('dance on a moving bus'), findsWidgets);
+      await closeReel(t);
+    });
+
+    testWidgets('your own video: Delete, and no Report', (t) async {
+      await openReel(t, battle(), meId: '9', meName: 'maya');
+      await t.tap(find.byKey(const ValueKey('reel_more')));
+      await t.pump(const Duration(milliseconds: 400));
+      expect(find.text('Delete'), findsOneWidget);
+      expect(find.byKey(const ValueKey('reel_report_harm')), findsNothing);
+      await t.tapAt(const Offset(10, 10));
+      await t.pump(const Duration(milliseconds: 400));
+      await closeReel(t);
+    });
+  });
+
   group('reporting a video that doesn\'t match the challenge', () {
     Future<void> reportFromMenu(WidgetTester t, {bool confirm = true}) async {
-      await t.tap(find.byKey(const ValueKey('reel_more')));
-      // Two frames: the menu finishes opening, then takes taps.
-      await t.pump(const Duration(milliseconds: 400));
-      await t.pump(const Duration(milliseconds: 100));
+      await openMoreMenu(t);
       await t.tap(find.byKey(const ValueKey('reel_report')));
       await t.pump(const Duration(milliseconds: 400));
       await t.pump(const Duration(milliseconds: 100));
@@ -472,9 +566,7 @@ void main() {
     testWidgets('in the battle yourself: told a false report costs you; a '
         'viewer is not', (t) async {
       Future<bool> warned() async {
-        await t.tap(find.byKey(const ValueKey('reel_more')));
-        await t.pump(const Duration(milliseconds: 400));
-        await t.pump(const Duration(milliseconds: 100));
+        await openMoreMenu(t);
         await t.tap(find.byKey(const ValueKey('reel_report')));
         await t.pump(const Duration(milliseconds: 400));
         await t.pump(const Duration(milliseconds: 100));
@@ -1216,8 +1308,13 @@ void main() {
     expect(find.text('Accept challenge'), findsNothing);
     expect(find.text('Open challenge'), findsNothing);
     expect(find.text('View post'), findsNothing);
-    // Nothing to report it for: it has no challenge to match.
-    expect(find.byKey(const ValueKey('reel_more')), findsNothing);
+    // It can be reported as harmful, like any post; there is nothing to
+    // report it for as "doesn't match": it has no challenge to match.
+    await openMoreMenu(t);
+    expect(find.byKey(const ValueKey('reel_report_harm')), findsOneWidget);
+    expect(find.byKey(const ValueKey('reel_report')), findsNothing);
+    await t.tapAt(const Offset(10, 10));
+    await t.pump(const Duration(milliseconds: 400));
     await closeReel(t);
   });
 

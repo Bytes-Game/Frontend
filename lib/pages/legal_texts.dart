@@ -8,7 +8,7 @@ import 'package:myapp/config/constants.dart';
 /// move [legalUpdated] to that day.
 
 /// The day the documents last changed.
-const legalUpdated = '1 November 2026';
+const legalUpdated = '9 November 2026';
 
 /// A numbered part of a document: a heading and its paragraphs. A paragraph
 /// that starts with "• " shows as a bullet point.
@@ -46,6 +46,12 @@ class LegalDocument {
 const _name = AppConstants.appName;
 const _support = AppConstants.supportEmail;
 const _privacy = AppConstants.privacyEmail;
+const _grievance = AppConstants.grievanceEmail;
+
+/// "our Grievance Officer", with their name once the owner has given one.
+const _officer = AppConstants.grievanceOfficer == ''
+    ? 'our Grievance Officer'
+    : 'our Grievance Officer, ${AppConstants.grievanceOfficer},';
 
 // ─────────────────────────────────────────────────────────────────────────
 // TERMS OF SERVICE
@@ -167,6 +173,8 @@ const termsOfService = LegalDocument(
       'For 30 days, signing in again lets you keep it, with everything '
           'back. After 30 days it is deleted for good: your profile, posts, '
           'battles, comments, likes, votes and followers.',
+      'Without the app, write to $_support from the email on your account '
+          'and ask us to delete it.',
       'We may suspend or end an account that seriously or repeatedly '
           'breaks these terms, or when the law requires it.',
     ]),
@@ -189,6 +197,18 @@ const termsOfService = LegalDocument(
           'Service, or from content or behaviour of other people on it.',
       'Nothing in these terms takes away rights you have by law that '
           'cannot be taken away by an agreement.',
+    ]),
+    LegalSection('Complaints', [
+      'If you have a complaint about something on $_name, about your '
+          'account, or about a decision we made, write to $_officer at '
+          '$_grievance.',
+      'We confirm every complaint within 24 hours and resolve it within 15 '
+          'days. Content that shows someone\'s private parts, shows them in '
+          'a sexual act, or pretends to be them (including edited or '
+          'made-up pictures of them) is dealt with within 24 hours of a '
+          'complaint from them or someone acting for them.',
+      'In India, if you are not happy with our decision, you can appeal to '
+          'the Grievance Appellate Committee within 30 days, at gac.gov.in.',
     ]),
     LegalSection('Contact', [
       'Questions about these terms: $_support.',
@@ -333,6 +353,9 @@ const privacyPolicy = LegalDocument(
     ]),
     LegalSection('Contact', [
       'Privacy questions and requests: $_privacy.',
+      'Complaints about how we handle your information: $_officer at '
+          '$_grievance. We confirm every complaint within 24 hours and '
+          'resolve it within 15 days.',
     ]),
   ],
 );
@@ -422,10 +445,19 @@ const communityGuidelines = LegalDocument(
           'again.',
     ]),
     LegalSection('Reporting', [
-      'On a video, tap More (⋯) and choose "Doesn\'t match the challenge". '
-          'To stop someone reaching you, block them from their profile.',
-      'For anything else that breaks these rules, use Settings → Report a '
-          'problem, or write to $_support.',
+      'To report a video, tap More (⋯) on it and choose Report. To report '
+          'an account, open their profile, tap More (⋯) and choose Report. '
+          'To report a comment, press and hold it. Choose why, add a few '
+          'words if you like, and send.',
+      'A person reads every report. What breaks these guidelines is '
+          'removed, and the account may be suspended. Nobody is told who '
+          'reported it.',
+      'On a battle, More (⋯) also has "Doesn\'t match the challenge", for a '
+          'video that has nothing to do with what the challenge asks.',
+      'To stop someone reaching you, block them from their profile. If '
+          'someone is in danger right now, call 112.',
+      'For anything else, use Settings → Report a problem, or write to '
+          '$_officer at $_grievance.',
     ]),
   ],
 );

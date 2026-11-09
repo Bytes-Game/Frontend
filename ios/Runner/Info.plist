@@ -35,6 +35,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>CFBundleDisplayName</key>
 	<string>Flexete</string>
 	<key>CFBundleExecutable</key>
