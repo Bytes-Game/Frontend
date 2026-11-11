@@ -128,9 +128,18 @@ To try a different Firebase project for one build, put its four values in
 `firebase_push.example.json`); `tools\run_profile.bat` passes it in on its
 own, or use `flutter run --dart-define-from-file=firebase_push.json`.
 
-iPhones need more: an iOS app in the same project (`FIREBASE_IOS_APP_ID`),
-an APNs key uploaded to Firebase, and the Push Notifications capability in
-Xcode.
+iPhones need more. The project side is done: the app asks for push
+notifications (`ios/Runner/Runner.entitlements`) and can be woken by one
+(`Info.plist`). What is left is in three accounts:
+
+- **Firebase:** add an iOS app to the same project, with the iPhone app id.
+  Build with its two values: `FIREBASE_IOS_APP_ID` and
+  `FIREBASE_IOS_API_KEY`. Without the app id, an iPhone build has no
+  notifications outside the app (it is never started with the Android id).
+- **Apple Developer:** switch on Push Notifications for the app id, and
+  make an APNs key (Keys → +, tick Apple Push Notifications service).
+- **Firebase again:** upload that key (Project settings → Cloud Messaging →
+  Apple app configuration), with its Key ID and your Team ID.
 
 ### Checks
 

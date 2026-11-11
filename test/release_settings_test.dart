@@ -36,4 +36,40 @@ void main() {
       isTrue,
     );
   });
+
+  test('the iPhone app asks for push notifications, and may be woken by '
+      'one', () {
+    final entitlements = withoutXmlComments(
+      File('ios/Runner/Runner.entitlements').readAsStringSync(),
+    );
+    expect(
+      RegExp(
+        r'<key>aps-environment</key>\s*<string>(development|production)</string>',
+      ).hasMatch(entitlements),
+      isTrue,
+    );
+    // Sign in with Apple stays beside it.
+    expect(entitlements, contains('com.apple.developer.applesignin'));
+    final plist = withoutXmlComments(
+      File('ios/Runner/Info.plist').readAsStringSync(),
+    );
+    expect(
+      RegExp(
+        r'<key>UIBackgroundModes</key>\s*<array>[^\]]*?<string>remote-notification</string>',
+        dotAll: true,
+      ).hasMatch(plist),
+      isTrue,
+    );
+    // Every build setting that signs the app points at that file.
+    final project = File(
+      'ios/Runner.xcodeproj/project.pbxproj',
+    ).readAsStringSync();
+    expect(
+      'CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;'
+          .allMatches(project)
+          .length,
+      3,
+      reason: 'Debug, Release and Profile',
+    );
+  });
 }

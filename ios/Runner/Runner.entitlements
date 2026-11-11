@@ -8,5 +8,12 @@
 	<array>
 		<string>Default</string>
 	</array>
+	<!-- Push notifications. "development" is what Xcode itself writes when
+	     the capability is added; a build sent to the App Store is signed
+	     with "production" in its place. Also needs Push Notifications
+	     switched on for the app's id in Apple Developer, and an APNs key
+	     uploaded to Firebase (see the before-release list). -->
+	<key>aps-environment</key>
+	<string>development</string>
 </dict>
 </plist>
