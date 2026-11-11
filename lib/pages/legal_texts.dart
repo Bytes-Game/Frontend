@@ -455,7 +455,8 @@ const communityGuidelines = LegalDocument(
       'On a battle, More (⋯) also has "Doesn\'t match the challenge", for a '
           'video that has nothing to do with what the challenge asks.',
       'To stop someone reaching you, block them from their profile. If '
-          'someone is in danger right now, call 112.',
+          'someone is in immediate danger, contact your local emergency '
+          'services.',
       'For anything else, use Settings → Report a problem, or write to '
           '$_officer at $_grievance.',
     ]),

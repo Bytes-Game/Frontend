@@ -179,21 +179,6 @@ class _ReportSheetState extends State<ReportSheet> {
                     onTap: () => setState(() => _reason = code),
                   )
               else ...[
-                if (_urgentHelp(reason) case final help?)
-                  Container(
-                    key: const ValueKey('report_urgent_help'),
-                    width: double.infinity,
-                    margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: scheme.errorContainer,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(
-                      help,
-                      style: TextStyle(color: scheme.onErrorContainer),
-                    ),
-                  ),
                 TextField(
                   key: const ValueKey('report_words'),
                   controller: _words,
@@ -247,16 +232,4 @@ class _ReportSheetState extends State<ReportSheet> {
   static String _labelOf(String code) => reportReasons
       .firstWhere((r) => r.$1 == code, orElse: () => (code, code))
       .$2;
-
-  /// Words for the reasons where somebody may be in danger right now: a
-  /// report is read later, and help should not wait for it.
-  static String? _urgentHelp(String code) => switch (code) {
-    'child_safety' =>
-      'If a child is in danger right now, call 112. You can also report '
-          'child sexual abuse material at cybercrime.gov.in.',
-    'self_harm' =>
-      'If you or someone you know may be in danger right now, call 112. '
-          'Tele-MANAS (14416) is free, any time, in many languages.',
-    _ => null,
-  };
 }

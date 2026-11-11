@@ -267,28 +267,37 @@ void main() {
       }
     });
 
-    testWidgets('where somebody may be in danger now, says where to get help '
-        'before the report is read', (t) async {
+    testWidgets('shows no helpline numbers, whatever the reason; every '
+        'reason goes on to a few words and Send', (t) async {
       await show(t, opener(ReportTarget.video, '1'));
       await t.tap(find.byKey(const ValueKey('open')));
       await settle(t);
-      await t.tap(find.byKey(const ValueKey('report_reason_child_safety')));
-      await settle(t);
-      expect(find.byKey(const ValueKey('report_urgent_help')), findsOneWidget);
-      expect(find.textContaining('112'), findsOneWidget);
-
-      await t.tap(find.byKey(const ValueKey('report_back')));
-      await settle(t);
-      await t.tap(find.byKey(const ValueKey('report_reason_self_harm')));
-      await settle(t);
-      expect(find.textContaining('14416'), findsOneWidget);
-
-      await t.tap(find.byKey(const ValueKey('report_back')));
-      await settle(t);
-      await t.tap(find.byKey(const ValueKey('report_reason_spam')));
-      await settle(t);
-      expect(find.byKey(const ValueKey('report_urgent_help')), findsNothing);
-      expect(find.byKey(const ValueKey('report_send')), findsOneWidget);
+      for (final (code, _) in reportReasons) {
+        await t.tap(find.byKey(ValueKey('report_reason_$code')));
+        await settle(t);
+        expect(
+          find.byKey(const ValueKey('report_send')),
+          findsOneWidget,
+          reason: code,
+        );
+        expect(find.byKey(const ValueKey('report_words')), findsOneWidget);
+        // A phone number is a run of three or more digits. The only one
+        // allowed on the sheet is the letter counter's "0/1000".
+        final texts = t
+            .widgetList<Text>(
+              find.descendant(
+                of: find.byKey(const ValueKey('report_sheet')),
+                matching: find.byType(Text),
+              ),
+            )
+            .map((w) => w.data ?? w.textSpan?.toPlainText() ?? '')
+            .where((s) => s != '0/1000');
+        for (final s in texts) {
+          expect(RegExp(r'\d{3,}').hasMatch(s), isFalse, reason: s);
+        }
+        await t.tap(find.byKey(const ValueKey('report_back')));
+        await settle(t);
+      }
     });
   });
 
