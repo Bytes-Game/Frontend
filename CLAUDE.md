@@ -132,9 +132,12 @@ the day it is added.
 
 ### B. Settings on Render (the server)
 
-5. **Email, for "Forgot password?".** Render's free plan blocks the ports
-   ordinary email goes out on (25, 465 and 587), so on it Gmail and every
-   other SMTP service simply never answer. A phone log on 7 November
+5. **Email, for "Forgot password?" and for parents.** Two things need the
+   server to send email: the code for a forgotten password, and the link
+   a parent gets when somebody under 18 signs up (item 26). Without
+   email, nobody under 18 can join at all. Render's free plan blocks the
+   ports ordinary email goes out on (25, 465 and 587), so on it Gmail and
+   every other SMTP service simply never answer. A phone log on 7 November
    showed exactly that: Gmail set up right, and the reset code failing
    after ten seconds. So:
    - **on the free plan, Resend** (resend.com, free for 100 emails a day).
@@ -175,13 +178,18 @@ the day it is added.
      free hours cover one server awake all month;
    - or a paid Render plan, which never sleeps. Then delete `keepalive.yml`
      and the monitor.
-9b. **`TEST_SERVER` stays off on the live server.** It allows the "wipe
-    everything" button and lets the ten demo accounts (`player1`/`pass1`
-    and so on, whose passwords are in the public code) sign in. Without it,
-    each start gives those accounts random passwords and signs them out.
-    Set `TEST_SERVER=true` only on a separate server for testing. The App
-    Store and Play reviewers need a sign-in to look around: make them a
-    normal account with its own password, never a demo one.
+9b. **A sign-in for the store reviewers.** The App Store and Play
+    reviewers need a sign-in to look around. Make them a normal account,
+    with its own password, through the app's own sign-up, and give it an
+    adult's date of birth so no parent is asked. There are no demo
+    accounts any more: the first start of the new server deletes the old
+    ones (`player1` and the rest) and everything they posted, and there is
+    no "wipe everything" button and no `TEST_SERVER` setting. If
+    `TEST_SERVER` is still set on Render, delete it; it does nothing.
+9c. **Optional: `PUBLIC_BASE_URL`.** The address put in the links that are
+    emailed to parents. On Render nothing needs setting: Render tells the
+    server its own address. Once flexete.com points at the server (item
+    18), set `PUBLIC_BASE_URL=https://flexete.com` so those links use it.
 
 ### C. Google and Apple accounts
 
@@ -207,18 +215,28 @@ the day it is added.
       `APPLE_SERVICE_ID` in the build and `APPLE_CLIENT_IDS` on Render.
     - The App Store requires Sign in with Apple on iPhone when Google
       sign-in is offered, so iPhone builds with Google need Apple too.
-12. **iPhone push notifications.** In Xcode, Signing & Capabilities: add
-    Push Notifications (the app has no permission for them yet), and upload
-    an APNs key to Firebase (Project settings → Cloud Messaging). Without
-    both, iPhones get no notifications.
+12. **iPhone push notifications.** The project's half is done: the app
+    asks for them and can be woken by one. Three steps are left, in three
+    accounts:
+    - Firebase: add an iOS app to the same project, with the iPhone app
+      id from item 1. It gives two values for the build (item 13):
+      `FIREBASE_IOS_APP_ID` and `FIREBASE_IOS_API_KEY`.
+    - Apple Developer: switch on Push Notifications for the app id, and
+      make an APNs key (Keys → +, tick Apple Push Notifications service).
+    - Firebase again: upload that key (Project settings → Cloud Messaging
+      → Apple app configuration), with its Key ID and your Team ID.
+    Nothing in the project needs changing for the App Store: Xcode
+    switches notifications from "development" to the live setting itself
+    when it archives the app with automatic signing.
+    Without all three steps, iPhones get no notifications.
 
 ### D. Build settings
 
 13. **Build with the real settings.** The release build needs these passed
     as `--dart-define`s:
-    - `FIREBASE_API_KEY`, `FIREBASE_APP_ID`, `FIREBASE_IOS_APP_ID`,
-      `FIREBASE_PROJECT_ID`, `FIREBASE_SENDER_ID` (or push notifications are
-      off);
+    - `FIREBASE_API_KEY`, `FIREBASE_APP_ID`, `FIREBASE_PROJECT_ID`,
+      `FIREBASE_SENDER_ID`, and on iPhone `FIREBASE_IOS_APP_ID` and
+      `FIREBASE_IOS_API_KEY` (or push notifications are off);
     - `SENTRY_DSN` (or crash reports go nowhere);
     - `GOOGLE_SERVER_CLIENT_ID`, and on iPhone `GOOGLE_IOS_CLIENT_ID` (or no
       Google button);
@@ -283,11 +301,14 @@ shared links and everything below stop working.
       `media.flexete.com`.
     - On Render: set `R2_PUBLIC_BASE_URL=https://media.flexete.com`. The
       server hands it to the video workers with every job. If the GitHub
-      secret of the same name is set (hls-worker, media-import), make it
-      match or delete it.
+      secret of the same name is set (hls-worker), make it match or delete
+      it.
     - New videos then load from Cloudflare's cache near each viewer. Old
       videos keep their old address, which still works; moving them over
-      needs a small server change, so ask.
+      needs a small server change, so ask. Checked on 12 November: the
+      live server still hands out the `pub-….r2.dev` address, so no video
+      is cached yet. Do this before launch and every video ever posted is
+      on the fast address from the start.
 
 ### G. Running it once people use it
 
@@ -314,11 +335,17 @@ shared links and everything below stop working.
       support@flexete.com.
     - Content rating questionnaire: people share videos and talk to each
       other; content is moderated and can be reported.
-    - Target audience: 13 and over. The Terms already say 13+.
+    - Target audience: 13 and over. The Terms say 13+, 16+ in Australia,
+      Brazil, Indonesia and Malaysia, and a parent's permission under 18.
+    - Countries: choose where the app is offered (Play Console →
+      Production → Countries/regions). Start with India only (item 27).
     - Photo and video permissions: the app reads the phone's photos and
       videos to pick one to post (its own gallery screen), so it needs the
       declaration for READ_MEDIA_IMAGES / READ_MEDIA_VIDEO.
     - App access: the reviewers' sign-in from item 9b.
+    - Data safety, added on 12 November: the app also uses the country
+      the phone is in (approximate location: country only), and for
+      people under 18 keeps a parent's email, name and year of birth.
     App Store Connect asks the same in App Privacy, and for an age rating.
 22. **Make both GitHub repositories private.** Both are public today:
     anyone can read the server's code and the app's. No password or
@@ -349,6 +376,33 @@ shared links and everything below stop working.
     key's SHA-1 (item 2); API restrictions: only the Firebase APIs the app
     uses (Firebase Cloud Messaging and Firebase Installations). Do the
     same for the iPhone key with the iPhone id.
+
+26. **Parents' permission: what is built, and what is not.** Somebody
+    under 18 gets no account until a parent or guardian opens an emailed
+    link and agrees; the parent can close the account at any time with a
+    second link. This proves that an adult with their own email address
+    said yes. It does not check an identity document. India's new data
+    protection rules, expected to apply from about May 2027, ask for a
+    stronger check for under-18s (for example through DigiLocker), and
+    also forbid tracking what under-18s do, which may cover choosing
+    videos from what they watch. Both are legal decisions: ask a lawyer
+    before May 2027. The simple safe choices then are to make Flexete 18+
+    in India, or to pay for an identity check and switch off the
+    personal feed for under-18s. Either can be built when asked.
+27. **Launch in India first.** Each country has its own rules for apps
+    where people post, and they change often. The code holds everybody to
+    one strict rule (13 to join, 16 in Australia, Brazil, Indonesia and
+    Malaysia, a parent under 18), and the documents have a part for each
+    region. That is care, not a lawyer's sign-off. Europe and the United
+    Kingdom also expect a company outside them to name a representative
+    there, which costs money. So offer the app in India only at first
+    (item 21), and ask before opening another country: its age rule goes
+    in the server's `age_rules.go` and in the documents the same day.
+28. **Check the country is seen.** After the server is deployed, open
+    `https://<the server>/signup/rules` in a browser. It should show your
+    country and `"source":"network"`. If it shows `"source":"device"` or
+    no country, the host is not passing the country on: say so, and it
+    will be looked at.
 
 Not on this list on purpose: the admin password. The owner has said they
 will change it themselves and does not want reminding.

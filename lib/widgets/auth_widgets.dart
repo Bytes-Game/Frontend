@@ -587,6 +587,9 @@ String signInProblem(AuthResult result) {
       return result.message ?? "That way of signing in isn't set up yet.";
     case AuthFailure.expired:
       return result.message ?? 'That took too long. Please start again.';
+    case AuthFailure.parentConsentPending:
+      return result.message ??
+          'Waiting for your parent or guardian to say yes.';
   }
 }
 

@@ -95,13 +95,15 @@ class AuthProvider with ChangeNotifier {
       required String username,
       required String fullName,
       required String birthDate,
-      required bool acceptTerms}) async {
+      required bool acceptTerms,
+      String parentEmail = ''}) async {
     final result = await ApiService.finishSocialSignup(
       signupTicket: signupTicket,
       username: username,
       fullName: fullName,
       birthDate: birthDate,
       acceptTerms: acceptTerms,
+      parentEmail: parentEmail,
     );
     // ignore: use_build_context_synchronously
     final failed = await _finish(context, result);
@@ -177,6 +179,14 @@ class AuthProvider with ChangeNotifier {
     ApiService.authToken = token;
     await SessionStore.save(token, userJson);
     dp.setUser(UserModel.fromJson(userJson));
+  }
+
+  /// The first sign-in to an account a parent has just agreed to: it gets
+  /// the welcome steps, as an account made on the spot does (see
+  /// ParentConsentScreen).
+  void welcomeNewAccount() {
+    _needsOnboarding = true;
+    notifyListeners();
   }
 
   /// Marks the interest-picker step done (completed OR skipped).

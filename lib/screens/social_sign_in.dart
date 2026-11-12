@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'package:myapp/providers/auth_provider.dart';
+import 'package:myapp/screens/parent_consent_screen.dart';
 import 'package:myapp/screens/signup_screen.dart';
 import 'package:myapp/screens/two_step_signin_screen.dart';
 import 'package:myapp/services/api_service.dart';
@@ -53,9 +54,45 @@ Future<String?> continueWith(
           builder: (_) => FinishSocialSignupScreen(
               start: SocialSignupStart.fromAnswer(provider, why.extra!))));
       return null;
+    // A sign-up with this Google or Apple account is waiting for a
+    // parent: on to the page that waits with them.
+    case AuthFailure.parentConsentPending when why.extra != null:
+      await Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => ParentConsentScreen(
+                wait: ParentWait.fromAnswer(why.extra!),
+                onCheck: (ctx) => signInAgainWith(ctx, provider),
+              )));
+      return null;
     default:
       return signInProblem(why);
   }
+}
+
+/// Signs in with [provider] once more, for the page that waits for a
+/// parent: the phone's Google or Apple sheet, then the server. Null when
+/// signed in. Closing the sheet, or the sheet failing, answers "still
+/// waiting" in the server's shape with nothing in it, so the page stays as
+/// it is.
+Future<AuthResult?> signInAgainWith(
+    BuildContext context, SocialProvider provider) async {
+  final SocialCredential? credential;
+  try {
+    credential = await SocialAuth.instance.signIn(provider);
+  } on SocialAuthFailure catch (e) {
+    return AuthResult.failed(AuthFailure.unavailable, message: e.message);
+  } catch (e) {
+    debugPrint('[signin] ${provider.label} sign-in failed: $e');
+    return AuthResult.failed(AuthFailure.unavailable,
+        message: "Couldn't sign in with ${provider.label}. Please try "
+            'again.');
+  }
+  if (credential == null) {
+    return const AuthResult.failed(AuthFailure.unavailable,
+        message: 'Sign in to check whether they have answered.');
+  }
+  if (!context.mounted) return const AuthResult.failed(AuthFailure.unreachable);
+  return Provider.of<AuthProvider>(context, listen: false)
+      .signInWith(context, provider, credential);
 }
 
 /// "Continue with Google" and "Continue with Apple", for whichever this
