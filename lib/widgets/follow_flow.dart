@@ -12,6 +12,8 @@ import 'package:myapp/services/api_service.dart';
 /// follow, and the next tap on Follow put it back. The server now refuses a
 /// follow across a block, and this turns its answer into something to do:
 ///
+///   * a private account — it is asked, and a note says so. The button
+///     reads "Requested" until its owner answers;
 ///   * you blocked them — a sheet says so and offers "Unblock and follow";
 ///   * they can't be followed by you — a short note, never saying why;
 ///   * anything else — the button flips back, as it always did.
@@ -24,6 +26,9 @@ Future<bool> followFromScreen(BuildContext context, UserModel target) async {
   switch (outcome) {
     case FollowOutcome.followed:
       return true;
+    case FollowOutcome.requested:
+      _say(context, 'Follow request sent to @${target.username}.');
+      return false;
     case FollowOutcome.youBlocked:
       return _offerUnblock(context, dp, target);
     case FollowOutcome.unavailable:

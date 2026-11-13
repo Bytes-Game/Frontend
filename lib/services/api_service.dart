@@ -1485,7 +1485,14 @@ class ApiService {
       var reason = '';
       try {
         final body = json.decode(res.body);
-        if (body is Map) reason = '${body['reason'] ?? ''}';
+        if (body is Map) {
+          reason = '${body['reason'] ?? ''}';
+          // A private account: nothing is followed yet. Its owner has
+          // been asked, and says yes or no.
+          if (res.statusCode == 202 && body['requested'] == true) {
+            return FollowOutcome.requested;
+          }
+        }
       } catch (_) {
         // Not JSON: an older server. Treated as any other failure below.
       }
@@ -1521,6 +1528,48 @@ class ApiService {
       return res.statusCode == 200;
     } catch (e) {
       _unreadable('unfollowUser', e);
+      return false;
+    }
+  }
+
+  /// GET /api/v1/follow-requests — who is asking to follow you, newest
+  /// first. Only a private account gets any. Null when the server could
+  /// not be asked, which is not the same as nobody asking.
+  static Future<List<UserModel>?> followRequests() async {
+    try {
+      final res = await _authHttp.get(Uri.parse('$_base/api/v1/follow-requests'));
+      if (res.statusCode != 200) {
+        _unreadable('followRequests', 'status ${res.statusCode}');
+        return null;
+      }
+      final said = json.decode(res.body) as Map<String, dynamic>;
+      final list = (said['requests'] as List<dynamic>?) ?? const [];
+      return [
+        for (final r in list.whereType<Map<String, dynamic>>())
+          UserModel.fromJson(r),
+      ];
+    } catch (e) {
+      _unreadable('followRequests', e);
+      return null;
+    }
+  }
+
+  /// POST /api/v1/follow-requests/answer — say yes or no to somebody who
+  /// asked to follow you. True when it was answered; false when the server
+  /// refused or could not be reached (a request that is no longer waiting
+  /// counts as answered: there is nothing left to do).
+  static Future<bool> answerFollowRequest(String requesterId,
+      {required bool accept}) async {
+    try {
+      final res = await _authHttp.post(
+        Uri.parse('$_base/api/v1/follow-requests/answer'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'requesterId': requesterId, 'accept': accept}),
+      );
+      if (res.statusCode == 200) return true;
+      return res.statusCode == 404 && _answerOf(res)['gone'] == true;
+    } catch (e) {
+      _unreadable('answerFollowRequest', e);
       return false;
     }
   }
@@ -3843,6 +3892,10 @@ class ApiService {
 /// How a tap on Follow went.
 enum FollowOutcome {
   followed,
+
+  /// A private account: they have been asked, and nothing is followed
+  /// until they say yes. The button shows "Requested".
+  requested,
 
   /// You blocked them. Unblock first; the app offers to.
   youBlocked,

@@ -12,6 +12,18 @@
 	<string>Shows your photos and videos so you can post one, choose photos to send in your chats, and pick your profile picture.</string>
 	<key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>
 	<true/>
+	<!-- Videos play through a small server inside the app itself
+	     (LocalMediaServer), at an http address on the phone: it hands the
+	     player the part of a video already downloaded. An iPhone allows
+	     plain http only where the app says so. This says so for addresses
+	     on the phone and its own network, and nothing else: everything
+	     that leaves the phone stays https. Android says the same in
+	     res/xml/network_security_config.xml. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

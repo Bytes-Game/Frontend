@@ -1353,6 +1353,7 @@ class _SearchPageState extends State<SearchPage>
               const SizedBox(width: 8),
               _FollowButton(
                 following: following,
+                requested: dp.requested.contains(user.id),
                 onTap: () => _toggleFollow(dp, user, position),
               ),
             ],
@@ -1364,7 +1365,8 @@ class _SearchPageState extends State<SearchPage>
 
   Future<void> _toggleFollow(
       DataProvider dp, UserModel user, int position) async {
-    final becameFollowing = !dp.following.contains(user.id);
+    // "Requested" is undone by a tap, as "Following" is.
+    final becameFollowing = !dp.followsOrAsked(user.id);
     EventTracker.instance.trackFollowToggle(
       targetUserId: user.id,
       becameFollowing: becameFollowing,
@@ -1535,14 +1537,29 @@ class _HistoryRow extends StatelessWidget {
 
 class _FollowButton extends StatelessWidget {
   final bool following;
+
+  /// Asked to follow this private account; not answered yet.
+  final bool requested;
   final VoidCallback onTap;
 
-  const _FollowButton({required this.following, required this.onTap});
+  const _FollowButton({
+    required this.following,
+    required this.requested,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final quiet = following || requested;
     return Pressable(
+      key: ValueKey(
+        following
+            ? 'search_following'
+            : requested
+                ? 'search_requested'
+                : 'search_follow',
+      ),
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
@@ -1550,15 +1567,19 @@ class _FollowButton extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: following ? quietFill(context) : kAccent,
+          color: quiet ? quietFill(context) : kAccent,
           borderRadius: BorderRadius.circular(AppTheme.radiusSm),
         ),
         child: Text(
-          following ? 'Following' : 'Follow',
+          following
+              ? 'Following'
+              : requested
+                  ? 'Requested'
+                  : 'Follow',
           style: TextStyle(
             fontSize: 13.5,
             fontWeight: FontWeight.w600,
-            color: following ? cs.onSurface : Colors.white,
+            color: quiet ? cs.onSurface : Colors.white,
           ),
         ),
       ),

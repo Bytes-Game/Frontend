@@ -537,6 +537,10 @@ class _ProfilePageState extends State<ProfilePage>
       _fresh = u;
       _followedWhenRead = dp.following.contains(u.id);
     });
+    // Whether a request to follow them is still waiting, as the server
+    // has it: the button says "Requested" after the app was closed, and
+    // stops saying it once they have answered.
+    dp.noteFollowRequest(u.id, waiting: u.followRequested);
   }
 
   // ── Build ──────────────────────────────────────────────────────────
@@ -564,6 +568,8 @@ class _ProfilePageState extends State<ProfilePage>
       );
     }
     final isFollowing = dp.following.contains(widget.user.id);
+    // Asked to follow a private account, and not answered yet.
+    final requested = !isFollowing && dp.requested.contains(widget.user.id);
     // Pushed as its own page, the arena runs up under the status bar and
     // leaves room for it; inside the main tabs a SafeArea already has.
     final topInset =
@@ -577,8 +583,11 @@ class _ProfilePageState extends State<ProfilePage>
 
     // A private account shows its header and stats to everyone, and its
     // videos and battles only to the people it lets follow it.
-    final locked =
-        !isOwn && widget.user.visibility == 'friends' && !isFollowing;
+    // Private or not as the server has it now, when that has been read:
+    // the copy the page was opened from can be from before they changed it.
+    final locked = !isOwn &&
+        (_fresh ?? widget.user).visibility == 'friends' &&
+        !isFollowing;
 
     final body = NestedScrollView(
       headerSliverBuilder: (context, _) {
@@ -619,6 +628,7 @@ class _ProfilePageState extends State<ProfilePage>
                 user: widget.user,
                 isOwn: isOwn,
                 isFollowing: isFollowing,
+                requested: requested,
                 postsCount: _myChallenges.length,
                 // Yours: the people you follow right now. Theirs: the
                 // server's count, moved by one if you have followed or
@@ -637,7 +647,9 @@ class _ProfilePageState extends State<ProfilePage>
                 onTapFollowers: _openFollowers,
                 onTapFollowing: _openFollowing,
                 onFollowToggle: () {
-                  if (isFollowing) {
+                  // "Requested" takes the request back, the way
+                  // "Following" unfollows.
+                  if (isFollowing || requested) {
                     EventTracker.instance.trackFollowToggle(
                       targetUserId: widget.user.id,
                       becameFollowing: false,
@@ -650,7 +662,15 @@ class _ProfilePageState extends State<ProfilePage>
                       becameFollowing: true,
                       fromPage: pageName,
                     );
-                    followFromScreen(context, widget.user);
+                    // Private or not as the server has it now, so the
+                    // button goes straight to "Requested" for a private
+                    // account instead of through "Following".
+                    followFromScreen(
+                      context,
+                      widget.user.copyWith(
+                        visibility: (_fresh ?? widget.user).visibility,
+                      ),
+                    );
                   }
                 },
                 onMessage: () {
@@ -723,7 +743,10 @@ class _ProfilePageState extends State<ProfilePage>
         ];
       },
       body: locked
-          ? _LockedProfile(username: widget.user.username)
+          ? _LockedProfile(
+              username: widget.user.username,
+              requested: requested,
+            )
           : TabBarView(
         controller: _tabs,
         children: [
@@ -918,7 +941,7 @@ class _ProfilePageState extends State<ProfilePage>
     // the server tore down both directions, so we drop the target
     // from `following`. We don't have a `followers` list locally to
     // mutate.
-    if (dp.following.contains(target.id)) {
+    if (dp.followsOrAsked(target.id)) {
       await dp.unfollowUser(target);
     }
     if (!mounted) return;
@@ -1012,6 +1035,9 @@ class _ProfileHeader extends StatelessWidget {
   final UserModel user;
   final bool isOwn;
   final bool isFollowing;
+
+  /// Asked to follow this private account; not answered yet.
+  final bool requested;
   final int postsCount;
   final int followers;
   final int following;
@@ -1026,6 +1052,7 @@ class _ProfileHeader extends StatelessWidget {
     required this.user,
     required this.isOwn,
     required this.isFollowing,
+    required this.requested,
     required this.postsCount,
     required this.followers,
     required this.following,
@@ -1076,6 +1103,7 @@ class _ProfileHeader extends StatelessWidget {
             const SizedBox(height: AppTheme.space12),
             _OtherActionRow(
               isFollowing: isFollowing,
+              requested: requested,
               onFollowToggle: onFollowToggle,
               onMessage: onMessage,
               onChallenge: onChallenge,
@@ -1130,7 +1158,10 @@ class _StatPill extends StatelessWidget {
 /// What a private account shows to someone who does not follow it.
 class _LockedProfile extends StatelessWidget {
   final String username;
-  const _LockedProfile({required this.username});
+
+  /// You have asked to follow them and they have not answered yet.
+  final bool requested;
+  const _LockedProfile({required this.username, required this.requested});
 
   @override
   Widget build(BuildContext context) {
@@ -1140,8 +1171,13 @@ class _LockedProfile extends StatelessWidget {
           hasScrollBody: false,
           child: ArenaEmptyState(
             icon: Icons.lock_outline_rounded,
+            key: ValueKey(requested ? 'locked_requested' : 'locked'),
             title: 'This account is private',
-            subtitle: 'Follow @$username to see their videos and battles.',
+            subtitle: requested
+                ? 'You asked to follow @$username. You will see their '
+                    'videos and battles when they accept.'
+                : 'Follow @$username to see their videos and battles. '
+                    'They will be asked first.',
           ),
         ),
       ],
@@ -1153,6 +1189,10 @@ class _LockedProfile extends StatelessWidget {
 /// it, so the row says three things without three labels.
 class _OtherActionRow extends StatelessWidget {
   final bool isFollowing;
+
+  /// Asked to follow this private account; not answered yet. The button
+  /// says "Requested", and tapping it takes the request back.
+  final bool requested;
   final VoidCallback onFollowToggle;
   final VoidCallback onMessage;
 
@@ -1161,6 +1201,7 @@ class _OtherActionRow extends StatelessWidget {
 
   const _OtherActionRow({
     required this.isFollowing,
+    required this.requested,
     required this.onFollowToggle,
     required this.onMessage,
     required this.onChallenge,
@@ -1174,9 +1215,9 @@ class _OtherActionRow extends StatelessWidget {
         Expanded(
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 180),
-            child: isFollowing
+            child: isFollowing || requested
                 ? Pressable(
-                    key: const ValueKey('following'),
+                    key: ValueKey(isFollowing ? 'following' : 'requested'),
                     onTap: onFollowToggle,
                     child: Container(
                       height: 44,
@@ -1189,11 +1230,15 @@ class _OtherActionRow extends StatelessWidget {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.check_rounded,
-                              size: 18, color: cs.onSurface),
+                          Icon(
+                              isFollowing
+                                  ? Icons.check_rounded
+                                  : Icons.schedule_rounded,
+                              size: 18,
+                              color: cs.onSurface),
                           const SizedBox(width: 6),
                           Text(
-                            'Following',
+                            isFollowing ? 'Following' : 'Requested',
                             style: TextStyle(
                               fontWeight: FontWeight.w600,
                               fontSize: 15,

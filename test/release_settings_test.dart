@@ -37,6 +37,30 @@ void main() {
     );
   });
 
+  test('the iPhone app may play videos from its own server on the phone, '
+      'and nothing else is allowed over plain http', () {
+    final plist = withoutXmlComments(
+      File('ios/Runner/Info.plist').readAsStringSync(),
+    );
+    // The video player is handed an http address on the phone itself
+    // (LocalMediaServer). Without this an iPhone may refuse to load it.
+    expect(
+      RegExp(
+        r'<key>NSAppTransportSecurity</key>\s*<dict>\s*'
+        r'<key>NSAllowsLocalNetworking</key>\s*<true/>\s*</dict>',
+      ).hasMatch(plist),
+      isTrue,
+    );
+    // The switch that would allow plain http to anywhere stays off.
+    expect(plist.contains('NSAllowsArbitraryLoads'), isFalse);
+    // And the app does run that server on every kind of phone: if it were
+    // Android-only one day, this setting could go.
+    final cache = File(
+      'lib/services/video_cache_service.dart',
+    ).readAsStringSync();
+    expect(cache.contains('LocalMediaServer.instance.start()'), isTrue);
+  });
+
   test('the iPhone app asks for push notifications, and may be woken by '
       'one', () {
     final entitlements = withoutXmlComments(

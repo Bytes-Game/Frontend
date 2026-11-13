@@ -227,10 +227,13 @@ void main() {
       'lib/pages/search_page.dart',
       'lib/widgets/smart_reels_feed.dart',
     ];
+    // The call, however its lines are broken: "followFromScreen(context,"
+    // on one line, or with the page's context on the next.
+    final call = RegExp(r'followFromScreen\(\s*context,');
     for (final s in screens) {
       expect(
-        code(s),
-        contains('followFromScreen(context,'),
+        call.hasMatch(code(s)),
+        isTrue,
         reason: '$s has a Follow button that does not offer to unblock',
       );
     }

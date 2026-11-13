@@ -162,7 +162,11 @@ the day it is added.
      on Android comes back to the app through it).
    Without them, those buttons say "isn't set up yet".
 7. **Deploy the server first.** Before, or together with, the app build
-   that needs it.
+   that needs it. This matters more than it used to: the app now sends
+   its sign-in to the live connection in a new way, which only the new
+   server understands. A new app talking to the old server still signs in
+   and plays videos, but messages, notifications and calls do not arrive
+   as they happen. (An older app keeps working with the new server.)
 8. **After the store listing exists:** set `APP_DOWNLOAD_URL` to the store
    link, so the shared profile and video web pages show a "Get Flexete"
    button.
@@ -176,8 +180,16 @@ the day it is added.
    - free: an UptimeRobot monitor (type HTTP(s), address
      `https://gobackend-9nd8.onrender.com/health`, every 5 minutes). Render's
      free hours cover one server awake all month;
-   - or a paid Render plan, which never sleeps. Then delete `keepalive.yml`
-     and the monitor.
+   - or a paid Render plan, which never sleeps ($7 a month, about ₹660:
+     item 29). Then delete `keepalive.yml` and the monitor.
+9a. **Check the database is not on a 30-day clock.** Render → the
+    database (it is listed apart from the server). If its plan says
+    "Free": Render switches a free database off 30 days after it was
+    made, and 14 days after that deletes it with everything in it. A free
+    one has no backups either. Before real people join, change its plan
+    to the smallest paid one ($6 a month, about ₹565): the data stays. If
+    the database is with somebody else (Neon, Supabase), read their free
+    limits the same way. Read on Render's own page on 13 November 2026.
 9b. **A sign-in for the store reviewers.** The App Store and Play
     reviewers need a sign-in to look around. Make them a normal account,
     with its own password, through the app's own sign-up, and give it an
@@ -190,6 +202,12 @@ the day it is added.
     emailed to parents. On Render nothing needs setting: Render tells the
     server its own address. Once flexete.com points at the server (item
     18), set `PUBLIC_BASE_URL=https://flexete.com` so those links use it.
+9d. **If the server ever leaves Render.** On Render nothing needs
+    setting. On another host, read `TRUST_CF_CONNECTING_IP` in the
+    server's README first. The limits on sign-in guesses, new accounts
+    and emails to parents count per caller's address, and how the server
+    learns that address differs from host to host. Set wrong, anybody can
+    dodge those limits.
 
 ### C. Google and Apple accounts
 
@@ -229,6 +247,14 @@ the day it is added.
     switches notifications from "development" to the live setting itself
     when it archives the app with automatic signing.
     Without all three steps, iPhones get no notifications.
+12b. **The iPhone app has not been built or run in this work.** That
+     needs a Mac, and there was none: everything for iPhone here was
+     written without trying it. Expect a round of fixes at the first
+     build. Check these first, and send the log if one fails: a video
+     plays (the app plays videos through a small server of its own on
+     the phone, which iPhones only allow because `Info.plist` says so);
+     a notification arrives; Google and Apple sign-in come back to the
+     app.
 
 ### D. Build settings
 
@@ -403,6 +429,46 @@ shared links and everything below stop working.
     country and `"source":"network"`. If it shows `"source":"device"` or
     no country, the host is not passing the country on: say so, and it
     will be looked at.
+
+### H. What it costs each month
+
+The owner's limit is ₹2,000 a month for everything. The prices below
+were read on each company's own page on 13 November 2026, at ₹94 to the
+dollar. Read them again before relying on them: they change.
+
+29. **The plan that fits.**
+    - Render, the server, smallest paid plan: $7 (about ₹660). It never
+      sleeps (item 9), and it may send email the ordinary way (item 5).
+    - Render, the database, smallest paid plan: $6 (about ₹565). No
+      30-day clock (item 9a).
+    - Free at this size: Cloudflare R2 for the videos (the first 10 GB;
+      after that about ₹1.40 for each GB kept for a month; people
+      watching costs nothing, however many), Cloudflare for the web
+      address and the three inboxes, Resend for email (100 a day),
+      Firebase for notifications, Sentry for crash reports, and GitHub
+      for the video worker while the repositories are public (item 22).
+    - Together about ₹1,225 a month, plus what the bank adds for paying
+      in dollars. The rest is room for videos past 10 GB.
+    - Render's free allowance for data sent by the server is 5 GB a
+      month, then $0.15 for each GB. Videos do not count: they come from
+      Cloudflare.
+    - Once only: the Google Play developer account, $25 (about ₹2,350).
+      Once a year: the web address, about $10 (₹950).
+    - Not in the plan: the Apple developer account, $99 a year (about
+      ₹9,300, or ₹775 a month). With the two Render plans that is the
+      whole ₹2,000 and leaves nothing for videos. Android first.
+30. **A spending alert, so a flood of uploads is noticed.** Videos go
+    from the phone straight to Cloudflare. Each person is limited in how
+    many uploads they can start, but the server does not yet limit how
+    big one upload is: that needs a change which could not be tried
+    against the real storage, and getting it wrong would stop every
+    upload. So somebody set on it could fill the storage and run up the
+    bill. Until that limit is built, have Cloudflare tell you: Manage
+    Account → Billing → Billable Usage → Create budget alert, at $1. An
+    email then comes the day the month's bill passes it, which is about
+    70 GB past the free 10. If it comes and you did not expect it, say
+    so: the account is suspended from the admin page and its files
+    removed. Ask for the size limit to be built once the release is out.
 
 Not on this list on purpose: the admin password. The owner has said they
 will change it themselves and does not want reminding.

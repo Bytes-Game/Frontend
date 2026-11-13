@@ -6,6 +6,7 @@ import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/models/notification_model.dart';
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/challenge_detail_page.dart';
+import 'package:myapp/pages/follow_requests_page.dart';
 import 'package:myapp/pages/profile_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
@@ -15,6 +16,10 @@ import 'package:myapp/widgets/arena_ui.dart';
 import 'package:myapp/widgets/follow_flow.dart';
 
 /// Your notifications: who followed you, who challenged you, who accepted.
+///
+/// A private account also sees who is asking to follow it: a row at the
+/// top opens the whole list, and each "wants to follow you" line has
+/// Accept and Decline under it while that person is still waiting.
 ///
 /// The list lives on the server now, so it has everything — not only what
 /// arrived while the app happened to be open, which is all it used to show.
@@ -48,7 +53,9 @@ class _NotificationsPageState extends State<NotificationsPage>
     EventTracker.instance.trackNotificationPanelOpen(
       unreadCount: dp.unreadNotifications,
     );
-    await dp.loadNotifications();
+    // Who is asking to follow you, alongside: it decides which "wants to
+    // follow you" lines still have an answer to give.
+    await Future.wait([dp.loadNotifications(), dp.loadFollowRequests()]);
     if (!mounted) return;
     setState(() {
       _loading = false;
@@ -62,7 +69,7 @@ class _NotificationsPageState extends State<NotificationsPage>
 
   Future<void> _refresh() async {
     final dp = Provider.of<DataProvider>(context, listen: false);
-    await dp.loadNotifications();
+    await Future.wait([dp.loadNotifications(), dp.loadFollowRequests()]);
     if (!mounted) return;
     setState(() {
       _newIds.addAll([
@@ -128,10 +135,11 @@ class _NotificationsPageState extends State<NotificationsPage>
         if (!_newIds.contains(_key(n))) n,
     ];
 
+    final asking = dp.followRequests.length;
     Widget body;
-    if (_loading && all.isEmpty) {
+    if (_loading && all.isEmpty && asking == 0) {
       body = const Center(child: CircularProgressIndicator(strokeWidth: 2));
-    } else if (all.isEmpty) {
+    } else if (all.isEmpty && asking == 0) {
       body = ListView(
         children: const [
           SizedBox(height: 80),
@@ -150,6 +158,15 @@ class _NotificationsPageState extends State<NotificationsPage>
       body = ListView(
         padding: const EdgeInsets.only(bottom: 24),
         children: [
+          // Everybody waiting for your answer, however far down the list
+          // their own line has gone.
+          if (asking > 0)
+            _RequestsRow(
+              count: asking,
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const FollowRequestsPage()),
+              ),
+            ),
           if (fresh.isNotEmpty) ...[
             const _Heading('New'),
             for (final n in fresh)
@@ -206,6 +223,15 @@ class _Heading extends StatelessWidget {
         icon: Icons.person_add_alt_1_rounded,
         color: AppTheme.primary,
       );
+    // Somebody asks to follow your private account.
+    case 'follow_request':
+      return (
+        icon: Icons.person_add_alt_1_rounded,
+        color: const Color(0xFFFF9F0A),
+      );
+    // A private account said yes to your request.
+    case 'follow_accepted':
+      return (icon: Icons.how_to_reg_rounded, color: const Color(0xFF30D158));
     case 'friend_challenge':
       return (icon: Icons.bolt_rounded, color: const Color(0xFFFF375F));
     case 'challenge_accepted':
@@ -355,6 +381,9 @@ class _NoteRow extends StatelessWidget {
                         color: quietText(context),
                       ),
                     ),
+                    if (note.type == 'follow_request' &&
+                        note.actorId.isNotEmpty)
+                      _AnswerRequest(note: note),
                   ],
                 ),
               ),
@@ -377,6 +406,85 @@ class _NoteRow extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// "Follow requests", with how many are waiting. Opens the whole list.
+class _RequestsRow extends StatelessWidget {
+  final int count;
+  final VoidCallback onTap;
+
+  const _RequestsRow({required this.count, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return InkWell(
+      key: const ValueKey('follow_requests_row'),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+        child: Row(
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: cs.primary.withValues(alpha: 0.14),
+              ),
+              child: Icon(
+                Icons.person_add_alt_1_rounded,
+                color: cs.primary,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Follow requests',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    count == 1
+                        ? '1 person is waiting for your answer'
+                        : '$count people are waiting for your answer',
+                    style: TextStyle(fontSize: 13, color: quietText(context)),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right_rounded, color: quietText(context)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Accept and Decline under a "wants to follow you" line, for as long as
+/// that person is still waiting. Once answered, or once they have taken
+/// the request back, the line is only a record and shows nothing.
+class _AnswerRequest extends StatelessWidget {
+  final NotificationModel note;
+
+  const _AnswerRequest({required this.note});
+
+  @override
+  Widget build(BuildContext context) {
+    final dp = Provider.of<DataProvider>(context);
+    for (final asker in dp.followRequests) {
+      if (asker.id != note.actorId) continue;
+      return Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: FollowRequestButtons(asker: asker),
+      );
+    }
+    return const SizedBox.shrink();
   }
 }
 
@@ -427,6 +535,8 @@ class _FollowBack extends StatelessWidget {
   Widget build(BuildContext context) {
     final dp = Provider.of<DataProvider>(context);
     final following = dp.following.contains(note.actorId);
+    // They are private and have been asked: not followed yet.
+    final requested = !following && dp.requested.contains(note.actorId);
     final target = UserModel(
       id: note.actorId,
       username: note.actorUsername,
@@ -437,9 +547,9 @@ class _FollowBack extends StatelessWidget {
     );
     return SizedBox(
       height: 32,
-      child: following
+      child: following || requested
           ? OutlinedButton(
-              key: const ValueKey('note_following'),
+              key: ValueKey(following ? 'note_following' : 'note_requested'),
               onPressed: () => dp.unfollowUser(target),
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -447,9 +557,12 @@ class _FollowBack extends StatelessWidget {
                   borderRadius: BorderRadius.circular(AppTheme.radiusMd),
                 ),
               ),
-              child: const Text(
-                'Following',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              child: Text(
+                following ? 'Following' : 'Requested',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             )
           : FilledButton(
