@@ -97,8 +97,10 @@ class _PrivacyPageState extends State<PrivacyPage>
           SettingsGroup(
             title: 'Account',
             footer: _private
-                ? 'Only your followers can see your videos and battles. '
-                    'Anyone can still see your name and picture.'
+                ? 'Only your followers can see your videos and battles, '
+                    'and you choose them: people ask to follow you, and '
+                    'you accept or decline in Notifications. Anyone can '
+                    'still see your name and picture.'
                 : 'Anyone can see your videos and battles.',
             children: [
               SettingsSwitchTile(

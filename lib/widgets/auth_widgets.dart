@@ -1,5 +1,8 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/config/constants.dart';
@@ -13,12 +16,51 @@ import 'package:myapp/services/api_service.dart';
 /// one product: the soft glow behind them, the logo, the big button, the
 /// strength bar under a new password, and the Terms and Privacy links.
 
-/// A second, softer blue glow low on the right. The page already
-/// glows blue from the top, in both modes (PageBackdrop).
-class AuthBackdrop extends StatelessWidget {
+/// Soft blue light behind the sign-in screens, drifting slowly, like an
+/// aurora. The page already glows blue from the top, in both modes
+/// (PageBackdrop); this adds three fainter glows that wander.
+///
+/// Only light moves. Nothing a person reads or taps does, and the glows
+/// stay as faint as the single still one that was here before, so words
+/// over them are as easy to read as they were.
+///
+/// A phone set to "reduce motion" gets the same glows, standing still.
+class AuthBackdrop extends StatefulWidget {
   final Widget child;
 
   const AuthBackdrop({super.key, required this.child});
+
+  /// How long the glows take to come back to where they started.
+  static const Duration round = Duration(seconds: 24);
+
+  @override
+  State<AuthBackdrop> createState() => _AuthBackdropState();
+}
+
+class _AuthBackdropState extends State<AuthBackdrop>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _drift = AnimationController(
+    vsync: this,
+    duration: AuthBackdrop.round,
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // The phone's own "reduce motion" setting: the glows stand still.
+    final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (still) {
+      _drift.stop();
+    } else if (!_drift.isAnimating) {
+      _drift.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _drift.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -28,23 +70,97 @@ class AuthBackdrop extends StatelessWidget {
       fit: StackFit.expand,
       children: [
         Positioned.fill(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                center: const Alignment(1.2, 1.1),
-                radius: 0.9,
-                colors: [
-                  AppTheme.primarySoft.withValues(alpha: dark ? 0.16 : 0.18),
-                  AppTheme.primarySoft.withValues(alpha: 0),
-                ],
-              ),
+          // A layer of its own: the light is painted again as it moves,
+          // and the form over it is not.
+          child: RepaintBoundary(
+            child: CustomPaint(
+              key: const ValueKey('auth_aurora'),
+              painter: AuroraPainter(drift: _drift, dark: dark),
             ),
           ),
         ),
-        child,
+        RepaintBoundary(child: widget.child),
       ],
     );
   }
+}
+
+/// One of the aurora's glows: where its middle is on the page (-1 to 1
+/// each way, as Alignment counts), how wide it is as a share of the page's
+/// shorter side, and how strong, from 0 to 1.
+typedef AuroraGlow = ({Alignment at, double radius, double strength});
+
+/// Paints the sign-in screens' drifting glows. See [AuthBackdrop].
+class AuroraPainter extends CustomPainter {
+  AuroraPainter({required this.drift, required this.dark})
+    : super(repaint: drift);
+
+  /// 0 to 1, once round.
+  final Animation<double> drift;
+  final bool dark;
+
+  /// The most any glow adds, at its middle. The same as the still glow
+  /// these replace: enough to see, never enough to dim the words.
+  static double peak(bool dark) => dark ? 0.16 : 0.18;
+
+  /// Where the glows are at [t] of the way round. Each wanders on its own
+  /// slow loop, and all three are back where they began at 1, so the
+  /// drift has no seam.
+  static List<AuroraGlow> glowsAt(double t) {
+    final a = t * 2 * math.pi;
+    return [
+      // Low on the right: the glow that used to stand still here.
+      (
+        at: Alignment(1.05 + 0.22 * math.cos(a), 1.0 + 0.16 * math.sin(a)),
+        radius: 0.9,
+        strength: 1.0,
+      ),
+      // Across from it, on the left, a little smaller and fainter.
+      (
+        at: Alignment(
+          -1.1 + 0.26 * math.sin(a + 1.3),
+          0.05 + 0.34 * math.cos(a + 0.4),
+        ),
+        radius: 0.7,
+        strength: 0.7,
+      ),
+      // High on the right, the faintest, twice round for every once.
+      (
+        at: Alignment(
+          0.75 + 0.24 * math.cos(2 * a + 2.1),
+          -0.72 + 0.14 * math.sin(2 * a),
+        ),
+        radius: 0.5,
+        strength: 0.5,
+      ),
+    ];
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final page = Offset.zero & size;
+    for (final glow in glowsAt(drift.value)) {
+      final middle = glow.at.alongSize(size);
+      final reach = glow.radius * size.shortestSide;
+      canvas.drawRect(
+        page,
+        Paint()
+          ..shader = RadialGradient(
+            colors: [
+              AppTheme.primarySoft.withValues(
+                alpha: peak(dark) * glow.strength,
+              ),
+              AppTheme.primarySoft.withValues(alpha: 0),
+            ],
+          ).createShader(Rect.fromCircle(center: middle, radius: reach)),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(AuroraPainter old) =>
+      old.dark != dark || old.drift != drift;
 }
 
 /// The logo, the app's name and one line under it.
@@ -123,7 +239,11 @@ class AuthPrimaryButton extends StatelessWidget {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(AppTheme.radiusLg),
           ),
-          textStyle: const TextStyle(
+          // The app's own lettering. A plain TextStyle here has no font
+          // of its own, and a button does not borrow the theme's: the
+          // label was drawn in whatever font the phone uses by default,
+          // while every other word on the page was in the app's.
+          textStyle: GoogleFonts.inter(
             fontSize: 16.5,
             fontWeight: FontWeight.w700,
           ),

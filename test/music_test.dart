@@ -606,6 +606,25 @@ void main() {
         await settle(t, 4);
       }
 
+      /// Waits until [it] is on screen ([shown]) or off it, for up to nine
+      /// seconds of real time.
+      ///
+      /// Done does real work on the disk before it gets as far as waiting
+      /// for the song, and how long that takes is the machine's business.
+      /// Two tests here paused a fixed 180 ms and then looked. That was
+      /// long enough on a quiet machine and not on a busy one: on 13
+      /// November the same commit passed one CI run and failed the other,
+      /// on exactly these two.
+      Future<void> until(
+        WidgetTester t,
+        Finder it, {
+        required bool shown,
+      }) async {
+        for (var i = 0; i < 300 && it.evaluate().isNotEmpty != shown; i++) {
+          await settle(t, 1);
+        }
+      }
+
       testWidgets('plays from the internet, then from the phone once it is '
           'there', (t) async {
         library.hold = Completer<void>();
@@ -640,6 +659,9 @@ void main() {
         await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
         await addSong(t);
         await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
+        await until(t, find.text('Getting the song ready…'), shown: true);
+        expect(find.text('Getting the song ready…'), findsOneWidget);
+        // And it goes on waiting: not saved a moment later either.
         await settle(t, 6);
         expect(find.text('Getting the song ready…'), findsOneWidget);
         expect(engine.renders, isEmpty, reason: 'not without the song');
@@ -663,8 +685,14 @@ void main() {
         await open(t, VideoEditorPage(sourcePath: video.path, onDone: next));
         await addSong(t);
         await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
-        await settle(t, 6);
-        await t.tap(find.byKey(const ValueKey('video_saving_stop_song')));
+        final stop = find.byKey(const ValueKey('video_saving_stop_song'));
+        await until(t, stop, shown: true);
+        await t.tap(stop);
+        await until(
+          t,
+          find.byKey(const ValueKey('video_saving')),
+          shown: false,
+        );
         await settle(t, 6);
         expect(find.byKey(const ValueKey('video_saving')), findsNothing);
         expect(find.textContaining("Couldn't"), findsNothing);

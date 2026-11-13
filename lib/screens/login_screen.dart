@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/providers/auth_provider.dart';
@@ -264,7 +265,9 @@ class _LoginScreenState extends State<LoginScreen> {
                               borderRadius:
                                   BorderRadius.circular(AppTheme.radiusLg),
                             ),
-                            textStyle: const TextStyle(
+                            // The app's own lettering, not the phone's
+                            // default font (AuthPrimaryButton says why).
+                            textStyle: GoogleFonts.inter(
                               fontSize: 16,
                               fontWeight: FontWeight.w700,
                             ),

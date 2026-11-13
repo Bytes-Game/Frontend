@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import 'package:myapp/providers/auth_provider.dart';
@@ -196,7 +197,10 @@ class _ProviderButton extends StatelessWidget {
           side: BorderSide(color: edge, width: 1.2),
           shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16)),
-          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+          // The app's own lettering, not the phone's default font
+          // (AuthPrimaryButton says why).
+          textStyle:
+              GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w700),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,

@@ -373,6 +373,17 @@ shared links and everything below stop working.
       the phone is in (approximate location: country only), and for
       people under 18 keeps a parent's email, name and year of birth.
     App Store Connect asks the same in App Privacy, and for an age rating.
+21b. **Google Play makes a new personal account test first.** If your
+     Play developer account is a personal one opened after 13 November
+     2023, Google does not let an app go to everybody straight away. You
+     first run a "closed test": at least 12 people join it and stay in
+     for 14 days in a row, and only then can you ask for "production
+     access". Count about three weeks from the first upload. An account
+     registered as an organisation skips this. So start the closed test
+     as soon as the first build is ready, and let the 14 days run while
+     the rest of this list is done. Google's own page on it is Play
+     Console Help, article 14151465: read it for the rule as it stands
+     (the number of testers has changed before).
 22. **Make both GitHub repositories private.** Both are public today:
     anyone can read the server's code and the app's. No password or
     private key is in either (checked, history included: the server's keys
