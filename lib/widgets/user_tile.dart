@@ -9,6 +9,10 @@ import 'package:myapp/widgets/league_badge.dart';
 class UserTile extends StatelessWidget{
   final UserModel user;
   final bool isFollowing;
+
+  /// You asked to follow this private account and it has not answered.
+  /// The button says "Requested"; tapping it takes the request back.
+  final bool requested;
   final VoidCallback onFollowToggle;
   final VoidCallback? onTap;
   final bool showFollowButton;
@@ -17,6 +21,7 @@ class UserTile extends StatelessWidget{
     super.key,
     required this.user,
     required this.isFollowing,
+    required this.requested,
     required this.onFollowToggle,
     this.onTap,
     this.showFollowButton = true,
@@ -70,8 +75,11 @@ class UserTile extends StatelessWidget{
             ),
             if (showFollowButton) ...[
               const SizedBox(width: 8),
-              isFollowing
+              isFollowing || requested
                   ? Pressable(
+                      key: ValueKey(
+                        isFollowing ? 'tile_following' : 'tile_requested',
+                      ),
                       onTap: onFollowToggle,
                       child: Container(
                         height: 34,
@@ -83,7 +91,7 @@ class UserTile extends StatelessWidget{
                               BorderRadius.circular(AppTheme.radiusSm + 2),
                         ),
                         child: Text(
-                          'Following',
+                          isFollowing ? 'Following' : 'Requested',
                           style: TextStyle(
                             fontWeight: FontWeight.w600,
                             fontSize: 13.5,

@@ -253,9 +253,9 @@ namespace BattleArena
             return n;
         }
 
-        // The process "Start proc 26220:com.example.devf/u0a391 ..." says
+        // The process "Start proc 26220:com.flexete.app/u0a391 ..." says
         // was started for [appId] (or one of its own sub-processes,
-        // "com.example.devf:remote"), or -1.
+        // "com.flexete.app:remote"), or -1.
         static int StartedPid(string msg, string appId)
         {
             const string Start = "Start proc ";
@@ -284,7 +284,7 @@ namespace BattleArena
         {
             // Pass 1: which processes are the app's (more than one means it
             // was restarted). By name: Android logs "Start proc 26220:
-            // com.example.devf/..." when it starts one, and the app's own
+            // com.flexete.app/..." when it starts one, and the app's own
             // system lines carry the last 15 letters of its name as their
             // tag. Not by the tag "flutter" alone: every Flutter app prints
             // that, and a run counted Google Pay as this app restarting.
@@ -448,7 +448,7 @@ function Import-LogTools {
     }
 }
 
-# The app's id (com.example.devf), so the phone's lines about this app
+# The app's id (com.flexete.app), so the phone's lines about this app
 # being killed or crashing can be picked out from every other app's.
 function Get-AppId([string]$ProjectRoot) {
     foreach ($name in @('build.gradle.kts', 'build.gradle')) {

@@ -8,6 +8,7 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/widgets/chat_share_widgets.dart';
 import 'package:myapp/widgets/mentions.dart';
+import 'package:myapp/widgets/report_sheet.dart';
 import 'package:myapp/widgets/video_about_row.dart';
 import 'package:myapp/widgets/arena_ui.dart' show PersonPhoto;
 
@@ -897,7 +898,32 @@ class _ChallengeCommentSheetState extends State<ChallengeCommentSheet> {
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                     sliver: SliverList.builder(
                       itemCount: _comments.length,
-                      itemBuilder: (_, i) => _CommentRow(comment: _comments[i]),
+                      itemBuilder: (_, i) {
+                        final c = _comments[i];
+                        final me = Provider.of<DataProvider>(context,
+                                listen: false)
+                            .user
+                            ?.id;
+                        final id = '${c['id'] ?? ''}';
+                        final author = '${c['authorId'] ?? ''}';
+                        // Anybody signed in can report somebody else's
+                        // comment: press and hold it.
+                        final canReport = me != null &&
+                            me.isNotEmpty &&
+                            id.isNotEmpty &&
+                            author != me;
+                        return _CommentRow(
+                          comment: c,
+                          onReport: canReport
+                              ? () => reportHarm(
+                                    context,
+                                    target: ReportTarget.comment,
+                                    targetId: id,
+                                    whose: '${c['authorUsername'] ?? ''}',
+                                  )
+                              : null,
+                        );
+                      },
                     ),
                   ),
               ],
@@ -1020,7 +1046,11 @@ class _CommentAvatar extends StatelessWidget {
 class _CommentRow extends StatelessWidget {
   final Map<String, dynamic> comment;
 
-  const _CommentRow({required this.comment});
+  /// Report it as harmful, on a long press. Null: it is yours, or nobody
+  /// is signed in.
+  final VoidCallback? onReport;
+
+  const _CommentRow({required this.comment, this.onReport});
 
   @override
   Widget build(BuildContext context) {
@@ -1028,7 +1058,7 @@ class _CommentRow extends StatelessWidget {
     final text = comment['text'] as String? ?? '';
     final time =
         _ChallengeCommentSheetState.timeAgo(comment['createdAt'] as String?);
-    return Padding(
+    final row = Padding(
       padding: const EdgeInsets.symmetric(vertical: 9),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1078,6 +1108,13 @@ class _CommentRow extends StatelessWidget {
           ),
         ],
       ),
+    );
+    if (onReport == null) return row;
+    return GestureDetector(
+      key: const ValueKey('comment_row'),
+      behavior: HitTestBehavior.opaque,
+      onLongPress: onReport,
+      child: row,
     );
   }
 }

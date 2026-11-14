@@ -1,6 +1,7 @@
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' show PlatformDispatcher;
 import 'package:http/http.dart' as http;
 import 'package:myapp/config/constants.dart';
 import 'package:myapp/services/device_capabilities.dart';
@@ -165,6 +166,11 @@ class _AuthHttp {
     if (token != null && token.isNotEmpty) {
       h['Authorization'] = 'Bearer $token';
     }
+    // The country the phone is set to. The server works the country out
+    // from the network first; this is what it falls back on when the
+    // network does not say (the server's country.go).
+    final country = ApiService.deviceCountry;
+    if (country != null) h['X-Device-Country'] = country;
     return h;
   }
 }
@@ -282,6 +288,14 @@ enum AuthFailure {
 
   /// A sign-in or sign-up ticket ran out (they last minutes): start again.
   expired,
+
+  /// The person is younger than the age at which a parent must agree
+  /// where they are. No account exists yet: the sign-up is waiting for
+  /// their parent or guardian to say yes, by a link the server emailed
+  /// them. [AuthResult.extra] is what the server said (see ParentWait),
+  /// and [AuthResult.ticket] sends that email again, changes the address,
+  /// or cancels ([ApiService.parentEmail]).
+  parentConsentPending,
 }
 
 /// Outcome of a login or signup attempt: the session payload on success, or
@@ -339,6 +353,7 @@ class SignupDetails {
     required this.birthDate,
     required this.acceptTerms,
     this.fullName = '',
+    this.parentEmail = '',
   });
 
   final String username;
@@ -350,6 +365,10 @@ class SignupDetails {
   final String birthDate;
   final bool acceptTerms;
 
+  /// A parent's or guardian's email: only for somebody younger than the
+  /// age at which a parent must agree ([SignupRules.parentConsentAge]).
+  final String parentEmail;
+
   Map<String, dynamic> toJson() => {
         'username': username,
         'password': password,
@@ -357,7 +376,105 @@ class SignupDetails {
         'email': email,
         'birthDate': birthDate,
         'acceptTerms': acceptTerms,
+        if (parentEmail.isNotEmpty) 'parentEmail': parentEmail,
       };
+}
+
+/// The ages for joining where the person is, from the server (GET
+/// /signup/rules): how old they must be, and under which age a parent or
+/// guardian must agree first. The server decides by country; these are
+/// only so the form can ask the right things. Whatever the form does, the
+/// server checks again.
+class SignupRules {
+  const SignupRules({
+    this.minAge = 13,
+    this.parentConsentAge = 18,
+    this.country = '',
+  });
+
+  /// What the form uses until the server answers, and if it never does:
+  /// the rule that is right in the most places.
+  static const standard = SignupRules();
+
+  final int minAge;
+  final int parentConsentAge;
+
+  /// The country the server sees for this phone ("IN"), or '' when it
+  /// does not know.
+  final String country;
+
+  /// How old somebody born on [born] is on [today], in whole years.
+  static int ageOn(DateTime born, DateTime today) {
+    var age = today.year - born.year;
+    if (today.month < born.month ||
+        (today.month == born.month && today.day < born.day)) {
+      age--;
+    }
+    return age;
+  }
+
+  /// Whether somebody born on [born] needs a parent to agree.
+  bool needsParent(DateTime born, DateTime today) =>
+      ageOn(born, today) < parentConsentAge;
+}
+
+/// What the server says while a sign-up waits for a parent.
+class ParentWait {
+  const ParentWait({
+    required this.ticket,
+    this.parentEmail = '',
+    this.declined = false,
+    this.message,
+  });
+
+  factory ParentWait.fromAnswer(Map<String, dynamic> said) => ParentWait(
+        ticket: '${said['ticket'] ?? ''}',
+        parentEmail: '${said['parentEmail'] ?? ''}',
+        declined: said['declined'] == true,
+        message: (said['message'] ?? said['error']) as String?,
+      );
+
+  /// Sends the email again, changes the address, or cancels. Lasts half
+  /// an hour; after that, signing in again gives a new one.
+  final String ticket;
+
+  /// The parent's address with most of it hidden: "p•••@example.com".
+  final String parentEmail;
+
+  /// The parent said no.
+  final bool declined;
+  final String? message;
+}
+
+/// How asking the server to email a parent again (or to cancel) came out.
+enum ParentEmailAnswer {
+  /// Sent. [ParentEmailResult.wait] has the address it went to.
+  sent,
+
+  /// The sign-up was cancelled and deleted.
+  cancelled,
+
+  /// Refused, and why is in [ParentEmailResult.message]: too soon, too
+  /// many, or an address that will not do.
+  refused,
+
+  /// The ticket ran out: sign in again to carry on.
+  expired,
+
+  /// The sign-up is no longer waiting: it ran out, was answered, or was
+  /// cancelled.
+  gone,
+
+  /// The server could not send email, or could not be reached.
+  failed,
+}
+
+class ParentEmailResult {
+  const ParentEmailResult(this.answer, {this.message, this.wait});
+
+  final ParentEmailAnswer answer;
+  final String? message;
+  final ParentWait? wait;
 }
 
 /// The live username check's answer: whether the name is allowed at all,
@@ -517,6 +634,25 @@ class PasswordReset {
   final String? message;
 }
 
+/// What came of a report. See [ApiService.reportContent].
+enum ReportOutcome {
+  /// Kept, for a person to read.
+  sent,
+
+  /// This person had already reported it, and that report is still
+  /// waiting. Nothing new was kept.
+  alreadySent,
+
+  /// It is not there any more.
+  gone,
+
+  /// Three reports in a row is all one person may send at once.
+  tooMany,
+
+  /// No connection, or the server could not keep it. Worth trying again.
+  failed,
+}
+
 /// Every answer to "is this code right?". See [ApiService.verifyResetCode].
 enum ResetCodeCheckAnswer {
   /// Right. On to choosing the new password.
@@ -578,6 +714,96 @@ class ApiService {
   /// Drop the session token (call on logout).
   static void clearAuth() {
     authToken = null;
+  }
+
+  /// A test's stand-in for the phone's region. Null uses the phone's own.
+  @visibleForTesting
+  static String? deviceCountryForTest;
+
+  /// The country the phone is set to, as two capital letters ("IN"), or
+  /// null when it has none. Sent with every request (see [_AuthHttp]).
+  static String? get deviceCountry {
+    final raw = deviceCountryForTest ??
+        PlatformDispatcher.instance.locale.countryCode;
+    if (raw == null) return null;
+    final code = raw.trim().toUpperCase();
+    return RegExp(r'^[A-Z]{2}$').hasMatch(code) ? code : null;
+  }
+
+  /// GET /signup/rules — the ages for joining where this phone is. When
+  /// the server cannot be asked, [SignupRules.standard]: the form must
+  /// work anyway, and the server checks whatever is sent.
+  static Future<SignupRules> signupRules() async {
+    try {
+      final res = await _authHttp.get(Uri.parse('$_base/signup/rules'));
+      if (res.statusCode == 200) {
+        final said = json.decode(res.body) as Map<String, dynamic>;
+        final minAge = said['minAge'];
+        final consentAge = said['parentConsentAge'];
+        if (minAge is int && consentAge is int && minAge > 0) {
+          return SignupRules(
+            minAge: minAge,
+            parentConsentAge: consentAge,
+            country: '${said['country'] ?? ''}',
+          );
+        }
+        _unreadable('signupRules', 'a 200 without the two ages');
+      }
+    } catch (e) {
+      _unreadable('signupRules', e);
+    }
+    return SignupRules.standard;
+  }
+
+  /// POST /signup/parent — while a sign-up waits for a parent: sends the
+  /// email again, or to [newAddress] instead; with [cancel], deletes the
+  /// sign-up. [ticket] is from the answer that said it is waiting.
+  static Future<ParentEmailResult> parentEmail(String ticket,
+      {String? newAddress, bool cancel = false}) async {
+    try {
+      final res = await _authHttp.post(
+        Uri.parse('$_base/signup/parent'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'ticket': ticket,
+          if (newAddress != null && newAddress.trim().isNotEmpty)
+            'parentEmail': newAddress.trim(),
+          if (cancel) 'cancel': true,
+        }),
+      );
+      final said = _answerOf(res);
+      final message = said['error'] as String?;
+      if (res.statusCode == 200) {
+        if (said['cancelled'] == true) {
+          return const ParentEmailResult(ParentEmailAnswer.cancelled);
+        }
+        if (said['parentConsentPending'] == true) {
+          return ParentEmailResult(ParentEmailAnswer.sent,
+              wait: ParentWait.fromAnswer(said));
+        }
+        _unreadable('parentEmail', 'a 200 that says neither sent nor cancelled');
+        return const ParentEmailResult(ParentEmailAnswer.failed);
+      }
+      if (said['expired'] == true) {
+        return ParentEmailResult(ParentEmailAnswer.expired, message: message);
+      }
+      if (said['gone'] == true) {
+        return ParentEmailResult(ParentEmailAnswer.gone, message: message);
+      }
+      if (res.statusCode >= 400 && res.statusCode < 500) {
+        return ParentEmailResult(ParentEmailAnswer.refused,
+            // The server's own words for "too many" are for programs when
+            // it has none for people.
+            message: message == null || message == 'rate limited'
+                ? 'Too many tries. Please wait a few minutes and try again.'
+                : message);
+      }
+      return ParentEmailResult(ParentEmailAnswer.failed,
+          message: said['unavailable'] == true ? message : null);
+    } catch (e) {
+      _unreadable('parentEmail', e);
+      return const ParentEmailResult(ParentEmailAnswer.failed);
+    }
   }
 
   /// POST /signup → same shape as /login ({user, token, allUsers}). A
@@ -955,6 +1181,17 @@ class ApiService {
         headers: {'Content-Type': 'application/json'},
         body: json.encode(body),
       );
+      // A sign-up by somebody young: no account yet, it waits for a
+      // parent (202). And a sign-in while it waits (403).
+      if (res.statusCode == 202 || res.statusCode == 403) {
+        final said = _answerOf(res);
+        if (said['parentConsentPending'] == true) {
+          return AuthResult.failed(AuthFailure.parentConsentPending,
+              message: (said['message'] ?? said['error']) as String?,
+              ticket: said['ticket'] as String?,
+              extra: said);
+        }
+      }
       // login and a password change answer 200, signup answers 201.
       if (res.statusCode == 200 || res.statusCode == 201) {
         final data = json.decode(res.body) as Map<String, dynamic>;
@@ -996,8 +1233,9 @@ class ApiService {
           return AuthResult.failed(AuthFailure.expired, message: message);
         }
         // Too many tries: the server's own words for it are for programs
-        // ("rate limited"), so the app says it for people.
-        if (res.statusCode == 429) {
+        // ("rate limited"), so the app says it for people — unless the
+        // server said which box it is about, in words for people.
+        if (res.statusCode == 429 && said['field'] == null) {
           return const AuthResult.failed(AuthFailure.rejected,
               message: 'Too many tries. Please wait a few minutes and try '
                   'again.');
@@ -1054,6 +1292,7 @@ class ApiService {
     required String fullName,
     required String birthDate,
     required bool acceptTerms,
+    String parentEmail = '',
   }) async {
     return _post('$_base/auth/social/signup', {
       'signupTicket': signupTicket,
@@ -1061,6 +1300,7 @@ class ApiService {
       'fullName': fullName,
       'birthDate': birthDate,
       'acceptTerms': acceptTerms,
+      if (parentEmail.isNotEmpty) 'parentEmail': parentEmail,
     });
   }
 
@@ -1245,7 +1485,14 @@ class ApiService {
       var reason = '';
       try {
         final body = json.decode(res.body);
-        if (body is Map) reason = '${body['reason'] ?? ''}';
+        if (body is Map) {
+          reason = '${body['reason'] ?? ''}';
+          // A private account: nothing is followed yet. Its owner has
+          // been asked, and says yes or no.
+          if (res.statusCode == 202 && body['requested'] == true) {
+            return FollowOutcome.requested;
+          }
+        }
       } catch (_) {
         // Not JSON: an older server. Treated as any other failure below.
       }
@@ -1281,6 +1528,48 @@ class ApiService {
       return res.statusCode == 200;
     } catch (e) {
       _unreadable('unfollowUser', e);
+      return false;
+    }
+  }
+
+  /// GET /api/v1/follow-requests — who is asking to follow you, newest
+  /// first. Only a private account gets any. Null when the server could
+  /// not be asked, which is not the same as nobody asking.
+  static Future<List<UserModel>?> followRequests() async {
+    try {
+      final res = await _authHttp.get(Uri.parse('$_base/api/v1/follow-requests'));
+      if (res.statusCode != 200) {
+        _unreadable('followRequests', 'status ${res.statusCode}');
+        return null;
+      }
+      final said = json.decode(res.body) as Map<String, dynamic>;
+      final list = (said['requests'] as List<dynamic>?) ?? const [];
+      return [
+        for (final r in list.whereType<Map<String, dynamic>>())
+          UserModel.fromJson(r),
+      ];
+    } catch (e) {
+      _unreadable('followRequests', e);
+      return null;
+    }
+  }
+
+  /// POST /api/v1/follow-requests/answer — say yes or no to somebody who
+  /// asked to follow you. True when it was answered; false when the server
+  /// refused or could not be reached (a request that is no longer waiting
+  /// counts as answered: there is nothing left to do).
+  static Future<bool> answerFollowRequest(String requesterId,
+      {required bool accept}) async {
+    try {
+      final res = await _authHttp.post(
+        Uri.parse('$_base/api/v1/follow-requests/answer'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'requesterId': requesterId, 'accept': accept}),
+      );
+      if (res.statusCode == 200) return true;
+      return res.statusCode == 404 && _answerOf(res)['gone'] == true;
+    } catch (e) {
+      _unreadable('answerFollowRequest', e);
       return false;
     }
   }
@@ -2383,11 +2672,14 @@ class ApiService {
 
   // —— Reports ————————————————————————————————————————————————————
 
-  /// POST /api/v1/report -> report content or user
-  static Future<bool> reportContent({
-    required String reporterId,
-    required String targetId,
+  /// POST /api/v1/report — report a video, an answer, a comment or an
+  /// account as harmful. [targetType] is `challenge`, `response`,
+  /// `comment` or `user`; [reason] one of the codes in report_sheet.dart.
+  /// The server knows who is reporting from the sign-in, and waits the
+  /// report for a person to read (/admin/reports).
+  static Future<ReportOutcome> reportContent({
     required String targetType,
+    required String targetId,
     required String reason,
     String description = '',
   }) async {
@@ -2396,17 +2688,28 @@ class ApiService {
         Uri.parse('$_base/api/v1/report'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
-          'reporterId': reporterId,
           'targetId': targetId,
           'targetType': targetType,
           'reason': reason,
           'description': description,
         }),
       );
-      return res.statusCode == 201;
+      switch (res.statusCode) {
+        case 201:
+          return ReportOutcome.sent;
+        case 200:
+          return ReportOutcome.alreadySent;
+        case 404:
+          return ReportOutcome.gone;
+        case 429:
+          return ReportOutcome.tooMany;
+      }
+      debugPrint('[report] $targetType $targetId: the server answered '
+          '${res.statusCode}: ${res.body}');
+      return ReportOutcome.failed;
     } catch (e) {
       _unreadable('reportContent', e);
-      return false;
+      return ReportOutcome.failed;
     }
   }
 
@@ -3589,6 +3892,10 @@ class ApiService {
 /// How a tap on Follow went.
 enum FollowOutcome {
   followed,
+
+  /// A private account: they have been asked, and nothing is followed
+  /// until they say yes. The button shows "Requested".
+  requested,
 
   /// You blocked them. Unblock first; the app offers to.
   youBlocked,

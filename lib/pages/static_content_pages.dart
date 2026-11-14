@@ -694,6 +694,16 @@ const helpTopics = [
       'Settings → Privacy → Private account. Only your followers can see '
           'your videos and battles. Anyone can still see your name and '
           'picture.',
+      'From then on people ask to follow you. Each request waits in '
+          'Notifications, under Follow requests, until you accept or '
+          'decline it. The followers you already have stay. If you make '
+          'your account public again, everybody still waiting becomes a '
+          'follower.',
+    ]),
+    HelpArticle('Why does the Follow button say "Requested"?', [
+      'That account is private, so it was asked instead of followed. You '
+          'will see its videos and battles when its owner accepts. Tap '
+          'Requested to take your request back.',
     ]),
     HelpArticle('Who can message and call me?', [
       'Settings → Privacy → Messages and calls: Everyone, or Only people '

@@ -11,6 +11,10 @@ import 'package:myapp/services/session_store.dart' show jwtUsername;
 /// Connection status exposed as a stream so the UI can show a dot.
 enum WebSocketStatus { connected, disconnected, connecting }
 
+/// The word that goes ahead of the sign-in in the live connection's
+/// "protocols" header. The server looks for this exact word.
+const String wsSignInProtocol = 'bearer';
+
 /// Keeps [ws] filed under the signed-in account's name as it is now: after
 /// a username change, [account] (the app's DataProvider) has the account
 /// under its new name, and the connection moves to it
@@ -90,17 +94,16 @@ class WebSocketService {
     if (_isDisposed ||_statusCtrl.isClosed) return;
     if (_username.isEmpty || _baseUrl.isEmpty) return;
 
-    // The socket authenticates with the session token as a query param —
-    // browsers can't set an Authorization header on a WebSocket handshake, and
-    // the backend rejects the upgrade if the token's user doesn't match the
-    // path username. (See WebsocketHandler in devb/websocket.go.)
+    // The connection is opened with the sign-in, and the server refuses it
+    // if the sign-in is for a different account than the name in the
+    // address. (See WebsocketHandler in the server's websocket.go.)
     //
     // _username is captured when this service is constructed, but the token is
     // read fresh on every attempt — including retries. After a logout/login as
     // a DIFFERENT user, a service left over from the previous session keeps
     // retrying its own username while picking up the new user's token, so the
     // handshake is guaranteed to be refused, forever, every few seconds:
-    //   /ws/player2?token=<player1's token>   ← seen in the wild
+    //   /ws/player2 with player1's sign-in   ← seen in the wild
     // Detect that here and stop for good instead of retrying: the correct
     // socket for the new user is owned by a different instance.
     final token = ApiService.authToken ?? '';
@@ -118,13 +121,24 @@ class WebSocketService {
     }
 
     _statusCtrl.add(WebSocketStatus.connecting);
-    final url =
-        '$_baseUrl/ws/$_username?token=${Uri.encodeQueryComponent(token)}';
-    developer.log('Ws: Connecting to $_baseUrl/ws/$_username', name: 'ws');
+    // The sign-in goes in a header of the opening request, never in the
+    // address. It used to be "?token=…" on the end of the address, and an
+    // address gets written down on the way: in the host's request log, and
+    // by anything that sits between the phone and the server. Whoever reads
+    // it there can use the sign-in until it runs out.
+    //
+    // The one header an app can set on a WebSocket everywhere is its list
+    // of "protocols", so that is where it travels: "bearer", then the
+    // sign-in. The server reads it from there (wsToken in websocket.go).
+    final url = '$_baseUrl/ws/$_username';
+    developer.log('Ws: Connecting to $url', name: 'ws');
 
     final WebSocketChannel channel;
     try {
-      channel = WebSocketChannel.connect(Uri.parse(url));
+      channel = WebSocketChannel.connect(
+        Uri.parse(url),
+        protocols: [wsSignInProtocol, token],
+      );
     } catch (e) {
       // Only synchronous failures (a malformed URI) land here.
       _handleDrop('connect threw: $e');

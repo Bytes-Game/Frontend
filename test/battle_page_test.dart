@@ -382,9 +382,12 @@ void main() {
       expect(find.byKey(const ValueKey('status_post')), findsOneWidget);
       expect(find.text('Open'), findsNothing);
       expect(find.widgetWithText(AppBar, 'Post'), findsOneWidget);
-      // Nothing to report it for — it has no challenge to match — so for
-      // somebody who does not own it there is no menu at all.
-      expect(find.byKey(const ValueKey('detail_more')), findsNothing);
+      // It can be reported as harmful, like any post. There is nothing to
+      // report it for as "doesn't match": it has no challenge to match.
+      await t.tap(find.byKey(const ValueKey('detail_more')));
+      await settle(t);
+      expect(find.byKey(const ValueKey('harm_')), findsOneWidget);
+      expect(find.byKey(const ValueKey('report_')), findsNothing);
     });
 
     testWidgets('the owner opens it to battles from its page, and then it '

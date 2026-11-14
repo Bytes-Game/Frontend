@@ -14,6 +14,19 @@ class DataProvider with ChangeNotifier {
   UserModel? _user;
   List<UserModel> _allUsers =[];
   List<String>_following = [];
+
+  /// Private accounts you have asked to follow that have not answered yet.
+  /// Their button says "Requested", and tapping it takes the request back.
+  final Set<String> _requested = {};
+
+  /// People asking to follow you (only a private account is asked), newest
+  /// first. The notifications page shows them with Accept and Decline.
+  List<UserModel> _followRequests = [];
+
+  /// Goes up with every follow, unfollow and request made from this phone.
+  /// refreshUser reads the list you follow from the server; an answer that
+  /// was asked for before a tap must not undo that tap.
+  int _followEdits = 0;
   final List<NotificationModel> _notifications =[];
   int _unreadNotifications = 0;
 
@@ -30,6 +43,13 @@ class DataProvider with ChangeNotifier {
   UserModel? get user => _user;
   List<UserModel> get allUsers => _allUsers;
   List<String> get following => _following;
+  Set<String> get requested => _requested;
+
+  /// You follow account [id], or have asked to and are waiting. Either
+  /// way the button no longer says "Follow", and tapping it undoes it.
+  bool followsOrAsked(String id) =>
+      _following.contains(id) || _requested.contains(id);
+  List<UserModel> get followRequests => _followRequests;
   List<NotificationModel> get notifications => _notifications;
   int get unreadNotifications => _unreadNotifications;
   int get feedRefreshTick => _feedRefreshTick;
@@ -84,6 +104,7 @@ class DataProvider with ChangeNotifier {
   Future<void> refreshUser() async {
     final me = _user;
     if (me == null || me.username.isEmpty) return;
+    final editsBefore = _followEdits;
     final fresh = await ApiService.getUserByUsername(me.username);
     if (fresh == null) {
       debugPrint('[profile] could not bring your profile up to date; '
@@ -105,6 +126,16 @@ class DataProvider with ChangeNotifier {
       avatarUrl: fresh.avatarUrl,
       profileTag: fresh.profileTag,
     );
+    // Who you follow, as the server has it now. The copy on the phone is
+    // from your last sign-in: everybody followed since then showed
+    // "Follow" again after the app was closed and opened, and a request a
+    // private account accepted while you were away never showed at all.
+    // Left alone if you followed or unfollowed while this was out: that
+    // answer is older than your tap.
+    if (_followEdits == editsBefore) {
+      _following = List<String>.from(fresh.followingList);
+      _requested.removeWhere(_following.contains);
+    }
     notifyListeners();
   }
 
@@ -116,13 +147,25 @@ class DataProvider with ChangeNotifier {
   /// [followUser], saying why when it did not happen. A screen with a
   /// Follow button goes through followFromScreen (follow_flow.dart), which
   /// turns "you blocked them" into an offer to unblock.
+  ///
+  /// A private account is not followed by tapping: it is asked, and the
+  /// answer here is [FollowOutcome.requested]. The button then says
+  /// "Requested" until its owner says yes or no.
   Future<FollowOutcome> follow(UserModel target) async {
     if (_user == null || _following.contains(target.id)) {
       return FollowOutcome.failed;
     }
 
-    // Optimistic: update UI immediately
-    _following.add(target.id);
+    // The button changes at once, to what the server will most likely
+    // say: "Requested" for an account the app knows is private,
+    // "Following" for any other.
+    final private = target.visibility == 'friends';
+    _followEdits++;
+    if (private) {
+      _requested.add(target.id);
+    } else {
+      _following.add(target.id);
+    }
     notifyListeners();
 
     final outcome = await ApiService.followUserOutcome(
@@ -132,32 +175,90 @@ class DataProvider with ChangeNotifier {
       followingUsername: target.username,
     );
 
-    if (outcome != FollowOutcome.followed) {
-      // Revert on failure
-      _following.remove(target.id);
-      notifyListeners();
-    }
+    // Then to what it did say. The app's copy of the account can be old:
+    // it may have gone private, or public, since.
+    _followEdits++;
+    _following.remove(target.id);
+    _requested.remove(target.id);
+    if (outcome == FollowOutcome.followed) _following.add(target.id);
+    if (outcome == FollowOutcome.requested) _requested.add(target.id);
+    notifyListeners();
     return outcome;
   }
 
+  /// Stops following [target], or takes back a request to follow them that
+  /// has not been answered.
   Future<bool> unfollowUser(UserModel target) async {
-    if (_user == null || !_following.contains(target.id)) return false;
+    if (_user == null) return false;
+    final wasFollowing = _following.contains(target.id);
+    final wasRequested = _requested.contains(target.id);
+    if (!wasFollowing && !wasRequested) return false;
 
-      _following.remove(target.id);
+    _followEdits++;
+    _following.remove(target.id);
+    _requested.remove(target.id);
+    notifyListeners();
+
+    final ok = await ApiService.unfollowUser(
+      unfollowerId: _user!.id,
+      unfollowerUsername: _user!.username,
+      unfollowedId: target.id,
+      unfollowedUsername: target.username,
+    );
+
+    if (!ok) {
+      _followEdits++;
+      if (wasFollowing) _following.add(target.id);
+      if (wasRequested) _requested.add(target.id);
       notifyListeners();
+    }
+    return ok;
+  }
 
-      final ok = await ApiService.unfollowUser(
-        unfollowerId: _user!.id,
-        unfollowerUsername: _user!.username,
-        unfollowedId: target.id,
-        unfollowedUsername: target.username,
-      );
+  /// What the server just said about your request to follow account [id]:
+  /// still waiting, or not. Called when their profile is read.
+  ///
+  /// "Not waiting" for a request this phone made means it was answered. A
+  /// yes puts them among the people you follow, so that list is read
+  /// again; a no leaves the Follow button as it was.
+  void noteFollowRequest(String id, {required bool waiting}) {
+    if (id.isEmpty) return;
+    if (waiting) {
+      if (_requested.add(id)) notifyListeners();
+      return;
+    }
+    if (_requested.remove(id)) {
+      notifyListeners();
+      // ignore: discarded_futures
+      refreshUser();
+    }
+  }
 
-      if (!ok) {
-        _following.add(target.id);
-        notifyListeners();
-      }
-      return ok;
+  // —— People asking to follow you ————————————————————————————————————
+
+  /// Reads who is asking to follow you. Kept as it was when the server
+  /// cannot be asked.
+  Future<void> loadFollowRequests() async {
+    final got = await ApiService.followRequests();
+    if (got == null) return;
+    _followRequests = got;
+    notifyListeners();
+  }
+
+  /// Says yes or no to [asker]. The row goes at once and comes back if the
+  /// server did not take the answer. True when it did.
+  Future<bool> answerFollowRequest(UserModel asker,
+      {required bool accept}) async {
+    final at = _followRequests.indexWhere((u) => u.id == asker.id);
+    if (at < 0) return false;
+    final row = _followRequests.removeAt(at);
+    notifyListeners();
+    final ok = await ApiService.answerFollowRequest(asker.id, accept: accept);
+    if (!ok) {
+      _followRequests.insert(at.clamp(0, _followRequests.length), row);
+      notifyListeners();
+    }
+    return ok;
   }
 
   // —— Notifications ————————————————————————————————————————————————————————
@@ -174,6 +275,30 @@ class DataProvider with ChangeNotifier {
     if (n.id.isNotEmpty && _notifications.any((x) => x.id == n.id)) return;
     _notifications.insert(0, n);
     _unreadNotifications++;
+    // A private account said yes to your request: you follow them now, and
+    // their button says so without the page being opened again.
+    if (n.type == 'follow_accepted' && n.actorId.isNotEmpty) {
+      _followEdits++;
+      _requested.remove(n.actorId);
+      if (!_following.contains(n.actorId)) _following.add(n.actorId);
+    }
+    // Somebody is asking to follow you: on the list to answer, at once.
+    if (n.type == 'follow_request' &&
+        n.actorId.isNotEmpty &&
+        !_followRequests.any((u) => u.id == n.actorId)) {
+      _followRequests = [
+        UserModel(
+          id: n.actorId,
+          username: n.actorUsername,
+          league: n.actorLeague.isEmpty ? 'Unranked' : n.actorLeague,
+          wins: 0,
+          losses: 0,
+          followersCount: 0,
+          followingCount: 0,
+        ),
+        ..._followRequests,
+      ];
+    }
     notifyListeners();
   }
 
@@ -204,6 +329,9 @@ class DataProvider with ChangeNotifier {
     _user = null;
     _allUsers = [];
     _following =[];
+    _requested.clear();
+    _followRequests = [];
+    _followEdits++;
     _notifications.clear();
     _unreadNotifications = 0;
     notifyListeners();

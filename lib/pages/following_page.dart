@@ -76,8 +76,10 @@ class _FollowingPageState extends State<FollowingPage>
                     return UserTile(
                       user: u,
                       isFollowing: dp.following.contains(u.id),
+                      requested: dp.requested.contains(u.id),
                       onFollowToggle: () {
-                        final becameFollowing = !dp.following.contains(u.id);
+                        // "Requested" is undone by a tap, as "Following" is.
+                        final becameFollowing = !dp.followsOrAsked(u.id);
                         EventTracker.instance.trackFollowToggle(
                           targetUserId: u.id,
                           becameFollowing: becameFollowing,

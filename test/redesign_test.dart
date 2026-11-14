@@ -782,6 +782,7 @@ void main() {
             body: UserTile(
               user: person('5', 'maya'),
               isFollowing: false,
+              requested: false,
               onFollowToggle: () => toggled++,
             ),
           ),

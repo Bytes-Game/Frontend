@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/screens/forgot_password_screen.dart';
+import 'package:myapp/screens/parent_consent_screen.dart';
 import 'package:myapp/screens/signup_screen.dart';
 import 'package:myapp/screens/social_sign_in.dart';
 import 'package:myapp/screens/two_step_signin_screen.dart';
@@ -92,6 +94,22 @@ class _LoginScreenState extends State<LoginScreen> {
     if (failure?.failure == AuthFailure.twoFactorRequired && ticket != null) {
       await Navigator.of(context).push(MaterialPageRoute(
           builder: (_) => TwoStepSignInScreen(ticket: ticket)));
+      if (mounted) setState(() => _isLoading = false);
+      return;
+    }
+
+    // No account yet: a sign-up with these details is waiting for a parent
+    // to say yes. On to the page that waits with them.
+    final waiting = failure;
+    if (waiting?.failure == AuthFailure.parentConsentPending &&
+        waiting?.extra != null) {
+      await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => ParentConsentScreen(
+          wait: ParentWait.fromAnswer(waiting!.extra!),
+          onCheck: (ctx) => Provider.of<AuthProvider>(ctx, listen: false)
+              .login(ctx, user, pass),
+        ),
+      ));
       if (mounted) setState(() => _isLoading = false);
       return;
     }
@@ -247,7 +265,9 @@ class _LoginScreenState extends State<LoginScreen> {
                               borderRadius:
                                   BorderRadius.circular(AppTheme.radiusLg),
                             ),
-                            textStyle: const TextStyle(
+                            // The app's own lettering, not the phone's
+                            // default font (AuthPrimaryButton says why).
+                            textStyle: GoogleFonts.inter(
                               fontSize: 16,
                               fontWeight: FontWeight.w700,
                             ),

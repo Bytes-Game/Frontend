@@ -18,7 +18,8 @@ import 'package:myapp/widgets/battle_scoreboard.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/upload_job_manager.dart';
-import 'package:myapp/models/battle_model.dart' show ActionResult, BattleStandings;
+import 'package:myapp/models/battle_model.dart'
+    show ActionResult, BattleSide, BattleStandings;
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/widgets/feed_action_bar.dart'
     show ChallengeCommentSheet, ChallengeShareSheet, CommentSheetCaption;
@@ -27,8 +28,10 @@ import 'package:myapp/widgets/people_list_sheet.dart';
 import 'package:myapp/widgets/match_warning.dart';
 import 'package:myapp/widgets/open_to_battles.dart';
 import 'package:myapp/widgets/photo_choice.dart';
+import 'package:myapp/widgets/report_sheet.dart';
 import 'package:myapp/widgets/report_video.dart';
 import 'package:myapp/widgets/video_grid_tile.dart' show openVideoPlaylist;
+import 'package:myapp/widgets/win_moment.dart';
 import 'package:myapp/widgets/arena_ui.dart' show PersonPhoto;
 
 /// Full-screen challenge detail: video, description, responses, and action buttons.
@@ -159,6 +162,41 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
       if (comments != null) _comments = comments;
       if (standings != null) _standings = standings;
     });
+    if (standings != null) _celebrateIfWon(standings);
+  }
+
+  /// The win moment: once, when the score says this battle is decided and
+  /// the person looking at it is the one who won. A trophy flips over a
+  /// burst of light, on top of the page (WinMoment).
+  ///
+  /// Called with every fresh score the page gets. Asking twice plays once:
+  /// the phone remembers which wins it has celebrated.
+  void _celebrateIfWon(BattleStandings st) {
+    if (!mounted || !st.resolved) return;
+    final me = Provider.of<DataProvider>(context, listen: false).user?.id;
+    if (me == null || me.isEmpty) return;
+    final winner = st.onTop;
+    if (winner == null || winner.userId != me) return;
+    final others = <BattleSide>[
+      for (final side in st.sides)
+        if (side.userId != me) side,
+    ];
+    // Who it was against, when it was one person. The score too, but only
+    // when it reads as a win: with the votes level it was settled on
+    // likes, and when some of the other side's votes did not count the
+    // winner can be showing fewer. "5 votes to 6" under "You won!" would
+    // look like a mistake.
+    String detail = '';
+    if (others.length == 1) {
+      final other = others.first;
+      detail = winner.votes > other.votes
+          ? 'Against ${other.username}, ${votesText(winner.votes)} '
+                '${winner.votes == 1 ? 'vote' : 'votes'} to '
+                '${votesText(other.votes)}.'
+          : 'Against ${other.username}.';
+    }
+    // ignore: discarded_futures
+    WinMoment.celebrate(context, battleId: widget.challengeId, detail: detail);
   }
 
   void _openComments() {
@@ -308,7 +346,10 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
   /// The live score again, quietly, for the totals.
   Future<void> _refreshStandings() async {
     final st = await ApiService.getBattleStandings(widget.challengeId);
-    if (mounted && st != null) setState(() => _standings = st);
+    if (mounted && st != null) {
+      setState(() => _standings = st);
+      _celebrateIfWon(st);
+    }
   }
 
   /// Sends a vote and says how it went. The score box shows the vote the
@@ -344,6 +385,36 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
       ),
     );
     setState(() => _scoreVersion++);
+  }
+
+  /// The videos on this page the signed-in person may report as harmful
+  /// (report_sheet.dart): every one that isn't theirs, still up, on any
+  /// kind of post. Each is (answer id, whose it is) — an empty id is the
+  /// challenge's own video.
+  List<(String, String)> _harmReportable(ChallengeModel c, String? me) {
+    if (me == null || me.isEmpty || c.status == 'removed') return const [];
+    return [
+      if (c.creatorId != me) ('', c.creatorUsername),
+      for (final r in _responses)
+        if (r.responderId != me) (r.id, r.responderUsername),
+    ];
+  }
+
+  /// Report one video on this page as harmful.
+  Future<void> _reportHarm(String responseId, String whose) async {
+    final c = _challenge;
+    if (c == null) return;
+    EventTracker.instance.trackTap(
+      target: 'challenge_report_harm_open',
+      pageName: 'challenge_detail_page',
+      params: {'challengeId': c.id, 'responseId': responseId},
+    );
+    await reportHarm(
+      context,
+      target: responseId.isEmpty ? ReportTarget.video : ReportTarget.answer,
+      targetId: responseId.isEmpty ? c.id : responseId,
+      whose: whose,
+    );
   }
 
   /// The videos on this page the signed-in person may report as not
@@ -649,7 +720,10 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
           style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
         ),
         actions: [
-          if (c != null && (isOwner || _reportable(c, me).isNotEmpty))
+          if (c != null &&
+              (isOwner ||
+                  _reportable(c, me).isNotEmpty ||
+                  _harmReportable(c, me).isNotEmpty))
             PopupMenuButton<String>(
               key: const ValueKey('detail_more'),
               icon: const Icon(Icons.more_horiz_rounded),
@@ -658,8 +732,33 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
               onSelected: (v) {
                 if (v == 'delete') _delete();
                 if (v.startsWith('report:')) _report(v.substring(7));
+                if (v.startsWith('harm:')) {
+                  final rid = v.substring(5);
+                  final whose = _harmReportable(c, me)
+                      .firstWhere((x) => x.$1 == rid, orElse: () => (rid, ''))
+                      .$2;
+                  _reportHarm(rid, whose);
+                }
               },
               itemBuilder: (_) => [
+                // Harmful: one line per video that isn't yours.
+                for (final (rid, whose) in _harmReportable(c, me))
+                  PopupMenuItem<String>(
+                    key: ValueKey('harm_$rid'),
+                    value: 'harm:$rid',
+                    child: Row(
+                      children: [
+                        const Icon(Icons.report_outlined, color: Colors.white),
+                        const SizedBox(width: 10),
+                        Flexible(
+                          child: Text(
+                            "Report $whose's ${c.isPhoto ? 'photo' : 'video'}",
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 // One line per video that isn't yours: the challenge's own,
                 // and each answer, by whose it is.
                 for (final (rid, whose) in _reportable(c, me))
@@ -883,7 +982,9 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                           // One count on the page: the totals above follow
                           // the rows below, votes included.
                           onStandings: (st) {
-                            if (mounted) setState(() => _standings = st);
+                            if (!mounted) return;
+                            setState(() => _standings = st);
+                            _celebrateIfWon(st);
                           },
                         ),
                       ],

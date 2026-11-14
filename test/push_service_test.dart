@@ -9,6 +9,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -302,6 +303,29 @@ void main() {
     expect(v.appId, startsWith('1:${v.senderId}:android:'),
         reason: 'the app id is not from project ${v.senderId}');
     expect(v.projectId, isNotEmpty);
+  });
+
+  // An iPhone is never started with the Android app's id: Apple's side of
+  // Firebase refuses it while starting, and takes the app down. Without
+  // its own id an iPhone build has no notifications; with it, it does.
+  test('an iPhone needs its own Firebase app id; Android keeps the '
+      'built-in one', () {
+    expect(FirebasePushPlatform.configuredFor(ios: false), isTrue);
+    expect(FirebasePushPlatform.configuredFor(ios: true, iosAppId: ''),
+        isFalse);
+    expect(
+      FirebasePushPlatform.configuredFor(
+          ios: true, iosAppId: '1:966321160135:ios:abc123'),
+      isTrue,
+    );
+    // And the real getter follows the phone it runs on.
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    expect(FirebasePushPlatform.configured, isFalse,
+        reason: 'this test build has no FIREBASE_IOS_APP_ID');
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    expect(FirebasePushPlatform.configured, isTrue);
+    debugDefaultTargetPlatformOverride = null;
   });
 
   // The screen tests build their own app, so none of them goes through

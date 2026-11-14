@@ -33,6 +33,7 @@ import 'package:myapp/services/reel_diagnostics.dart';
 import 'package:myapp/services/video_cache_service.dart';
 import 'package:myapp/services/video_player_service.dart';
 import 'package:myapp/widgets/music_credit.dart';
+import 'package:myapp/widgets/report_sheet.dart';
 import 'package:myapp/widgets/report_video.dart';
 import 'package:myapp/widgets/open_to_battles.dart';
 import 'package:myapp/widgets/pull_refresh.dart';
@@ -2968,6 +2969,32 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
     _toast('Challenge deleted');
   }
 
+  /// "Report" — the video on screen is harmful (report_sheet.dart): the
+  /// challenge's own, or the answer when that side is showing. Once the
+  /// report is kept, the reel leaves this person's feed.
+  Future<void> _onReportHarm(int index) async {
+    if (index >= _items.length) return;
+    final item = _items[index];
+    if (item is! _ReelItem || item.id.isEmpty) return;
+    final onAnswer = item.isBattle && item.faces.showingOpponent;
+    EventTracker.instance.trackTap(
+      target: 'reel_report_harm_open',
+      pageName: 'home_page',
+      params: {'contentId': item.id, 'onAnswer': onAnswer},
+    );
+    final outcome = await reportHarm(
+      context,
+      target: onAnswer ? ReportTarget.answer : ReportTarget.video,
+      targetId: onAnswer ? item.opponentResponseId : item.id,
+      whose: onAnswer ? item.opponentUsername : item.creatorUsername,
+    );
+    if (!mounted) return;
+    if (outcome == ReportOutcome.sent || outcome == ReportOutcome.alreadySent) {
+      final at = _items.indexOf(item);
+      if (at >= 0) _removeReel(at);
+    }
+  }
+
   /// "This video doesn't match the challenge" — for the side on screen.
   /// The video stays up whatever comes of it.
   Future<void> _onReport(int index) async {
@@ -3307,6 +3334,8 @@ class _SmartReelsFeedState extends State<SmartReelsFeed>
                       onAccept: (anchor) => _onAccept(index, anchor),
                       onDelete: () => _onDelete(index),
                       onReport: canReport ? () => _onReport(index) : null,
+                      onReportHarm:
+                          canReport ? () => _onReportHarm(index) : null,
                       answerIsMine:
                           reel.opponentUsername.isNotEmpty &&
                           reel.opponentUsername == me?.username,
@@ -4140,6 +4169,11 @@ class _ReelTile extends StatefulWidget {
   /// [answerIsMine].
   final VoidCallback? onReport;
 
+  /// Report the video on screen as harmful — the challenge's own video, or
+  /// the answer when that side is showing. Null when nobody is signed in.
+  /// Never offered for your own video.
+  final VoidCallback? onReportHarm;
+
   /// The answer in this battle is the signed-in person's own.
   final bool answerIsMine;
 
@@ -4169,6 +4203,7 @@ class _ReelTile extends StatefulWidget {
     required this.onAccept,
     required this.onDelete,
     this.onReport,
+    this.onReportHarm,
     this.answerIsMine = false,
     required this.onNeedPlayer,
     required this.playbackOwner,
@@ -4236,6 +4271,15 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     // A normal post's own video has no challenge to match, so there is
     // nothing to report it for; an answer in its battle still can be.
     if (!onAnswer && !widget.item.openToBattles) return false;
+    return !(onAnswer ? widget.answerIsMine : widget.isOwner);
+  }
+
+  /// Whether the video on screen can be reported as harmful: somebody is
+  /// signed in and it is not their own. Any kind of post. On a battle that
+  /// follows the side showing.
+  bool get _canReportHarm {
+    if (widget.onReportHarm == null) return false;
+    final onAnswer = widget.item.isBattle && _showingOpponent;
     return !(onAnswer ? widget.answerIsMine : widget.isOwner);
   }
 
@@ -5527,10 +5571,11 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
               // those are visually quarantined from the everyday controls
               // — a user double-tapping for "like" will never accidentally
               // land on delete or report.
-              if (widget.isOwner || _canReport) ...[
+              if (widget.isOwner || _canReport || _canReportHarm) ...[
                 _MoreMenuButton(
                   onDelete: widget.isOwner ? widget.onDelete : null,
                   onReport: _canReport ? widget.onReport : null,
+                  onReportHarm: _canReportHarm ? widget.onReportHarm : null,
                 ),
                 const SizedBox(height: 10),
               ],
@@ -6040,7 +6085,8 @@ class _ActionState extends State<_Action> with SingleTickerProviderStateMixin {
 
 /// The right-rail "more" menu. A 3-dot icon that opens a PopupMenu with the
 /// actions that are not taps you make every day: "Delete" on your own
-/// challenge, and "Doesn't match the challenge" on somebody else's video.
+/// challenge, and "Report" and "Doesn't match the challenge" on somebody
+/// else's video.
 /// Kept as its own widget so the PopupMenu can anchor against the icon's
 /// own RenderBox — anchoring against the parent Column would make the
 /// menu pop out far to the left where it visually disconnects from the
@@ -6049,10 +6095,15 @@ class _MoreMenuButton extends StatelessWidget {
   /// Null: not yours to delete.
   final VoidCallback? onDelete;
 
-  /// Report the video on screen. Null: it is yours, or nobody is signed in.
+  /// Report the video on screen as not matching its challenge. Null: it
+  /// is yours, nobody is signed in, or it answers no challenge.
   final VoidCallback? onReport;
 
-  const _MoreMenuButton({this.onDelete, this.onReport});
+  /// Report the video on screen as harmful. Null: it is yours, or nobody
+  /// is signed in.
+  final VoidCallback? onReportHarm;
+
+  const _MoreMenuButton({this.onDelete, this.onReport, this.onReportHarm});
 
   @override
   Widget build(BuildContext context) {
@@ -6069,8 +6120,21 @@ class _MoreMenuButton extends StatelessWidget {
       onSelected: (v) {
         if (v == 'delete') onDelete?.call();
         if (v == 'report') onReport?.call();
+        if (v == 'report_harm') onReportHarm?.call();
       },
       itemBuilder: (_) => [
+        if (onReportHarm != null)
+          const PopupMenuItem<String>(
+            key: ValueKey('reel_report_harm'),
+            value: 'report_harm',
+            child: Row(
+              children: [
+                Icon(Icons.report_outlined, color: Colors.white, size: 20),
+                SizedBox(width: 10),
+                Text('Report', style: TextStyle(color: Colors.white)),
+              ],
+            ),
+          ),
         if (onReport != null)
           const PopupMenuItem<String>(
             key: ValueKey('reel_report'),

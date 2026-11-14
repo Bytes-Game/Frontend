@@ -42,6 +42,11 @@ class UserModel {
   /// "Influencer" — from [profileTags]; empty for none.
   final String profileTag;
 
+  /// You have asked to follow this account and it has not answered yet.
+  /// Only a private account is asked; a public one is followed at once.
+  /// Said by the server when it is asked about somebody else's profile.
+  final bool followRequested;
+
   UserModel({
     required this.id,
     required this.username,
@@ -60,6 +65,7 @@ class UserModel {
     this.draws = 0,
     this.avatarUrl = '',
     this.profileTag = '',
+    this.followRequested = false,
   });
 
   /// Build a copy with selected fields swapped. Used by callers that
@@ -101,6 +107,7 @@ class UserModel {
       draws: draws,
       avatarUrl: avatarUrl ?? this.avatarUrl,
       profileTag: profileTag ?? this.profileTag,
+      followRequested: followRequested,
     );
   }
 
@@ -131,6 +138,7 @@ class UserModel {
       draws: json['draws'] is num ? (json['draws'] as num).toInt() : 0,
       avatarUrl: (json['avatarUrl'] as String?) ?? '',
       profileTag: (json['profileTag'] as String?) ?? '',
+      followRequested: json['followRequested'] == true,
       );
   }
 }

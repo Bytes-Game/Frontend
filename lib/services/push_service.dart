@@ -197,6 +197,12 @@ class FirebasePushPlatform implements PushPlatform {
   static const _appId = String.fromEnvironment('FIREBASE_APP_ID',
       defaultValue: '1:966321160135:android:3b2f0cb1df4f13957463e2');
   static const _iosAppId = String.fromEnvironment('FIREBASE_IOS_APP_ID');
+
+  /// The iPhone app's own Firebase key. Firebase makes one key per kind of
+  /// phone, and once the Android key is locked to the Android app (the
+  /// before-release list asks for that), an iPhone using it is refused.
+  /// Without it the Android key is used, which works only while unlocked.
+  static const _iosApiKey = String.fromEnvironment('FIREBASE_IOS_API_KEY');
   static const _senderId = String.fromEnvironment('FIREBASE_SENDER_ID',
       defaultValue: '966321160135');
   static const _projectId = String.fromEnvironment('FIREBASE_PROJECT_ID',
@@ -212,10 +218,24 @@ class FirebasePushPlatform implements PushPlatform {
             projectId: _projectId,
           );
 
-  /// Whether this build was given the Firebase values.
+  /// Whether this build was given the Firebase values for this kind of
+  /// phone.
+  ///
+  /// An iPhone needs its own app id (FIREBASE_IOS_APP_ID). It is never
+  /// given the Android one: Apple's side of Firebase refuses an app id
+  /// that is not an iPhone's while it starts, and that takes the app down
+  /// with it. Without one, an iPhone build simply has no notifications
+  /// outside the app.
   static bool get configured =>
-      _apiKey.isNotEmpty && _senderId.isNotEmpty && _projectId.isNotEmpty &&
-      (_appId.isNotEmpty || _iosAppId.isNotEmpty);
+      configuredFor(ios: defaultTargetPlatform == TargetPlatform.iOS);
+
+  @visibleForTesting
+  static bool configuredFor({required bool ios, String? iosAppId}) {
+    if (_senderId.isEmpty || _projectId.isEmpty || _apiKey.isEmpty) {
+      return false;
+    }
+    return ios ? (iosAppId ?? _iosAppId).isNotEmpty : _appId.isNotEmpty;
+  }
 
   @override
   Future<bool> start() async {
@@ -225,8 +245,9 @@ class FirebasePushPlatform implements PushPlatform {
         final ios = defaultTargetPlatform == TargetPlatform.iOS;
         await Firebase.initializeApp(
           options: FirebaseOptions(
-            apiKey: _apiKey,
-            appId: ios && _iosAppId.isNotEmpty ? _iosAppId : _appId,
+            apiKey: ios && _iosApiKey.isNotEmpty ? _iosApiKey : _apiKey,
+            // [configured] has checked an iPhone has its own.
+            appId: ios ? _iosAppId : _appId,
             messagingSenderId: _senderId,
             projectId: _projectId,
           ),
@@ -259,11 +280,30 @@ class FirebasePushPlatform implements PushPlatform {
   @override
   Future<String?> token() async {
     try {
+      if (defaultTargetPlatform == TargetPlatform.iOS &&
+          !await _appleAddressReady()) {
+        return null;
+      }
       return await FirebaseMessaging.instance.getToken();
     } catch (e) {
       debugPrint('[push] could not get this phone\'s push address: $e');
       return null;
     }
+  }
+
+  /// On an iPhone, Firebase can only give a push address once Apple has
+  /// given the phone one of its own, a moment after permission is granted.
+  /// Asked too early, Firebase throws. So: wait for Apple's, a few seconds
+  /// at most. If it comes later, [tokenRefresh] reports the address then.
+  Future<bool> _appleAddressReady() async {
+    for (var i = 0; i < 6; i++) {
+      if (await FirebaseMessaging.instance.getAPNSToken() != null) return true;
+      await Future<void>.delayed(const Duration(seconds: 1));
+    }
+    debugPrint('[push] Apple gave this iPhone no push address. Is Push '
+        'Notifications switched on for the app id in Apple Developer, and '
+        'is this a real iPhone? (The simulator gets none.)');
+    return false;
   }
 
   @override

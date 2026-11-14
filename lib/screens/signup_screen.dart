@@ -7,6 +7,7 @@ import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/config/username_rules.dart';
 import 'package:myapp/pages/static_content_pages.dart';
 import 'package:myapp/providers/auth_provider.dart';
+import 'package:myapp/screens/parent_consent_screen.dart';
 import 'package:myapp/screens/social_sign_in.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/social_auth.dart';
@@ -24,13 +25,82 @@ class SignupScreen extends StatefulWidget {
 
 enum _Name { empty, checking, free, taken, bad }
 
-/// The latest birthday that is 13 years ago [today]: the calendar offers
-/// nothing after it.
-DateTime thirteenYearsAgo(DateTime today) {
-  final y = today.year - 13;
-  // 29 February, thirteen years on, is 28 February.
+/// The latest birthday that is [years] years ago [today]: the calendar
+/// offers nothing after it.
+DateTime yearsAgo(DateTime today, int years) {
+  final y = today.year - years;
+  // 29 February, in a year that has none, is 28 February.
   final d = today.month == 2 && today.day == 29 ? 28 : today.day;
   return DateTime(y, today.month, d);
+}
+
+/// The latest birthday that is 13 years ago [today].
+DateTime thirteenYearsAgo(DateTime today) => yearsAgo(today, 13);
+
+/// The ages for joining where this phone is, asked once per screen: how
+/// old somebody must be, and under which age a parent must agree first.
+/// Until the server answers, and if it never does, the usual rule
+/// ([SignupRules.standard]); the server checks whatever is sent.
+mixin _JoinRules<T extends StatefulWidget> on State<T> {
+  SignupRules _rules = SignupRules.standard;
+  final _parentEmail = TextEditingController();
+
+  static final _parentEmailRe = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+
+  void _loadRules() {
+    ApiService.signupRules().then((rules) {
+      if (mounted) setState(() => _rules = rules);
+    });
+  }
+
+  /// Whether somebody born on [born] needs a parent to agree.
+  bool _needsParent(DateTime? born) =>
+      born != null && _rules.needsParent(born, DateTime.now());
+
+  /// What is wrong with the parent's email as typed, if anything. [own] is
+  /// the person's own email.
+  String? _parentEmailProblem(String own) {
+    final e = _parentEmail.text.trim();
+    if (e.isEmpty) return null;
+    if (!_parentEmailRe.hasMatch(e)) {
+      return "That doesn't look like an email address.";
+    }
+    if (own.isNotEmpty && e.toLowerCase() == own.trim().toLowerCase()) {
+      return "Use your parent's or guardian's own email, not yours.";
+    }
+    return null;
+  }
+
+  /// The box for a parent's email, shown only to somebody young enough to
+  /// need one.
+  Widget _parentEmailBox({
+    required bool enabled,
+    required String own,
+    required String? serverSays,
+    required VoidCallback onChanged,
+  }) {
+    final error = serverSays ?? _parentEmailProblem(own);
+    return TextField(
+      key: const ValueKey('signup_parent_email'),
+      controller: _parentEmail,
+      enabled: enabled,
+      autocorrect: false,
+      keyboardType: TextInputType.emailAddress,
+      textInputAction: TextInputAction.next,
+      onChanged: (_) => onChanged(),
+      decoration: InputDecoration(
+        labelText: "Parent or guardian's email",
+        helperText: error == null
+            ? "You're under ${_rules.parentConsentAge}, so a parent or "
+                'guardian has to say yes first. We email them a link.'
+            : null,
+        helperMaxLines: 3,
+        errorText: error,
+        errorMaxLines: 3,
+        prefixIcon: const Icon(Icons.family_restroom_rounded),
+      ),
+    );
+  }
 }
 
 /// The username box's live check, shared by both sign-up screens: whether
@@ -116,10 +186,11 @@ mixin _UsernameCheck<T extends StatefulWidget> on State<T> {
       };
 }
 
-/// The calendar for a birthday, offering nothing younger than 13.
-Future<DateTime?> _askBirthday(BuildContext context, DateTime? current) {
+/// The calendar for a birthday, offering nothing younger than [minAge].
+Future<DateTime?> _askBirthday(BuildContext context, DateTime? current,
+    {int minAge = 13}) {
   FocusScope.of(context).unfocus();
-  final latest = thirteenYearsAgo(DateTime.now());
+  final latest = yearsAgo(DateTime.now(), minAge);
   return showDatePicker(
     context: context,
     initialDate: current ?? DateTime(latest.year - 5, latest.month, 1),
@@ -131,7 +202,7 @@ Future<DateTime?> _askBirthday(BuildContext context, DateTime? current) {
 }
 
 class _SignupScreenState extends State<SignupScreen>
-    with _UsernameCheck<SignupScreen> {
+    with _UsernameCheck<SignupScreen>, _JoinRules<SignupScreen> {
   final _fullName = TextEditingController();
   final _email = TextEditingController();
   final _password = TextEditingController();
@@ -145,10 +216,17 @@ class _SignupScreenState extends State<SignupScreen>
   static final _emailRe = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
 
   @override
+  void initState() {
+    super.initState();
+    _loadRules();
+  }
+
+  @override
   void dispose() {
     _fullName.dispose();
     _email.dispose();
     _password.dispose();
+    _parentEmail.dispose();
     super.dispose();
   }
 
@@ -179,10 +257,18 @@ class _SignupScreenState extends State<SignupScreen>
       _password.text.isNotEmpty &&
       _passwordProblem == null &&
       _birthday != null &&
+      _parentReady &&
       _agreed;
 
+  /// Young enough to need a parent: their email is filled in, and good.
+  bool get _parentReady =>
+      !_needsParent(_birthday) ||
+      (_parentEmail.text.trim().isNotEmpty &&
+          _parentEmailProblem(_email.text) == null);
+
   Future<void> _pickBirthday() async {
-    final picked = await _askBirthday(context, _birthday);
+    final picked =
+        await _askBirthday(context, _birthday, minAge: _rules.minAge);
     if (picked != null && mounted) {
       setState(() {
         _birthday = picked;
@@ -214,15 +300,20 @@ class _SignupScreenState extends State<SignupScreen>
     });
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final navigator = Navigator.of(context);
+    final username = _username.text.trim().toLowerCase();
+    final password = _password.text;
     final result = await auth.signup(
       context,
       SignupDetails(
-        username: _username.text.trim().toLowerCase(),
-        password: _password.text,
+        username: username,
+        password: password,
         fullName: _fullName.text.trim(),
         email: _email.text.trim().toLowerCase(),
         birthDate: birthdayForServer(_birthday!),
         acceptTerms: _agreed,
+        parentEmail: _needsParent(_birthday)
+            ? _parentEmail.text.trim().toLowerCase()
+            : '',
       ),
     );
     if (!mounted) return;
@@ -230,6 +321,18 @@ class _SignupScreenState extends State<SignupScreen>
       // Signed in. The app underneath has already switched to the welcome
       // steps; this page is still on top of it.
       navigator.popUntil((r) => r.isFirst);
+      return;
+    }
+    // Young enough to need a parent: no account yet. On to the page that
+    // waits for them, which signs in with these details once they agree.
+    if (result.failure == AuthFailure.parentConsentPending) {
+      navigator.pushReplacement(MaterialPageRoute(
+        builder: (_) => ParentConsentScreen(
+          wait: ParentWait.fromAnswer(result.extra ?? const {}),
+          onCheck: (ctx) => Provider.of<AuthProvider>(ctx, listen: false)
+              .login(ctx, username, password),
+        ),
+      ));
       return;
     }
     setState(() {
@@ -383,8 +486,19 @@ class _SignupScreenState extends State<SignupScreen>
                             : birthdayWords(_birthday!),
                         error: _serverSays['birthDate'],
                         enabled: !_busy,
+                        minAge: _rules.minAge,
                         onTap: _pickBirthday,
                       ),
+                      if (_needsParent(_birthday)) ...[
+                        const SizedBox(height: 14),
+                        _parentEmailBox(
+                          enabled: !_busy,
+                          own: _email.text,
+                          serverSays: _serverSays['parentEmail'],
+                          onChanged: () => setState(
+                              () => _serverSays.remove('parentEmail')),
+                        ),
+                      ],
                       const SizedBox(height: 14),
                       TextField(
                         key: const ValueKey('signup_password'),
@@ -430,7 +544,9 @@ class _SignupScreenState extends State<SignupScreen>
                       const SizedBox(height: 18),
                       AuthPrimaryButton(
                         key: const ValueKey('signup_submit'),
-                        label: 'Create account',
+                        label: _needsParent(_birthday)
+                            ? 'Ask my parent or guardian'
+                            : 'Create account',
                         loading: _busy,
                         onPressed: _ready ? _submit : null,
                       ),
@@ -477,11 +593,15 @@ class _BirthdayBox extends StatelessWidget {
   final bool enabled;
   final VoidCallback onTap;
 
+  /// How old somebody must be to join where this phone is.
+  final int minAge;
+
   const _BirthdayBox({
     required this.value,
     required this.error,
     required this.enabled,
     required this.onTap,
+    this.minAge = 13,
   });
 
   @override
@@ -497,7 +617,7 @@ class _BirthdayBox extends StatelessWidget {
           prefixIcon: const Icon(Icons.cake_outlined),
           suffixIcon: const Icon(Icons.calendar_month_rounded),
           helperText: error == null
-              ? "Private. You need to be 13 or older to join."
+              ? "Private. You need to be $minAge or older to join."
               : null,
           errorText: error,
           enabled: enabled,
@@ -648,7 +768,9 @@ class FinishSocialSignupScreen extends StatefulWidget {
 }
 
 class _FinishSocialSignupScreenState extends State<FinishSocialSignupScreen>
-    with _UsernameCheck<FinishSocialSignupScreen> {
+    with
+        _UsernameCheck<FinishSocialSignupScreen>,
+        _JoinRules<FinishSocialSignupScreen> {
   late final _fullName = TextEditingController(text: widget.start.fullName);
   DateTime? _birthday;
   bool _agreed = false;
@@ -661,6 +783,7 @@ class _FinishSocialSignupScreenState extends State<FinishSocialSignupScreen>
   @override
   void initState() {
     super.initState();
+    _loadRules();
     final suggested = widget.start.suggestedUsername;
     if (suggested.isNotEmpty) {
       _username.text = suggested;
@@ -671,14 +794,26 @@ class _FinishSocialSignupScreenState extends State<FinishSocialSignupScreen>
   @override
   void dispose() {
     _fullName.dispose();
+    _parentEmail.dispose();
     super.dispose();
   }
 
   bool get _ready =>
-      _name == _Name.free && _birthday != null && _agreed && !_expired;
+      _name == _Name.free &&
+      _birthday != null &&
+      _parentReady &&
+      _agreed &&
+      !_expired;
+
+  /// Young enough to need a parent: their email is filled in, and good.
+  bool get _parentReady =>
+      !_needsParent(_birthday) ||
+      (_parentEmail.text.trim().isNotEmpty &&
+          _parentEmailProblem(widget.start.email) == null);
 
   Future<void> _pickBirthday() async {
-    final picked = await _askBirthday(context, _birthday);
+    final picked =
+        await _askBirthday(context, _birthday, minAge: _rules.minAge);
     if (picked != null && mounted) {
       setState(() {
         _birthday = picked;
@@ -704,11 +839,27 @@ class _FinishSocialSignupScreenState extends State<FinishSocialSignupScreen>
       fullName: _fullName.text.trim(),
       birthDate: _SignupScreenState.birthdayForServer(_birthday!),
       acceptTerms: _agreed,
+      parentEmail: _needsParent(_birthday)
+          ? _parentEmail.text.trim().toLowerCase()
+          : '',
     );
     if (!mounted) return;
     if (result == null) {
       // Signed in: the welcome steps are underneath now.
       navigator.popUntil((r) => r.isFirst);
+      return;
+    }
+    // Young enough to need a parent: no account yet. On to the page that
+    // waits for them, which signs in with Google or Apple again once they
+    // agree.
+    if (result.failure == AuthFailure.parentConsentPending) {
+      final provider = widget.start.provider;
+      navigator.pushReplacement(MaterialPageRoute(
+        builder: (_) => ParentConsentScreen(
+          wait: ParentWait.fromAnswer(result.extra ?? const {}),
+          onCheck: (ctx) => signInAgainWith(ctx, provider),
+        ),
+      ));
       return;
     }
     setState(() {
@@ -818,8 +969,19 @@ class _FinishSocialSignupScreenState extends State<FinishSocialSignupScreen>
                           : _SignupScreenState.birthdayWords(_birthday!),
                       error: _serverSays['birthDate'],
                       enabled: !_busy,
+                      minAge: _rules.minAge,
                       onTap: _pickBirthday,
                     ),
+                    if (_needsParent(_birthday)) ...[
+                      const SizedBox(height: 14),
+                      _parentEmailBox(
+                        enabled: !_busy,
+                        own: widget.start.email,
+                        serverSays: _serverSays['parentEmail'],
+                        onChanged: () => setState(
+                            () => _serverSays.remove('parentEmail')),
+                      ),
+                    ],
                     const SizedBox(height: 18),
                     _TermsLine(
                       agreed: _agreed,
@@ -834,7 +996,9 @@ class _FinishSocialSignupScreenState extends State<FinishSocialSignupScreen>
                     const SizedBox(height: 18),
                     AuthPrimaryButton(
                       key: const ValueKey('finish_submit'),
-                      label: 'Create account',
+                      label: _needsParent(_birthday)
+                          ? 'Ask my parent or guardian'
+                          : 'Create account',
                       loading: _busy,
                       onPressed: _ready ? _submit : null,
                     ),

@@ -1,4 +1,4 @@
-package com.example.devf
+package com.flexete.app
 
 import android.app.NotificationChannel
 import android.app.NotificationManager

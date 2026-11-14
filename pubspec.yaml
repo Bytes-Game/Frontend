@@ -158,6 +158,9 @@ dev_dependencies:
     sdk: flutter
   # A stand-in camera for tests of the camera page (test/create_page_test.dart).
   camera_platform_interface: ^2.14.0
+  # A stand-in for the phone's secure storage that fails every time, for
+  # the test that a win is still celebrated then (test/win_moment_test.dart).
+  flutter_secure_storage_platform_interface: ^1.1.2
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

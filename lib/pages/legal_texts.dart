@@ -8,7 +8,7 @@ import 'package:myapp/config/constants.dart';
 /// move [legalUpdated] to that day.
 
 /// The day the documents last changed.
-const legalUpdated = '1 November 2026';
+const legalUpdated = '12 November 2026';
 
 /// A numbered part of a document: a heading and its paragraphs. A paragraph
 /// that starts with "• " shows as a bullet point.
@@ -46,6 +46,12 @@ class LegalDocument {
 const _name = AppConstants.appName;
 const _support = AppConstants.supportEmail;
 const _privacy = AppConstants.privacyEmail;
+const _grievance = AppConstants.grievanceEmail;
+
+/// "our Grievance Officer", with their name once the owner has given one.
+const _officer = AppConstants.grievanceOfficer == ''
+    ? 'our Grievance Officer'
+    : 'our Grievance Officer, ${AppConstants.grievanceOfficer},';
 
 // ─────────────────────────────────────────────────────────────────────────
 // TERMS OF SERVICE
@@ -58,7 +64,8 @@ const termsOfService = LegalDocument(
       'services (together, the "Service"). Please read them. By creating an '
       'account or using the Service, you agree to them.',
   summary: [
-    'You must be at least 13 to use $_name.',
+    'You must be at least 13 to use $_name, and 16 in some countries. If '
+        'you are under 18, a parent or guardian must agree first.',
     'You own what you post. You let us show it on $_name so the Service '
         'can work.',
     'Play fair: no fake accounts, no bought votes, likes or followers.',
@@ -70,9 +77,18 @@ const termsOfService = LegalDocument(
   contact: _support,
   sections: [
     LegalSection('Who can use $_name', [
-      'You must be at least 13 years old to create an account. If you are '
-          'under the age of adulthood where you live, you need a parent or '
-          'guardian to agree to these terms with you.',
+      'You must be at least 13 years old to create an account. Where the '
+          'law of your country sets a higher age, that age applies: 16 in '
+          'Australia, Brazil, Indonesia and Malaysia.',
+      'If you are under 18, you can have an account only once your parent '
+          'or legal guardian has agreed. We email them a link. They read '
+          'what $_name is and what it keeps about you, and say yes or no. '
+          'Until they say yes, no account is made. If they say no, or do '
+          'not answer within 7 days, what you entered is deleted.',
+      'A parent or guardian who agreed can change their mind at any time. '
+          'The email confirming their answer has a link that closes the '
+          'account and deletes everything in it, and they can also write '
+          'to $_support.',
       'You must give your real date of birth and an email address you use. '
           'We use your date of birth only to check your age, and we never '
           'show it or your email to anyone.',
@@ -167,6 +183,8 @@ const termsOfService = LegalDocument(
       'For 30 days, signing in again lets you keep it, with everything '
           'back. After 30 days it is deleted for good: your profile, posts, '
           'battles, comments, likes, votes and followers.',
+      'Without the app, write to $_support from the email on your account '
+          'and ask us to delete it.',
       'We may suspend or end an account that seriously or repeatedly '
           'breaks these terms, or when the law requires it.',
     ]),
@@ -190,6 +208,37 @@ const termsOfService = LegalDocument(
       'Nothing in these terms takes away rights you have by law that '
           'cannot be taken away by an agreement.',
     ]),
+    LegalSection('Complaints', [
+      'If you have a complaint about something on $_name, about your '
+          'account, or about a decision we made, write to $_officer at '
+          '$_grievance.',
+      'We confirm every complaint within 24 hours and resolve it within 15 '
+          'days. Content that shows someone\'s private parts, shows them in '
+          'a sexual act, or pretends to be them (including edited or '
+          'made-up pictures of them) is dealt with within 24 hours of a '
+          'complaint from them or someone acting for them.',
+      'In India, if you are not happy with our decision, you can appeal to '
+          'the Grievance Appellate Committee within 30 days, at gac.gov.in.',
+    ]),
+    LegalSection('The law that applies, and where you live', [
+      '$_name is run from India, and these terms are governed by the laws '
+          'of India.',
+      'If you use $_name as a consumer in another country, you keep every '
+          'protection the law of your own country gives you and that an '
+          'agreement cannot take away, and you may bring a claim in the '
+          'courts of your own country where that law says you can.',
+      'European Union, United Kingdom and Switzerland: nothing in these '
+          'terms limits our responsibility for death or injury caused by '
+          'our carelessness, for fraud, or for anything else the law does '
+          'not let us limit. People in the European Union can also use the '
+          'European Commission\'s online dispute resolution service.',
+      'Australia: nothing in these terms takes away the guarantees the '
+          'Australian Consumer Law gives you.',
+      'United States: if a part of these terms cannot be enforced in your '
+          'state, the rest still applies.',
+      'What our Privacy Policy says for each country is part of how we '
+          'keep these terms.',
+    ]),
     LegalSection('Contact', [
       'Questions about these terms: $_support.',
     ]),
@@ -211,6 +260,8 @@ const privacyPolicy = LegalDocument(
     'We use what you watch to pick videos for you. You can clear your '
         'watch history any time.',
     'Passwords and reset codes are stored scrambled, never as typed.',
+    'If you are under 18, a parent or guardian must agree before you have '
+        'an account, and can close it at any time.',
     'Delete your account and everything in it is gone after 30 days.',
   ],
   contact: _privacy,
@@ -231,12 +282,23 @@ const privacyPolicy = LegalDocument(
       '• Google or Apple: if you sign in with one of them, the name and '
           'email address they share with us, and the id they give your '
           'account. We never see your Google or Apple password.',
+      '• If you are under 18: your parent\'s or guardian\'s email address, '
+          'so we can ask them. When they answer, we keep a record that '
+          'they agreed: their name, whether they are your parent or your '
+          'guardian, the year they were born, and when and from which '
+          'internet address and country they answered.',
     ]),
     LegalSection('Information collected as you use $_name', [
       '• Activity: which videos you watch and for how long, what you tap, '
           'like, share and vote for, and who you follow and block.',
       '• Device and connection: what kind of video your phone can play '
           'smoothly, the app version, and your IP address.',
+      '• Your country: worked out from your internet connection, or '
+          'failing that from the region your phone is set to. Only the '
+          'country, never where in it. We use it to apply the rules of '
+          'your country, such as the age for joining, and to show you more '
+          'videos made in your country. A video you post is marked with '
+          'the country you posted it from.',
       '• Notifications: a token from your phone that lets us send you '
           'notifications.',
       '• Crash reports: when the app crashes or something fails, a report '
@@ -246,7 +308,7 @@ const privacyPolicy = LegalDocument(
           'pick something to post. We receive only what you choose to post '
           'or send.',
       'We do not collect your phone number, your contacts or your '
-          'location.',
+          'precise location.',
     ]),
     LegalSection('How we use it', [
       '• To run $_name: your account, profile, posts, battles, votes, '
@@ -256,8 +318,13 @@ const privacyPolicy = LegalDocument(
       '• To keep $_name safe and fair: checking reports, spotting fake '
           'votes and spam, limiting sign-in attempts, and protecting '
           'accounts.',
+      '• To follow the law where you are: checking that you are old enough '
+          'to join, and asking a parent or guardian when the law says one '
+          'must agree.',
       '• To talk to you: notifications you have switched on, and emails '
-          'about your account, such as a password reset code.',
+          'about your account, such as a password reset code. If you are '
+          'under 18, we also email your parent or guardian to ask for '
+          'their permission and to confirm their answer.',
       '• To fix and improve the app: crash reports and usage numbers show '
           'us what breaks and what works.',
     ]),
@@ -280,7 +347,8 @@ const privacyPolicy = LegalDocument(
       '• Cloudflare, which stores and delivers videos and photos;',
       '• Google Firebase, to deliver notifications to your phone;',
       '• Sentry, to receive crash reports;',
-      '• an email service, to send password reset codes;',
+      '• an email service, to send password reset codes and the emails to '
+          'a parent or guardian;',
       '• Google or Apple, only if you choose to sign in with them.',
       'We may also share information when the law requires it, to protect '
           'someone\'s safety, or as part of a sale or merger of $_name, in '
@@ -291,6 +359,11 @@ const privacyPolicy = LegalDocument(
           'into a summary of what you like, and the detail is deleted.',
       '• Your content: until you delete it, or delete your account.',
       '• Password reset codes: 15 minutes, or until used.',
+      '• A sign-up waiting for a parent or guardian: 7 days at most. If '
+          'they say no, 1 day. Then it is deleted. You can also cancel it '
+          'yourself, which deletes it at once.',
+      '• The record that a parent or guardian agreed: as long as the '
+          'account exists. It is deleted with the account.',
       '• Your account: until you delete it. It is then hidden at once and '
           'deleted for good, with everything in it, after 30 days.',
       'Some records may be kept longer where the law requires it, or to '
@@ -316,16 +389,78 @@ const privacyPolicy = LegalDocument(
           'try to sign in or ask for a code. No system is perfect, but we '
           'work to protect your information.',
     ]),
-    LegalSection('Children', [
-      '$_name is not for children under 13, and we do not knowingly collect '
-          'their information. If we learn that someone under 13 has an '
-          'account, we delete it. If you think a child is using $_name, '
-          'tell us at $_privacy.',
+    LegalSection('Children and young people', [
+      '$_name is not for children under 13, or under 16 in Australia, '
+          'Brazil, Indonesia and Malaysia, and we do not knowingly collect '
+          'their information. If we learn that someone under that age has '
+          'an account, we delete it. If you think a child is using '
+          '$_name, tell us at $_privacy.',
+      'Anyone under 18 can have an account only after a parent or legal '
+          'guardian has agreed. We ask them by email, with a link to a '
+          'page that explains what $_name is and what it keeps. This '
+          'checks that an adult with their own email address agreed. It '
+          'does not check identity documents.',
+      'A parent or guardian can, at any time: close the young person\'s '
+          'account and delete everything in it, with the link in the '
+          'email we sent them; or write to $_privacy to see what we keep '
+          'about the young person, or to have it corrected.',
+      'We do not show advertisements to anyone, and we never sell or '
+          'share a young person\'s information for advertising. What a '
+          'young person watches is used only to choose videos for them '
+          'and to keep $_name safe.',
     ]),
     LegalSection('Information across borders', [
-      'The companies that help run $_name may store and process '
-          'information in other countries. When they do, we make sure it '
-          'stays protected as this policy describes.',
+      '$_name is run from India. The companies that help run it store and '
+          'process information in other countries, including the United '
+          'States. When they do, we make sure it stays protected as this '
+          'policy describes, using the agreements the law asks for.',
+    ]),
+    LegalSection('Where you live', [
+      'The rights in "Your choices and rights" are for everyone, wherever '
+          'you live. To use any of them, write to $_privacy. We answer '
+          'within 30 days, and sooner where your law says so. We never '
+          'treat you worse for using a right. Some countries add more:',
+      'India. Under the Digital Personal Data Protection Act, 2023, you '
+          'can ask what we hold about you and how it is used, have it '
+          'corrected, completed or erased, take back a consent you gave, '
+          'and name another person to use these rights for you if you die '
+          'or cannot act. Complaints go first to $_officer at $_grievance; '
+          'if you are not satisfied, you can then complain to the Data '
+          'Protection Board of India. For anyone under 18 we ask a parent '
+          'or guardian first, as described above.',
+      'European Economic Area, United Kingdom and Switzerland. We use '
+          'your information on these grounds: to provide the Service you '
+          'signed up for (your account, posts, battles and messages); our '
+          'legitimate interests in keeping $_name safe, fixing it, and '
+          'choosing videos for you; your consent, or a parent\'s or '
+          'guardian\'s, where we ask for it, such as notifications; and '
+          'the law, where it requires something of us. You can ask to see '
+          'your information, correct it, erase it, limit how it is used, '
+          'take it with you, object to a use, and take back a consent. '
+          'You can complain to the data protection authority where you '
+          'live (in the United Kingdom, the Information Commissioner\'s '
+          'Office). When information leaves your region, it is protected '
+          'by standard contractual clauses or another safeguard the law '
+          'accepts.',
+      'United States. We do not sell your personal information, and we do '
+          'not share it for advertising based on what you do on other '
+          'apps or sites. Depending on your state, you can ask to know '
+          'what we hold, to get a copy, to correct it, and to delete it, '
+          'and you may appeal our answer by writing to $_privacy. If you '
+          'are under 18, you can remove anything you posted by deleting '
+          'it in the app. $_name is not for children under 13, and we do '
+          'not knowingly collect their information.',
+      'Brazil. Under the Lei Geral de Proteção de Dados, you can ask us '
+          'to confirm that we hold your information, to see it, to '
+          'correct it, to make it anonymous, block or delete it where it '
+          'is not needed, to take it with you, to tell you who we share '
+          'it with, and to take back a consent. You can complain to the '
+          'Autoridade Nacional de Proteção de Dados.',
+      'Australia. You can ask to see and correct the information we hold '
+          'about you, and you can complain to the Office of the '
+          'Australian Information Commissioner.',
+      'Other countries. If the law where you live gives you rights that '
+          'are not listed here, you have them with us too.',
     ]),
     LegalSection('Changes to this policy', [
       'If we change this policy in a way that matters, we will tell you in '
@@ -333,6 +468,9 @@ const privacyPolicy = LegalDocument(
     ]),
     LegalSection('Contact', [
       'Privacy questions and requests: $_privacy.',
+      'Complaints about how we handle your information: $_officer at '
+          '$_grievance. We confirm every complaint within 24 hours and '
+          'resolve it within 15 days.',
     ]),
   ],
 );
@@ -382,9 +520,11 @@ const communityGuidelines = LegalDocument(
       'No graphic violence or gore.',
     ]),
     LegalSection('Young people', [
-      'Accounts are for people 13 and over. Anything that sexualises, '
-          'endangers or exploits young people is never allowed, is removed, '
-          'and is reported to the authorities.',
+      'Accounts are for people 13 and over, and 16 and over in some '
+          'countries. Anyone under 18 needs a parent or guardian to agree '
+          'first. Anything that sexualises, endangers or exploits young '
+          'people is never allowed, is removed, and is reported to the '
+          'authorities.',
     ]),
     LegalSection('Nudity and sexual content', [
       'No nudity, sexual activity or sexually explicit content, and no '
@@ -422,10 +562,20 @@ const communityGuidelines = LegalDocument(
           'again.',
     ]),
     LegalSection('Reporting', [
-      'On a video, tap More (⋯) and choose "Doesn\'t match the challenge". '
-          'To stop someone reaching you, block them from their profile.',
-      'For anything else that breaks these rules, use Settings → Report a '
-          'problem, or write to $_support.',
+      'To report a video, tap More (⋯) on it and choose Report. To report '
+          'an account, open their profile, tap More (⋯) and choose Report. '
+          'To report a comment, press and hold it. Choose why, add a few '
+          'words if you like, and send.',
+      'A person reads every report. What breaks these guidelines is '
+          'removed, and the account may be suspended. Nobody is told who '
+          'reported it.',
+      'On a battle, More (⋯) also has "Doesn\'t match the challenge", for a '
+          'video that has nothing to do with what the challenge asks.',
+      'To stop someone reaching you, block them from their profile. If '
+          'someone is in immediate danger, contact your local emergency '
+          'services.',
+      'For anything else, use Settings → Report a problem, or write to '
+          '$_officer at $_grievance.',
     ]),
   ],
 );
