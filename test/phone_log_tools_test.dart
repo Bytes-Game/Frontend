@@ -24,6 +24,15 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
+/// The app's id, read where the tools read it (Get-AppId in
+/// phone_log.ps1): android/app/build.gradle.kts. The phone's lines below
+/// name the app by it, so they follow the id when it changes: these tests
+/// had the old id typed into them, and would have gone on describing an
+/// app the tools no longer looked for.
+final String _appId = RegExp(r'applicationId\s*=?\s*"([^"]+)"')
+    .firstMatch(File('android/app/build.gradle.kts').readAsStringSync())!
+    .group(1)!;
+
 const _app = 27066;
 const _appAgain = 28100; // the app, after it was killed and opened again
 const _system = 1800;
@@ -52,7 +61,7 @@ List<String> _phoneLog() {
       'I',
       'ActivityManager',
       _system,
-      'Start proc $_app:com.example.devf/u0a391 for next-top-activity',
+      'Start proc $_app:$_appId/u0a391 for next-top-activity',
     ),
     _line(
       1,
@@ -134,7 +143,7 @@ List<String> _phoneLog() {
       'E',
       'ActivityManager',
       _system,
-      'ANR in com.example.devf (com.example.devf/.MainActivity)',
+      'ANR in $_appId ($_appId/.MainActivity)',
     ),
     _line(ms + 9000, 'E', 'ActivityManager', _system, 'PID: $_app'),
     _line(
@@ -162,14 +171,14 @@ List<String> _phoneLog() {
       'I',
       'ActivityManager',
       _system,
-      'Process com.example.devf (pid $_app) has died: fg  TOP',
+      'Process $_appId (pid $_app) has died: fg  TOP',
     ),
     _line(
       ms + 11900,
       'I',
       'ActivityManager',
       _system,
-      'Start proc $_appAgain:com.example.devf/u0a391 for next-top-activity',
+      'Start proc $_appAgain:$_appId/u0a391 for next-top-activity',
     ),
     _line(ms + 12000, 'I', 'flutter', _appAgain, '[reel] opened again'),
   ]);
@@ -454,7 +463,7 @@ void main() {
         // same lines also make the "most common" list, and a check on the
         // whole screen once passed with the not-responding detection off.
         final problems = _section(said, 'What the phone said went wrong:');
-        expect(problems, contains('ANR in com.example.devf'));
+        expect(problems, contains('ANR in $_appId'));
         expect(problems, contains('Reason: Input dispatching timed out'));
         expect(
           problems,
@@ -465,7 +474,7 @@ void main() {
         );
         expect(
           problems,
-          contains('Process com.example.devf (pid $_app) has died'),
+          contains('Process $_appId (pid $_app) has died'),
           reason: "picked out by the app's id, read from the Android build",
         );
         expect(

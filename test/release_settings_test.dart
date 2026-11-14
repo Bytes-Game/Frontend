@@ -37,6 +37,56 @@ void main() {
     );
   });
 
+  test("the app's id is Flexete's own, the same everywhere, and the "
+      "Android code lives under it", () {
+    // Google Play refuses an id that starts with com.example, and the id
+    // can never change after the first upload.
+    final gradle = File('android/app/build.gradle.kts')
+        .readAsLinesSync()
+        .where((l) => !l.trimLeft().startsWith('//'))
+        .join('\n');
+    final id = RegExp(
+      r'applicationId\s*=\s*"([^"]+)"',
+    ).firstMatch(gradle)!.group(1)!;
+    final namespace = RegExp(
+      r'namespace\s*=\s*"([^"]+)"',
+    ).firstMatch(gradle)!.group(1)!;
+    expect(id, 'com.flexete.app');
+    expect(id.startsWith('com.example'), isFalse);
+    // Android looks for the app's first screen as "<namespace>.MainActivity"
+    // (the manifest says ".MainActivity"). If the code is in another
+    // package the app is installed and then closes the moment it is opened.
+    expect(namespace, id);
+    final manifest = withoutXmlComments(
+      File('android/app/src/main/AndroidManifest.xml').readAsStringSync(),
+    );
+    expect(manifest, contains('android:name=".MainActivity"'));
+    final activity = File(
+      'android/app/src/main/kotlin/${namespace.replaceAll('.', '/')}'
+      '/MainActivity.kt',
+    );
+    expect(activity.existsSync(), isTrue, reason: activity.path);
+    expect(
+      activity.readAsLinesSync().first.trim(),
+      'package $namespace',
+    );
+    // One first screen, not two: the template's empty one is gone.
+    final activities = Directory('android/app/src/main/kotlin')
+        .listSync(recursive: true)
+        .whereType<File>()
+        .where((f) => f.path.endsWith('MainActivity.kt'))
+        .toList();
+    expect(activities, hasLength(1));
+    // The iPhone app carries the same id.
+    final ios = File(
+      'ios/Runner.xcodeproj/project.pbxproj',
+    ).readAsStringSync();
+    final iosIds = RegExp(
+      r'PRODUCT_BUNDLE_IDENTIFIER = ([^;]+);',
+    ).allMatches(ios).map((m) => m.group(1)!).toSet();
+    expect(iosIds, {id, '$id.RunnerTests'});
+  });
+
   test('the iPhone app may play videos from its own server on the phone, '
       'and nothing else is allowed over plain http', () {
     final plist = withoutXmlComments(

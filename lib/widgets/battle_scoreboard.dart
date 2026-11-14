@@ -6,6 +6,7 @@ import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/models/battle_model.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/widgets/arena_ui.dart' show PersonPhoto;
+import 'package:myapp/widgets/versus_bar.dart';
 
 /// The live score of one battle.
 ///
@@ -203,6 +204,9 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
     final total = s.sides.fold<double>(0, (a, b) => a + shown(b));
     final canVote =
         widget.onVote != null && !s.over && !s.notStarted && !_viewerIsIn;
+    // Two sides: one bar between them, leaning toward whoever has more
+    // votes (VersusBar). Any other number keeps a bar under each row.
+    final versus = !s.notStarted && s.sides.length == 2;
 
     // A plain raised panel, the same as every other box on the battle page,
     // rather than a tinted gradient.
@@ -261,12 +265,31 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
               '${s.battleDays} days.',
               style: tt.bodyMedium,
             )
-          else
+          else ...[
+            if (versus)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: VersusBar(
+                  left: shown(s.sides[0]),
+                  right: shown(s.sides[1]),
+                  // Who the server says is ahead. Not worked out from the
+                  // votes on show: some do not count, and level votes are
+                  // settled on likes.
+                  leader: s.sides[0].leading == s.sides[1].leading
+                      ? 0
+                      : (s.sides[0].leading ? -1 : 1),
+                  leftColor: _SideRow.colourOf(s.sides[0]),
+                  rightColor: _SideRow.colourOf(s.sides[1]),
+                  leftName: s.sides[0].username,
+                  rightName: s.sides[1].username,
+                ),
+              ),
             for (final side in s.sides)
               _SideRow(
                 side: side,
                 votes: shown(side),
                 share: total > 0 ? shown(side) / total : 0,
+                ownBar: !versus,
                 decided: s.resolved,
                 yours: _yourVote == _sideKey(side),
                 // One vote each; voting for the other side moves it.
@@ -278,6 +301,7 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
                       )
                     : null,
               ),
+          ],
           // Votes level and somebody ahead on likes, or level on
           // everything: say so, or the "ahead" mark looks like a mistake.
           if (!s.notStarted && s.tieBreakNote.isNotEmpty) ...[
@@ -357,7 +381,11 @@ class _BattleScoreboardState extends State<BattleScoreboard> {
 
   String _verdict(BattleStandings s) {
     final lead = s.onTop;
-    if (lead != null) return '${lead.username} won.';
+    if (lead != null) {
+      // To the person who won it, in their own words.
+      final you = widget.viewerId != null && lead.userId == widget.viewerId;
+      return you ? 'You won.' : '${lead.username} won.';
+    }
     if (s.levelOnTop) return "It's a draw.";
     return 'No result: nobody voted.';
   }
@@ -460,6 +488,10 @@ class _SideRow extends StatelessWidget {
   /// server catches up.
   final double votes;
   final double share;
+
+  /// Whether this row draws its own bar. Not when the two sides share one
+  /// (VersusBar).
+  final bool ownBar;
   final bool decided;
 
   /// This person's vote is on this side.
@@ -473,21 +505,24 @@ class _SideRow extends StatelessWidget {
     required this.side,
     required this.votes,
     required this.share,
+    required this.ownBar,
     required this.decided,
     required this.yours,
     this.onVote,
     this.onYours,
   });
 
+  /// The app's blue for the challenger, its paler blue for the answer: two
+  /// sides you can tell apart without the orange that clashed with the
+  /// rest of the app.
+  static Color colourOf(BattleSide side) =>
+      side.isCreator ? AppTheme.primary : AppTheme.primarySoft;
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
-    // The app's blue for the challenger, Apple's cyan for the answer: two
-    // sides you can tell apart without the orange that clashed with the
-    // rest of the app.
-    final accent =
-        side.isCreator ? AppTheme.primary : AppTheme.primarySoft;
+    final accent = colourOf(side);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(
@@ -551,8 +586,10 @@ class _SideRow extends StatelessWidget {
                   ],
                 ),
               ),
-              Text(
-                votesText(votes),
+              // Rolls to the new count when a vote lands.
+              RollingCount(
+                value: votes,
+                text: votesText(votes),
                 style: tt.headlineSmall?.copyWith(
                   fontWeight: FontWeight.w800,
                   color: accent,
@@ -578,16 +615,18 @@ class _SideRow extends StatelessWidget {
               ],
             ],
           ),
-          const SizedBox(height: 6),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(6),
-            child: LinearProgressIndicator(
-              value: share.clamp(0.0, 1.0),
-              minHeight: 6,
-              backgroundColor: cs.onSurface.withValues(alpha: 0.08),
-              valueColor: AlwaysStoppedAnimation(accent),
+          if (ownBar) ...[
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: LinearProgressIndicator(
+                value: share.clamp(0.0, 1.0),
+                minHeight: 6,
+                backgroundColor: cs.onSurface.withValues(alpha: 0.08),
+                valueColor: AlwaysStoppedAnimation(accent),
+              ),
             ),
-          ),
+          ],
           const SizedBox(height: 4),
           Row(
             children: [

@@ -103,19 +103,27 @@ the day it is added.
 
 ### A. The app's identity
 
-1. **Change the Android app id.** It is still the template's
-   `com.example.devf` (`android/app/build.gradle.kts`, `applicationId` and
-   `namespace`). Google Play refuses any app whose id starts with
-   `com.example`, and the id can never change after the first upload, so pick
-   it carefully. The usual choice is your web address backwards:
-   `com.flexete.app`, since you own flexete.com. The iPhone id is the same
-   default (`PRODUCT_BUNDLE_IDENTIFIER` in `ios/Runner.xcodeproj`).
-   Several things are tied to the id, so after changing it:
-   - Push notifications: register the new id as an app in Firebase and use
-     its new `FIREBASE_APP_ID`, or notifications stop.
+1. **The app id is `com.flexete.app`: finish what hangs on it.** It was
+   changed from the template's `com.example.devf` on 14 November, on
+   Android (`applicationId` and `namespace` in
+   `android/app/build.gradle.kts`) and on iPhone
+   (`PRODUCT_BUNDLE_IDENTIFIER` in `ios/Runner.xcodeproj`). It is your web
+   address backwards, the usual choice. It can still be changed until the
+   first upload to a store, and never after: say so before then if you
+   want another.
+   To a phone, a build with the new id is a different app. It installs
+   beside any older test build and starts signed out. Uninstall the old
+   one.
+   Still to do, because each is tied to the id:
+   - Push notifications: the app still carries the Firebase registration
+     made for the old id. In Firebase: Project settings → Your apps → Add
+     app → Android, with `com.flexete.app`. Firebase then shows an "App
+     ID" that starts `1:966321160135:android:`. Build with
+     `--dart-define=FIREBASE_APP_ID=<that>`, or ask for it to become the
+     built-in one. Until then notifications are not sure to arrive: this
+     was not tried on a phone. The lock on the key (item 25) needs it too.
    - Google sign-in: the Android OAuth client (item 10) is made for the id.
-   - Apple sign-in: the iPhone id goes in `APPLE_CLIENT_IDS` (item 6), and
-     the Android id in `ANDROID_PACKAGE_NAME` on Render (item 6).
+   - Apple sign-in: the iPhone id goes in `APPLE_CLIENT_IDS` (item 6).
 2. **Make the release signing key.** Without it, release builds are signed
    with Flutter's shared debug key, and Google Play refuses those. The steps
    are in the comment at the top of `android/app/build.gradle.kts`: make the
@@ -158,9 +166,11 @@ the day it is added.
      separated by a comma.
    - `APPLE_CLIENT_IDS`: the iPhone app id and the Apple Services ID from
      item 11, separated by a comma.
-   - `ANDROID_PACKAGE_NAME`: the new Android id from item 1 (Apple sign-in
-     on Android comes back to the app through it).
    Without them, those buttons say "isn't set up yet".
+   `ANDROID_PACKAGE_NAME` no longer needs setting: the server knows the
+   Android id is `com.flexete.app` (Apple sign-in on Android comes back
+   to the app through it). If it is set on Render to anything else,
+   delete it. Set it only if the id is ever changed again.
 7. **Deploy the server first.** Before, or together with, the app build
    that needs it. This matters more than it used to: the app now sends
    its sign-in to the live connection in a new way, which only the new
@@ -320,21 +330,49 @@ shared links and everything below stop working.
     - Then ask for the app's server address and shared links to switch to
       it (items 14, 16, 17).
 19. **Videos from your own address.** Optional, but it speeds videos up.
-    The videos live in Cloudflare R2. If `R2_PUBLIC_BASE_URL` on Render is
-    empty or a `pub-….r2.dev` address, they are served from R2's test
-    address, which Cloudflare slows down and does not cache.
-    - In Cloudflare: R2 → the bucket → Settings → Custom Domains → connect
-      `media.flexete.com`.
-    - On Render: set `R2_PUBLIC_BASE_URL=https://media.flexete.com`. The
-      server hands it to the video workers with every job. If the GitHub
-      secret of the same name is set (hls-worker), make it match or delete
-      it.
-    - New videos then load from Cloudflare's cache near each viewer. Old
-      videos keep their old address, which still works; moving them over
-      needs a small server change, so ask. Checked on 12 November: the
-      live server still hands out the `pub-….r2.dev` address, so no video
-      is cached yet. Do this before launch and every video ever posted is
-      on the fast address from the start.
+    The videos live in Cloudflare R2. Checked on 14 November: the live
+    server still hands out a `pub-….r2.dev` address. That is R2's test
+    address: Cloudflare slows it down and keeps no copy near the viewer.
+    The server says which address is in use at every start: Render → the
+    service → Logs, the line starting `media:`. (If that line ever says
+    `R2_PUBLIC_BASE_URL is not set`, the setting is empty and files sent
+    from the app do not load: step c is then the fix.)
+    Do the steps in this order, after the new server is live.
+    a. Cloudflare → R2 → the bucket → Settings → Custom Domains → Add.
+       Type `media.flexete.com`, then Continue, then Connect Domain. Wait
+       until its status says Active (a few minutes).
+    b. Cloudflare → flexete.com → Caching → Cache Rules → Create rule.
+       Name it `media`. Custom filter expression: Hostname, equals,
+       `media.flexete.com`. Then: Eligible for cache. Edge TTL: "Ignore
+       cache-control header and use this TTL", 2 hours. Deploy.
+       This rule matters. Without it Cloudflare keeps copies of some
+       kinds of file only (`.mp4` and `.jpg`, not the streaming pieces or
+       voice notes), and may keep them for a year: a video you had
+       deleted or removed could still be opened by its address. With it,
+       every kind is kept, and a deleted file is gone about two hours
+       after the server clears it. Two hours is the shortest the free
+       plan allows.
+    c. Render → the service → Environment: set
+       `R2_PUBLIC_BASE_URL=https://media.flexete.com`. Save. The server
+       restarts, and its `media:` line should name the new address and
+       say the old one is still known.
+    Leave "Public Development URL" switched ON for the bucket. Videos
+    posted before step c keep their old address, and stop playing the
+    moment it is switched off.
+    Nothing else is needed:
+    - The server writes down every address it has started with (the table
+      `media_addresses`), so a video posted under the old address is
+      still cleared from storage when it is deleted. Only if the `media:`
+      line does not name the old address: set `R2_OLD_PUBLIC_BASE_URLS`
+      on Render to it.
+    - The video worker uses the address the server sends it. A value in
+      the GitHub secret `R2_PUBLIC_BASE_URL` no longer wins; delete the
+      secret if it is there, to keep one place for the setting.
+    To undo: put the old value back in step c, and leave the rest as it
+    is. Nothing is lost.
+    Not done: moving videos posted before step c onto the new address.
+    It needs a server change, so ask. Do the steps before launch and
+    hardly any video is on the old one.
 
 ### G. Running it once people use it
 

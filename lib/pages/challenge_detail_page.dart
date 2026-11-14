@@ -18,7 +18,8 @@ import 'package:myapp/widgets/battle_scoreboard.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/upload_job_manager.dart';
-import 'package:myapp/models/battle_model.dart' show ActionResult, BattleStandings;
+import 'package:myapp/models/battle_model.dart'
+    show ActionResult, BattleSide, BattleStandings;
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/widgets/feed_action_bar.dart'
     show ChallengeCommentSheet, ChallengeShareSheet, CommentSheetCaption;
@@ -30,6 +31,7 @@ import 'package:myapp/widgets/photo_choice.dart';
 import 'package:myapp/widgets/report_sheet.dart';
 import 'package:myapp/widgets/report_video.dart';
 import 'package:myapp/widgets/video_grid_tile.dart' show openVideoPlaylist;
+import 'package:myapp/widgets/win_moment.dart';
 import 'package:myapp/widgets/arena_ui.dart' show PersonPhoto;
 
 /// Full-screen challenge detail: video, description, responses, and action buttons.
@@ -160,6 +162,41 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
       if (comments != null) _comments = comments;
       if (standings != null) _standings = standings;
     });
+    if (standings != null) _celebrateIfWon(standings);
+  }
+
+  /// The win moment: once, when the score says this battle is decided and
+  /// the person looking at it is the one who won. A trophy flips over a
+  /// burst of light, on top of the page (WinMoment).
+  ///
+  /// Called with every fresh score the page gets. Asking twice plays once:
+  /// the phone remembers which wins it has celebrated.
+  void _celebrateIfWon(BattleStandings st) {
+    if (!mounted || !st.resolved) return;
+    final me = Provider.of<DataProvider>(context, listen: false).user?.id;
+    if (me == null || me.isEmpty) return;
+    final winner = st.onTop;
+    if (winner == null || winner.userId != me) return;
+    final others = <BattleSide>[
+      for (final side in st.sides)
+        if (side.userId != me) side,
+    ];
+    // Who it was against, when it was one person. The score too, but only
+    // when it reads as a win: with the votes level it was settled on
+    // likes, and when some of the other side's votes did not count the
+    // winner can be showing fewer. "5 votes to 6" under "You won!" would
+    // look like a mistake.
+    String detail = '';
+    if (others.length == 1) {
+      final other = others.first;
+      detail = winner.votes > other.votes
+          ? 'Against ${other.username}, ${votesText(winner.votes)} '
+                '${winner.votes == 1 ? 'vote' : 'votes'} to '
+                '${votesText(other.votes)}.'
+          : 'Against ${other.username}.';
+    }
+    // ignore: discarded_futures
+    WinMoment.celebrate(context, battleId: widget.challengeId, detail: detail);
   }
 
   void _openComments() {
@@ -309,7 +346,10 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
   /// The live score again, quietly, for the totals.
   Future<void> _refreshStandings() async {
     final st = await ApiService.getBattleStandings(widget.challengeId);
-    if (mounted && st != null) setState(() => _standings = st);
+    if (mounted && st != null) {
+      setState(() => _standings = st);
+      _celebrateIfWon(st);
+    }
   }
 
   /// Sends a vote and says how it went. The score box shows the vote the
@@ -942,7 +982,9 @@ class _ChallengeDetailPageState extends State<ChallengeDetailPage>
                           // One count on the page: the totals above follow
                           // the rows below, votes included.
                           onStandings: (st) {
-                            if (mounted) setState(() => _standings = st);
+                            if (!mounted) return;
+                            setState(() => _standings = st);
+                            _celebrateIfWon(st);
                           },
                         ),
                       ],
