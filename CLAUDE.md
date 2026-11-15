@@ -192,6 +192,12 @@ the day it is added.
      free hours cover one server awake all month;
    - or a paid Render plan, which never sleeps ($7 a month, about ₹660:
      item 29). Then delete `keepalive.yml` and the monitor.
+   A second reason, seen on 15 November: a sleeping server does nothing
+   at all. The files of a deleted video are only cleared from storage
+   while it is awake, and so is everything else it does on a timer
+   (accounts whose 30 days are up, battles that have ended). Eleven hours
+   after the demo accounts were deleted, some of their files were still
+   in storage, because the server had slept for most of them.
 9a. **Check the database is not on a 30-day clock.** Render → the
     database (it is listed apart from the server). If its plan says
     "Free": Render switches a free database off 30 days after it was
@@ -342,16 +348,31 @@ shared links and everything below stop working.
        Type `media.flexete.com`, then Continue, then Connect Domain. Wait
        until its status says Active (a few minutes).
     b. Cloudflare → flexete.com → Caching → Cache Rules → Create rule.
-       Name it `media`. Custom filter expression: Hostname, equals,
-       `media.flexete.com`. Then: Eligible for cache. Edge TTL: "Ignore
-       cache-control header and use this TTL", 2 hours. Deploy.
+       Name it `media`. Under "When incoming requests match" choose
+       "Custom filter expression" and fill in ONE of these. Either works:
+       - Field `Hostname`, Operator `equals`, Value `media.flexete.com`
+       - Field `URI Full`, Operator `wildcard`, Value
+         `https://media.flexete.com/*`
+       Not `URI Full` and `wildcard` with only `media.flexete.com` as the
+       value. A wildcard has to cover the whole address, so that matches
+       nothing, and Cloudflare does not say so. It was entered that way
+       on 14 November.
+       Under "Then": Cache eligibility, "Eligible for cache". Edge TTL,
+       "Ignore cache-control header and use this TTL", 2 hours. Deploy.
+       Then, once: Caching → Configuration → Purge Everything. Copies
+       made before the rule worked are otherwise kept for up to a year.
+       Then ask for it to be checked from outside. It takes a minute, and
+       it is the only way to know: a rule that matches nothing looks the
+       same on Cloudflare's page as one that works.
        This rule matters. Without it Cloudflare keeps copies of some
        kinds of file only (`.mp4` and `.jpg`, not the streaming pieces or
        voice notes), and may keep them for a year: a video you had
        deleted or removed could still be opened by its address. With it,
        every kind is kept, and a deleted file is gone about two hours
        after the server clears it. Two hours is the shortest the free
-       plan allows.
+       plan allows. Seen on 15 November, before the rule was put right:
+       the picture of a demo video still opened through
+       media.flexete.com eleven hours after it had gone from storage.
     c. Render → the service → Environment: set
        `R2_PUBLIC_BASE_URL=https://media.flexete.com`. Save. The server
        restarts, and its `media:` line should name the new address and
@@ -368,6 +389,14 @@ shared links and everything below stop working.
     - The video worker uses the address the server sends it. A value in
       the GitHub secret `R2_PUBLIC_BASE_URL` no longer wins; delete the
       secret if it is there, to keep one place for the setting.
+    - New files also say it themselves, since 15 November: Cloudflare may
+      keep its copy for two hours. So a new video that is deleted stops
+      opening within two hours even if the rule in step b is wrong or is
+      removed one day. The rule is still needed: for files stored before
+      that day, and so that every kind of file is kept near the viewer.
+      (The files people watch are made by the video worker, which does
+      this already. What the app uploads itself does it from the next
+      build.)
     To undo: put the old value back in step c, and leave the rest as it
     is. Nothing is lost.
     Not done: moving videos posted before step c onto the new address.

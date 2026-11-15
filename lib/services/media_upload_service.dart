@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/stored_file_headers.dart';
 import 'package:myapp/services/video_processor_service.dart';
 
 /// Result of a complete upload run. The two URL bags are exactly what
@@ -129,7 +130,7 @@ class MediaUploadService {
         req.headers['Content-Type'] = 'image/jpeg';
         // Never changes once uploaded, the same as a video: see
         // _putWithProgress.
-        req.headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+        req.headers['Cache-Control'] = uploadCacheControl;
         req.contentLength = size;
         var sent = 0;
         photo.openRead().listen(
@@ -681,12 +682,10 @@ class MediaUploadService {
     req.headers['Content-Type'] = u.contentType;
     // Tell R2 to remember this Cache-Control on the stored object so
     // every future GET — by ANY client, via ANY CDN POP — returns it.
-    // Cloudflare's edge cache honours this hint automatically: a
-    // `public, max-age=31536000, immutable` directive means an edge POP
-    // can serve the same bytes for a year without re-checking with
-    // origin. This is the single biggest "free" CDN win we have:
-    // turning every viral video into an edge-cached asset after the
-    // first viewer per POP, instead of every viewer hitting origin.
+    // A phone may keep the file for a year. Cloudflare's copy near the
+    // viewer is good for two hours, then it asks storage again: long
+    // enough that a popular video is served from nearby, short enough
+    // that a deleted one stops opening. See uploadCacheControl.
     //
     // `immutable` is correct here because the object key is
     // content-addressed (per-upload prefix + variant label) — we never
@@ -696,8 +695,7 @@ class MediaUploadService {
     // The presign-signed headers are limited to `host`, so we can set
     // arbitrary additional headers on the PUT without invalidating the
     // signature (this is intentional — see media_storage.go).
-    req.headers['Cache-Control'] =
-        'public, max-age=31536000, immutable';
+    req.headers['Cache-Control'] = uploadCacheControl;
     req.contentLength = length;
 
     var sent = 0;
