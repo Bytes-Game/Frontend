@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/stored_file_headers.dart';
 
 export 'package:myapp/models/chat_preview.dart';
 
@@ -65,8 +66,9 @@ class ChatMedia {
       final req = http.StreamedRequest('PUT', Uri.parse(uploadUrl));
       req.headers['Content-Type'] =
           '${slot['contentType'] ?? 'application/octet-stream'}';
-      // Never changes once uploaded: every phone and the CDN may keep it.
-      req.headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+      // Never changes once uploaded: a phone may keep it for a year,
+      // Cloudflare's copy for two hours (see uploadCacheControl).
+      req.headers['Cache-Control'] = uploadCacheControl;
       req.contentLength = length;
       var sent = 0;
       file.openRead().listen(
