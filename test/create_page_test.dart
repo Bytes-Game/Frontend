@@ -115,11 +115,20 @@ void main() {
     }
   }
 
-  /// Lets real file copying finish (the camera's file is copied to the
-  /// app's own name). It goes back and forth between the real world and
-  /// the test's clock, so it takes turns.
-  Future<void> letFilesMove(WidgetTester t) async {
-    for (var i = 0; i < 10; i++) {
+  /// Lets real file work finish (the camera's file is copied to the app's
+  /// own name, the editor writes what it made) until [shows] is on
+  /// screen. It goes back and forth between the real world and the test's
+  /// clock, so it takes turns.
+  ///
+  /// It waits for the page itself, not for a set time. The work is real,
+  /// so how long it takes depends on the machine: it used to take ten
+  /// turns, about 200 ms of real time, and then look. On 15 November a
+  /// busy test machine had not opened the details page by then, while the
+  /// same code passed in the run beside it. Ten turns are still the least
+  /// it takes; then it goes on, up to about 8 seconds of real time. If
+  /// [shows] never finds anything, the check after it says so.
+  Future<void> letFilesMove(WidgetTester t, Finder shows) async {
+    for (var i = 0; i < 10 || (shows.evaluate().isEmpty && i < 400); i++) {
       await t.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 20)),
       );
@@ -162,9 +171,16 @@ void main() {
   }
 
   /// Done in the editor, with nothing changed.
+  /// Done in an editor: what it made goes on to the details page.
+  ///
+  /// The editor reads the file before it shows its Done button, so on a
+  /// slow machine the page can be open with no button on it yet: that is
+  /// waited for first.
   Future<void> editorDone(WidgetTester t) async {
-    await t.tap(find.byKey(const ValueKey('MainEditorDoneButton')));
-    await letFilesMove(t);
+    final done = find.byKey(const ValueKey('MainEditorDoneButton'));
+    if (done.evaluate().isEmpty) await letFilesMove(t, done);
+    await t.tap(done);
+    await letFilesMove(t, find.byType(ChallengeMetadataPage));
   }
 
   Future<void> close(WidgetTester t) async {
@@ -275,7 +291,7 @@ void main() {
       await t.tap(find.byKey(const ValueKey('create_item_p1')));
       await frames(t, 2);
       await t.tap(find.byKey(const ValueKey('create_next')));
-      await letFilesMove(t);
+      await letFilesMove(t, find.byType(PhotoEditorPage));
       expect(gallery.filesAsked, ['p1']);
       final editor = t.widget<PhotoEditorPage>(find.byType(PhotoEditorPage));
       expect(editor.sourcePath, gallery.files['p1']!.path);
@@ -304,7 +320,7 @@ void main() {
         ..addPhoto(dir, 'p1');
       await openCreate(t);
       await t.tap(find.byKey(const ValueKey('create_next')));
-      await letFilesMove(t);
+      await letFilesMove(t, find.byType(VideoEditorPage));
       expect(gallery.filesAsked, ['v1']);
       final editor = t.widget<VideoEditorPage>(find.byType(VideoEditorPage));
       expect(editor.sourcePath, gallery.files['v1']!.path);
@@ -342,15 +358,15 @@ void main() {
       gallery.addPhoto(dir, 'p1');
       await openCreate(t);
       await t.tap(find.byKey(const ValueKey('create_next')));
-      await letFilesMove(t);
+      await letFilesMove(t, find.byType(PhotoEditorPage));
       await editorDone(t);
       expect(find.byType(ChallengeMetadataPage), findsOneWidget);
       await t.pageBack();
-      await letFilesMove(t);
+      await letFilesMove(t, find.byType(PhotoEditorPage));
       expect(find.byType(ChallengeMetadataPage), findsNothing);
       expect(find.byType(PhotoEditorPage), findsOneWidget);
       await t.tap(find.byTooltip('Cancel'));
-      await letFilesMove(t);
+      await letFilesMove(t, find.byType(CreatePage));
       expect(find.byType(PhotoEditorPage), findsNothing);
       expect(find.byType(CreatePage), findsOneWidget);
       expect(find.byKey(const ValueKey('create_preview_p1')), findsOneWidget);
@@ -372,7 +388,7 @@ void main() {
 
       gallery.phonePick = PickedMedia(gallery.files['p1']!, isVideo: false);
       await t.tap(find.byKey(const ValueKey('create_phone_picker')));
-      await letFilesMove(t);
+      await letFilesMove(t, find.byType(PhotoEditorPage));
       expect(gallery.phonePickerOpened, 1);
       expect(find.byType(PhotoEditorPage), findsOneWidget);
       await editorDone(t);
@@ -391,7 +407,7 @@ void main() {
       gallery.phonePick = PickedMedia(gallery.files['v1']!, isVideo: true);
       await openCreate(t);
       await t.tap(find.byKey(const ValueKey('create_phone_picker')));
-      await letFilesMove(t);
+      await letFilesMove(t, find.byType(VideoEditorPage));
       final editor = t.widget<VideoEditorPage>(find.byType(VideoEditorPage));
       expect(editor.sourcePath, gallery.files['v1']!.path);
       expect(editor.inGallery, isTrue, reason: 'no second copy of it');
@@ -451,7 +467,7 @@ void main() {
       await t.tap(find.byKey(const ValueKey('camera_mode_photo')));
       await frames(t, 2);
       await t.tap(find.byKey(const ValueKey('camera_shutter')));
-      await letFilesMove(t);
+      await letFilesMove(t, find.byType(PhotoEditorPage));
       expect(camera.asked, ['photo']);
       expect(
         t.widget<PhotoEditorPage>(find.byType(PhotoEditorPage)).inGallery,
@@ -480,7 +496,7 @@ void main() {
       // While recording there is no switching to Photo.
       expect(find.byKey(const ValueKey('camera_mode_photo')), findsNothing);
       await t.tap(find.byKey(const ValueKey('camera_shutter')));
-      await letFilesMove(t);
+      await letFilesMove(t, find.byType(VideoEditorPage));
       expect(camera.asked, ['record', 'stop']);
       final editor = t.widget<VideoEditorPage>(find.byType(VideoEditorPage));
       expect(editor.sourcePath, endsWith('.mp4'));
