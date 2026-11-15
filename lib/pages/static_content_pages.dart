@@ -582,6 +582,17 @@ const helpTopics = [
           'If your account has no email address, or you cannot get into it '
           'any more, write to $_support and tell us your username.',
     ]),
+    HelpArticle('Why does sign-up ask for a code?', [
+      'When you sign up with an email and a password, we email a 6-digit '
+          'code to that address. Enter it to finish making your account. It '
+          'shows the email is really yours, so you can always reset a '
+          'forgotten password.',
+      'The code works for 15 minutes. No email? Check your spam folder, '
+          'then tap Resend after a minute. Typed the wrong address? Tap Use '
+          'a different email.',
+      'Signing up with Google or Apple needs no code: they have checked '
+          'your email already.',
+    ]),
     HelpArticle('How do I change my username?', [
       'Profile → Edit profile → Username → Change. You can change it once '
           'every 30 days.',
@@ -746,10 +757,25 @@ const helpTopics = [
           'lost: they arrive at 8 AM.',
       'Messages and calls always reach you, even at night.',
     ]),
+    HelpArticle('How do I mute a chat?', [
+      'In Messages, press and hold the chat, or open it and tap their name '
+          'at the top. Then tap Mute messages.',
+      'You get no notifications for their messages. They still arrive, and '
+          'the chat still shows them. A muted chat has a crossed-out bell, '
+          'and is not counted in the number on Messages.',
+      'To hear from them again, do the same and tap Unmute messages. Calls '
+          'still ring either way.',
+    ]),
+    HelpArticle('What is the number on Messages?', [
+      'How many people have sent you messages you have not read yet. Open '
+          'their chat and they come off it. Muted chats are not counted.',
+    ]),
     HelpArticle("I'm not getting notifications", [
       'Check that notifications for $_app are allowed in your phone\'s '
           'settings, and that the kind you want is switched on in Settings '
           '→ Notifications.',
+      'Muted a chat? Its messages do not notify you. Press and hold it in '
+          'Messages and tap Unmute messages.',
       'If Pause at night is on, battle and app notifications wait until '
           '8 AM.',
     ]),

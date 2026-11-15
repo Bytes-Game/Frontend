@@ -5,6 +5,7 @@ import 'package:myapp/config/app_theme.dart';
 
 import 'package:myapp/models/battle_model.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/open_profile.dart';
 import 'package:myapp/widgets/arena_ui.dart' show PersonPhoto;
 import 'package:myapp/widgets/versus_bar.dart';
 
@@ -530,22 +531,26 @@ class _SideRow extends StatelessWidget {
         children: [
           Row(
             children: [
-              SizedBox(
-                width: 32,
-                height: 32,
-                child: PersonPhoto(
-                  name: side.username,
-                  size: 32,
-                  fallback: CircleAvatar(
-                    radius: 16,
-                    backgroundColor: accent.withValues(alpha: 0.25),
-                    child: Text(
-                      side.username.isEmpty
-                          ? '?'
-                          : side.username[0].toUpperCase(),
-                      style: TextStyle(
-                        color: accent,
-                        fontWeight: FontWeight.w800,
+              // Who: a tap on the picture or the name opens their profile.
+              OpenProfileOnTap(
+                username: side.username,
+                child: SizedBox(
+                  width: 32,
+                  height: 32,
+                  child: PersonPhoto(
+                    name: side.username,
+                    size: 32,
+                    fallback: CircleAvatar(
+                      radius: 16,
+                      backgroundColor: accent.withValues(alpha: 0.25),
+                      child: Text(
+                        side.username.isEmpty
+                            ? '?'
+                            : side.username[0].toUpperCase(),
+                        style: TextStyle(
+                          color: accent,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                     ),
                   ),
@@ -559,11 +564,14 @@ class _SideRow extends StatelessWidget {
                     Row(
                       children: [
                         Flexible(
-                          child: Text(
-                            side.username,
-                            overflow: TextOverflow.ellipsis,
-                            style: tt.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w700,
+                          child: OpenProfileOnTap(
+                            username: side.username,
+                            child: Text(
+                              side.username,
+                              overflow: TextOverflow.ellipsis,
+                              style: tt.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                           ),
                         ),

@@ -7,6 +7,7 @@ import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/config/username_rules.dart';
 import 'package:myapp/pages/static_content_pages.dart';
 import 'package:myapp/providers/auth_provider.dart';
+import 'package:myapp/screens/email_code_screen.dart';
 import 'package:myapp/screens/parent_consent_screen.dart';
 import 'package:myapp/screens/social_sign_in.dart';
 import 'package:myapp/services/api_service.dart';
@@ -300,49 +301,63 @@ class _SignupScreenState extends State<SignupScreen>
     });
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final navigator = Navigator.of(context);
-    final username = _username.text.trim().toLowerCase();
-    final password = _password.text;
-    final result = await auth.signup(
-      context,
-      SignupDetails(
-        username: username,
-        password: password,
-        fullName: _fullName.text.trim(),
-        email: _email.text.trim().toLowerCase(),
-        birthDate: birthdayForServer(_birthday!),
-        acceptTerms: _agreed,
-        parentEmail: _needsParent(_birthday)
-            ? _parentEmail.text.trim().toLowerCase()
-            : '',
-      ),
+    final details = SignupDetails(
+      username: _username.text.trim().toLowerCase(),
+      password: _password.text,
+      fullName: _fullName.text.trim(),
+      email: _email.text.trim().toLowerCase(),
+      birthDate: birthdayForServer(_birthday!),
+      acceptTerms: _agreed,
+      parentEmail:
+          _needsParent(_birthday) ? _parentEmail.text.trim().toLowerCase() : '',
     );
+    var result = await auth.signup(context, details);
     if (!mounted) return;
     if (result == null) {
       // Signed in. The app underneath has already switched to the welcome
-      // steps; this page is still on top of it.
+      // steps; this page is still on top of it. (A server from before the
+      // emailed code makes the account at once.)
       navigator.popUntil((r) => r.isFirst);
       return;
     }
+    // Every box was right, and a code went to the email: the account is
+    // made on the next page, when the code comes back. That page comes
+    // back here only with something for this one to deal with.
+    if (result.failure == AuthFailure.emailCodeSent) {
+      setState(() => _busy = false);
+      final sentTo = (result.extra?['email'] as String?) ?? details.email;
+      final resendIn = (result.extra?['resendIn'] as num?)?.toInt() ?? 60;
+      final back = await navigator.push<AuthResult>(MaterialPageRoute(
+        builder: (_) => EmailCodeScreen(
+          details: details,
+          sentTo: sentTo,
+          resendIn: resendIn,
+        ),
+      ));
+      if (back == null || !mounted) return;
+      result = back;
+    }
+    final said = result;
     // Young enough to need a parent: no account yet. On to the page that
     // waits for them, which signs in with these details once they agree.
-    if (result.failure == AuthFailure.parentConsentPending) {
+    if (said.failure == AuthFailure.parentConsentPending) {
       navigator.pushReplacement(MaterialPageRoute(
         builder: (_) => ParentConsentScreen(
-          wait: ParentWait.fromAnswer(result.extra ?? const {}),
+          wait: ParentWait.fromAnswer(said.extra ?? const {}),
           onCheck: (ctx) => Provider.of<AuthProvider>(ctx, listen: false)
-              .login(ctx, username, password),
+              .login(ctx, details.username, details.password),
         ),
       ));
       return;
     }
     setState(() {
       _busy = false;
-      final field = result.field;
-      if (field != null && result.message != null) {
-        _serverSays[field] = result.message!;
+      final field = said.field;
+      if (field != null && said.message != null) {
+        _serverSays[field] = said.message!;
         if (field == 'username') _name = _Name.taken;
       } else {
-        _error = result.message ?? _messageFor(result.failure ?? AuthFailure.unreachable);
+        _error = said.message ?? _messageFor(said.failure ?? AuthFailure.unreachable);
       }
     });
   }

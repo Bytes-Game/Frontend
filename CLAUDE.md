@@ -139,10 +139,14 @@ the day it is added.
 
 ### B. Settings on Render (the server)
 
-5. **Email, for "Forgot password?" and for parents.** Two things need the
-   server to send email: the code for a forgotten password, and the link
-   a parent gets when somebody under 18 signs up (item 26). Without
-   email, nobody under 18 can join at all. Render's free plan blocks the
+5. **Email, for sign-up, "Forgot password?" and parents.** Three things
+   need the server to send email: the code that checks a new account's
+   email (since 15 November, nobody signs up with an email and a password
+   without it), the code for a forgotten password, and the link a parent
+   gets when somebody under 18 signs up (item 26). Without email, nobody
+   can sign up with an email and a password at all (Google and Apple
+   still work), and nobody under 18 can join. On 15 November the live
+   server answered as if email is set up. Render's free plan blocks the
    ports ordinary email goes out on (25, 465 and 587), so on it Gmail and
    every other SMTP service simply never answer. A phone log on 7 November
    showed exactly that: Gmail set up right, and the reset code failing
@@ -192,7 +196,10 @@ the day it is added.
    its sign-in to the live connection in a new way, which only the new
    server understands. A new app talking to the old server still signs in
    and plays videos, but messages, notifications and calls do not arrive
-   as they happen. (An older app keeps working with the new server.)
+   as they happen. An older app keeps working with the new server, with
+   one exception since 15 November: it cannot sign up with an email and a
+   password, because it does not know the step that asks for the emailed
+   code. Signing in still works. Install the new build to sign up.
 8. **After the store listing exists:** set `APP_DOWNLOAD_URL` to the store
    link, so the shared profile and video web pages show a "Get Flexete"
    button.

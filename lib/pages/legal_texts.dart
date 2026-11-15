@@ -8,7 +8,7 @@ import 'package:myapp/config/constants.dart';
 /// move [legalUpdated] to that day.
 
 /// The day the documents last changed.
-const legalUpdated = '12 November 2026';
+const legalUpdated = '15 November 2026';
 
 /// A numbered part of a document: a heading and its paragraphs. A paragraph
 /// that starts with "• " shows as a bullet point.
@@ -107,8 +107,10 @@ const termsOfService = LegalDocument(
           'someone else has got into it, change your password straight '
           'away (this signs out every other phone) and tell us at '
           '$_support.',
-      'If you forget your password, you can reset it with a code we email '
-          'to the address on your account.',
+      'When you sign up with an email and a password, we first email a '
+          'code to that address, to check that it is yours. If you forget '
+          'your password, you can reset it with a code we email to the '
+          'address on your account.',
     ]),
     LegalSection('Battles, votes and leagues', [
       '$_name is built around battles. Anyone can post a challenge, and '
@@ -259,7 +261,7 @@ const privacyPolicy = LegalDocument(
     'Your email and date of birth are private. Nobody else sees them.',
     'We use what you watch to pick videos for you. You can clear your '
         'watch history any time.',
-    'Passwords and reset codes are stored scrambled, never as typed.',
+    'Passwords and the codes we email are stored scrambled, never as typed.',
     'If you are under 18, a parent or guardian must agree before you have '
         'an account, and can close it at any time.',
     'Delete your account and everything in it is gone after 30 days.',
@@ -322,7 +324,8 @@ const privacyPolicy = LegalDocument(
           'to join, and asking a parent or guardian when the law says one '
           'must agree.',
       '• To talk to you: notifications you have switched on, and emails '
-          'about your account, such as a password reset code. If you are '
+          'about your account, such as the code that checks your email when '
+          'you sign up, or a password reset code. If you are '
           'under 18, we also email your parent or guardian to ask for '
           'their permission and to confirm their answer.',
       '• To fix and improve the app: crash reports and usage numbers show '
@@ -347,8 +350,8 @@ const privacyPolicy = LegalDocument(
       '• Cloudflare, which stores and delivers videos and photos;',
       '• Google Firebase, to deliver notifications to your phone;',
       '• Sentry, to receive crash reports;',
-      '• an email service, to send password reset codes and the emails to '
-          'a parent or guardian;',
+      '• an email service, to send the codes that check your email and '
+          'reset your password, and the emails to a parent or guardian;',
       '• Google or Apple, only if you choose to sign in with them.',
       'We may also share information when the law requires it, to protect '
           'someone\'s safety, or as part of a sale or merger of $_name, in '
@@ -358,7 +361,10 @@ const privacyPolicy = LegalDocument(
       '• Detailed watch activity: about 30 days. After that it is folded '
           'into a summary of what you like, and the detail is deleted.',
       '• Your content: until you delete it, or delete your account.',
-      '• Password reset codes: 15 minutes, or until used.',
+      '• The codes we email, to check your email when you sign up or to '
+          'reset your password: 15 minutes, or until used. A sign-up code '
+          'nobody used is deleted within the hour after that, with the '
+          'address it was sent to.',
       '• A sign-up waiting for a parent or guardian: 7 days at most. If '
           'they say no, 1 day. Then it is deleted. You can also cancel it '
           'yourself, which deletes it at once.',
@@ -373,7 +379,7 @@ const privacyPolicy = LegalDocument(
       'In the app you can: edit your profile; make your account private; '
           'choose who can message and call you; hide your activity status; '
           'block people; delete posts; clear your watch history; choose '
-          'your notifications; change your password; turn on two-step '
+          'your notifications; mute chats; change your password; turn on two-step '
           'verification; and delete your account.',
       'Depending on where you live, you may also have the right to see a '
           'copy of your information, correct it, have it deleted, take it '
@@ -382,8 +388,8 @@ const privacyPolicy = LegalDocument(
           'protection authority.',
     ]),
     LegalSection('Keeping it safe', [
-      'Connections to $_name are encrypted. Passwords and reset codes are '
-          'stored scrambled, and changing your password signs out every '
+      'Connections to $_name are encrypted. Passwords and the codes we '
+          'email are stored scrambled, and changing your password signs out every '
           'other phone. Two-step verification adds a code from an '
           'authenticator app to signing in. We limit how often anyone can '
           'try to sign in or ask for a code. No system is perfect, but we '

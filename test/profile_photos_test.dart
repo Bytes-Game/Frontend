@@ -574,7 +574,8 @@ void main() {
       await t.tap(find.byKey(const ValueKey('person_32')));
       await settle(t);
       expect(find.byType(ProfilePage), findsNothing);
-      expect(find.text("Couldn't open omar's profile."), findsOneWidget);
+      // The server says there is no such account: said plainly.
+      expect(find.text("omar's account isn't available."), findsOneWidget);
       await finish(t);
     });
   });

@@ -25,6 +25,7 @@ import 'package:myapp/services/connection_prewarm_service.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/feed_paging.dart';
 import 'package:myapp/services/network_quality_service.dart';
+import 'package:myapp/services/open_profile.dart';
 import 'package:myapp/services/next_up_store.dart';
 import 'package:myapp/services/own_uploads.dart';
 import 'package:myapp/services/page_cover_observer.dart';
@@ -4842,9 +4843,31 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
     return _opponentState!;
   }
 
+  /// Who made the video on screen: on a battle, whoever's side is showing.
+  String get _onScreenName => widget.item.isBattle && _showingOpponent
+      ? widget.item.opponentUsername
+      : widget.item.creatorUsername;
+
+  String get _onScreenLeague => widget.item.isBattle && _showingOpponent
+      ? widget.item.opponentLeague
+      : widget.item.creatorLeague;
+
+  /// A name or picture on this video was tapped, and [user]'s profile is
+  /// opening. The server counts that as interest in them: for a day, their
+  /// videos come up more in this person's feed. Not for your own profile.
+  void _countProfileVisit(UserModel user) {
+    final me = Provider.of<DataProvider>(context, listen: false).user?.id;
+    if (user.id.isEmpty || user.id == me) return;
+    EventTracker.instance.trackProfileVisit(
+      creatorId: user.id,
+      fromContentId: widget.item.id,
+      fromContentType: widget.item.type,
+    );
+  }
+
   /// Flip between challenger and opponent video. No-op on non-battles or on
-  /// a repeat-toggle to the same side. Entry point for the battle-indicator
-  /// taps and the offscreen reset.
+  /// a repeat-toggle to the same side. Entry point for the swipe's settle,
+  /// a return from the battle page, and the offscreen reset.
   ///
   /// `animate: false` (offscreen reset path) swaps instantly; otherwise the
   /// cube turns from wherever it currently is to the requested face.
@@ -5401,8 +5424,11 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
         // On a battle, the two people at the top, under the feed's tabs:
         // who is in it, which of them is on screen, and — by being two
         // names side by side — that there is another side to swipe to.
-        // Tap either name to switch. This replaces a tab with an arrow on
-        // the screen's edge, which read as clutter.
+        // This replaces a tab with an arrow on the screen's edge, which
+        // read as clutter. A tap on either name opens that person's
+        // profile, as a name does everywhere else; a swipe left or right
+        // switches sides. (A tap used to switch sides, until the owner
+        // asked for every name to open its profile.)
         if (item.isBattle)
           Positioned(
             top: MediaQuery.of(context).padding.top + 50,
@@ -5417,8 +5443,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                 showingOpponent: _showingOpponent,
                 answerFirst: _answerFirst,
                 winner: _BattleScores.winnerOf(item.id),
-                onTapChallenger: () => _setShowOpponent(false),
-                onTapOpponent: () => _setShowOpponent(true),
+                onOpened: _countProfileVisit,
               ),
             ),
           ),
@@ -5442,20 +5467,24 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Who: on a battle, both people, and the one on screen lit
-              // up — tap either to switch. It used to be a two-box panel at
-              // the top of the screen, where Home's tabs also sit, and the
-              // two overlapped.
-              // A battle's two names are at the top; a short's one is here.
-              if (!item.isBattle) ...[
+              // Who: whoever made the video on screen, the same on a battle
+              // as on a short. On a battle that is the side showing, so
+              // after a swipe it is the other person. A tap on the picture
+              // or the name opens their profile.
+              //
+              // A battle used to leave this out, with only the two names at
+              // the top; the owner wanted the name here, as on a short.
+              if (_onScreenName.isNotEmpty) ...[
                 _CreatorLine(
-                  username: item.creatorUsername,
-                  league: item.creatorLeague,
+                  key: const ValueKey('reel_creator'),
+                  username: _onScreenName,
+                  league: _onScreenLeague,
                   // A normal post is not a challenge, and does not say it
-                  // is one.
-                  tag: isChallenge && item.openToBattles
+                  // is one. A battle has been taken on already.
+                  tag: !item.isBattle && isChallenge && item.openToBattles
                       ? 'Open challenge'
                       : null,
+                  onOpened: _countProfileVisit,
                 ),
                 const SizedBox(height: 8),
               ],
@@ -6342,33 +6371,56 @@ class _ReelAvatar extends StatelessWidget {
   }
 }
 
-/// Who made a short: picture, name, league, and what kind of video it is.
+/// Who made the video on screen: picture, name, league, and what kind of
+/// video it is. A tap on the picture or the name opens their profile.
 class _CreatorLine extends StatelessWidget {
   final String username;
   final String league;
   final String? tag;
 
-  const _CreatorLine({required this.username, required this.league, this.tag});
+  /// Told who is being opened, as their profile opens.
+  final void Function(UserModel user)? onOpened;
+
+  const _CreatorLine({
+    super.key,
+    required this.username,
+    required this.league,
+    this.tag,
+    this.onOpened,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
-        _ReelAvatar(username: username, league: league, size: 32),
-        const SizedBox(width: 8),
         // Both the name and the tag give way on a narrow screen or with
-        // large text, the name keeping the larger share.
+        // large text, the name keeping the larger share. The picture and
+        // the name are one thing to tap; the tag is not part of it.
         Flexible(
           flex: 3,
-          child: Text(
-            username,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-              shadows: _textShadow,
+          child: OpenProfileOnTap(
+            key: const ValueKey('reel_creator_open'),
+            username: username,
+            onOpened: onOpened,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _ReelAvatar(username: username, league: league, size: 32),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    username,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      shadows: _textShadow,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -6401,7 +6453,8 @@ class _CreatorLine extends StatelessWidget {
 }
 
 /// Both people in a battle on one line — "maya vs leo" — with the one whose
-/// video is on screen lit up and the other dimmed. Tap either to switch.
+/// video is on screen lit up and the other dimmed. A tap on either opens
+/// that person's profile; a swipe switches sides.
 ///
 /// This replaced a two-box panel at the top of the screen with the words
 /// CHALLENGER and OPPONENT and a line of hint text under it. It took three
@@ -6417,8 +6470,9 @@ class _Matchup extends StatelessWidget {
   /// Who won, once the battle is decided: "creator", "answer", or "" —
   /// still running, a draw, or not known. Only a winner gets a mark.
   final String winner;
-  final VoidCallback onTapChallenger;
-  final VoidCallback onTapOpponent;
+
+  /// Told who is being opened, as their profile opens.
+  final void Function(UserModel user)? onOpened;
 
   /// The answer is the battle's first side (it is ahead), so it is named
   /// first: the names read in the order a swipe left goes.
@@ -6430,8 +6484,7 @@ class _Matchup extends StatelessWidget {
     required this.opponent,
     required this.opponentLeague,
     required this.showingOpponent,
-    required this.onTapChallenger,
-    required this.onTapOpponent,
+    this.onOpened,
     this.answerFirst = false,
     this.winner = '',
   });
@@ -6439,19 +6492,23 @@ class _Matchup extends StatelessWidget {
   Widget _challenger() => _MatchupSide(
         key: const ValueKey('matchup_challenger'),
         username: challenger,
+        profile: challenger,
         league: challengerLeague,
         active: !showingOpponent,
         won: winner == 'creator',
-        onTap: onTapChallenger,
+        onOpened: onOpened,
       );
 
+  // With no name known there is nobody to open: the word "opponent" is
+  // only a label.
   Widget _answer() => _MatchupSide(
         key: const ValueKey('matchup_opponent'),
         username: opponent.isEmpty ? 'opponent' : opponent,
+        profile: opponent,
         league: opponentLeague,
         active: showingOpponent,
         won: winner == 'answer',
-        onTap: onTapOpponent,
+        onOpened: onOpened,
       );
 
   @override
@@ -6520,33 +6577,39 @@ class _VsMedal extends StatelessWidget {
 }
 
 /// One person in the names at the top of a battle: their picture and name.
+/// A tap opens their profile.
 ///
 /// No trophy and no league shield beside the name — the owner found them
 /// cluttered. The one mark is a green bar under the name of whoever WON,
 /// once the battle is decided. While it is running, nobody has a mark.
 class _MatchupSide extends StatelessWidget {
+  /// The name shown.
   final String username;
+
+  /// The account a tap opens; empty for none.
+  final String profile;
   final String league;
   final bool active;
   final bool won;
-  final VoidCallback onTap;
+  final void Function(UserModel user)? onOpened;
 
   static const green = Color(0xFF30D158);
 
   const _MatchupSide({
     super.key,
     required this.username,
+    required this.profile,
     required this.league,
     required this.active,
-    required this.onTap,
+    this.onOpened,
     this.won = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
+    return OpenProfileOnTap(
+      username: profile,
+      onOpened: onOpened,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOut,

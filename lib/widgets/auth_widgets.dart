@@ -710,6 +710,8 @@ String signInProblem(AuthResult result) {
     case AuthFailure.parentConsentPending:
       return result.message ??
           'Waiting for your parent or guardian to say yes.';
+    case AuthFailure.emailCodeSent:
+      return 'Enter the code we emailed you to finish making your account.';
   }
 }
 

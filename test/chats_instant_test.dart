@@ -25,6 +25,7 @@ import 'package:myapp/pages/chat_list_page.dart';
 import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/chat_badge.dart';
 import 'package:myapp/services/chat_cache.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/websocket_service.dart';
@@ -237,6 +238,8 @@ void main() {
           ),
         ),
       );
+      // A number on the Messages button, from this person's chats.
+      ChatBadge.instance.people.value = 3;
       AuthProvider().logout(ctx);
       for (var i = 0; i < 6; i++) {
         await t.runAsync(
@@ -246,6 +249,11 @@ void main() {
       }
       expect(File('${dir.path}/chat_list.json').existsSync(), isFalse);
       expect(ChatCache.instance.chatsFor('u1'), isNull);
+      expect(
+        ChatBadge.instance.people.value,
+        0,
+        reason: 'the next person to sign in sees no number of theirs',
+      );
     });
 
     test('the app reads them before the first frame', () {

@@ -296,6 +296,13 @@ enum AuthFailure {
   /// and [AuthResult.ticket] sends that email again, changes the address,
   /// or cancels ([ApiService.parentEmail]).
   parentConsentPending,
+
+  /// Every box of a sign-up was right, and the email is next: the server
+  /// emailed a 6-digit code to it, and makes the account when the sign-up
+  /// comes back with the code ([SignupDetails.withCode]). No account yet.
+  /// [AuthResult.extra] is what the server said: the email, and the
+  /// seconds before another code may be asked for (resendIn).
+  emailCodeSent,
 }
 
 /// Outcome of a login or signup attempt: the session payload on success, or
@@ -354,6 +361,7 @@ class SignupDetails {
     required this.acceptTerms,
     this.fullName = '',
     this.parentEmail = '',
+    this.emailCode = '',
   });
 
   final String username;
@@ -369,6 +377,23 @@ class SignupDetails {
   /// age at which a parent must agree ([SignupRules.parentConsentAge]).
   final String parentEmail;
 
+  /// The code the server emailed to [email] ([AuthFailure.emailCodeSent]).
+  /// Empty the first time: the server then sends one instead of making the
+  /// account.
+  final String emailCode;
+
+  /// The same sign-up, sent again with the emailed [code].
+  SignupDetails withCode(String code) => SignupDetails(
+        username: username,
+        password: password,
+        fullName: fullName,
+        email: email,
+        birthDate: birthDate,
+        acceptTerms: acceptTerms,
+        parentEmail: parentEmail,
+        emailCode: code,
+      );
+
   Map<String, dynamic> toJson() => {
         'username': username,
         'password': password,
@@ -377,6 +402,7 @@ class SignupDetails {
         'birthDate': birthDate,
         'acceptTerms': acceptTerms,
         if (parentEmail.isNotEmpty) 'parentEmail': parentEmail,
+        if (emailCode.isNotEmpty) 'emailCode': emailCode,
       };
 }
 
@@ -1191,6 +1217,11 @@ class ApiService {
               ticket: said['ticket'] as String?,
               extra: said);
         }
+        // A sign-up whose boxes were all right: a code went to its email,
+        // and the account is made when it comes back with it.
+        if (res.statusCode == 202 && said['emailCodeSent'] == true) {
+          return AuthResult.failed(AuthFailure.emailCodeSent, extra: said);
+        }
       }
       // login and a password change answer 200, signup answers 201.
       if (res.statusCode == 200 || res.statusCode == 201) {
@@ -1216,6 +1247,13 @@ class ApiService {
       final ticket = said['ticket'] as String?;
       // Only a 4xx from the server is a statement about the credentials.
       if (res.statusCode >= 400 && res.statusCode < 500) {
+        // About the code emailed at sign-up: wrong, no longer usable, or
+        // asked for again too soon. Said under the code; the rest of the
+        // sign-up still stands, so it is not "start again".
+        if (said['field'] == 'emailCode') {
+          return AuthResult.failed(AuthFailure.rejected,
+              field: 'emailCode', message: message, extra: said);
+        }
         // The password was right; the account is waiting to be deleted and
         // can be kept.
         if (said['deletionPending'] == true) {
@@ -2985,6 +3023,47 @@ class ApiService {
     } catch (e) {
       debugPrint('[chat] could not delete the chat with $otherUserId: $e');
       return false;
+    }
+  }
+
+  /// POST /api/v1/chat/mute — mutes or unmutes your chat with
+  /// [otherUserId]: no notifications for their messages while muted. True
+  /// once the server has it.
+  static Future<bool> muteChat(String otherUserId, {required bool muted}) async {
+    try {
+      final res = await _authHttp.post(
+        Uri.parse('$_base/api/v1/chat/mute'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'otherUserId': otherUserId, 'muted': muted}),
+      );
+      if (res.statusCode != 200) {
+        debugPrint('[chat] the server would not set the chat with '
+            '$otherUserId to muted=$muted: ${res.statusCode} ${res.body}');
+      }
+      return res.statusCode == 200;
+    } catch (e) {
+      debugPrint('[chat] could not set the chat with $otherUserId to '
+          'muted=$muted: $e');
+      return false;
+    }
+  }
+
+  /// GET /api/v1/chat/unread — how many people have sent messages you have
+  /// not read yet, leaving out muted chats: the number on the Messages
+  /// button. Null when it could not be asked (and the log says why).
+  static Future<int?> unreadChatPeople() async {
+    try {
+      final res = await _authHttp.get(Uri.parse('$_base/api/v1/chat/unread'));
+      if (res.statusCode == 200) {
+        final people = (json.decode(res.body) as Map<String, dynamic>)['people'];
+        if (people is num) return people.toInt();
+      }
+      debugPrint('[chats] the unread number did not come: ${res.statusCode} '
+          '${res.body}');
+      return null;
+    } catch (e) {
+      debugPrint('[chats] the unread number did not come: $e');
+      return null;
     }
   }
 

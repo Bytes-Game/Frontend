@@ -19,7 +19,9 @@ import 'package:myapp/pages/settings_page.dart';
 import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/providers/theme_provider.dart';
+import 'package:myapp/screens/email_code_screen.dart';
 import 'package:myapp/screens/login_screen.dart';
+import 'package:myapp/screens/parent_consent_screen.dart';
 import 'package:myapp/screens/signup_screen.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
@@ -31,6 +33,24 @@ late Map<String, List<Map<String, dynamic>>> sent;
 
 /// What the server answers a sign-up: null for "made it".
 http.Response? signupAnswer;
+
+/// Whether the server checks a new account's email with a code, as it does
+/// now: a sign-up without one gets a code emailed instead of an account.
+/// Off: a server from before that, which makes the account at once.
+bool codeAsked = true;
+
+/// The code the server "emailed".
+const emailedCode = '424242';
+
+/// What the server answers a sign-up that came back with the right code:
+/// null for "made it".
+http.Response? afterCode;
+
+/// The code was tried too often: every wrong one says it is spent.
+bool codeSpent = false;
+
+/// Asking for another code now is too soon.
+bool resendTooSoon = false;
 
 /// The account signing in asked to be deleted and is waiting out its 30
 /// days: the server says so until the person chooses to keep it.
@@ -45,6 +65,10 @@ const Map<String, String> notFree = {
 void fakeServer() {
   sent = {};
   signupAnswer = null;
+  codeAsked = true;
+  afterCode = null;
+  codeSpent = false;
+  resendTooSoon = false;
   waitingToBeDeleted = false;
   ApiService.useClient(MockClient((req) async {
     final path = req.url.path;
@@ -65,8 +89,41 @@ void fakeServer() {
     }
     if (path.endsWith('/signup')) {
       final body = json.decode(req.body) as Map<String, dynamic>;
-      return signupAnswer ??
-          http.Response(
+      // A box the server refuses: said before any code is sent.
+      if (signupAnswer != null) return signupAnswer!;
+      final code = '${body['emailCode'] ?? ''}';
+      if (codeAsked && code.isEmpty) {
+        if (resendTooSoon) {
+          return http.Response(
+              json.encode({
+                'field': 'emailCode',
+                'error': 'A code was just sent. You can ask for another in a '
+                    'minute.',
+                'retryAfter': 42,
+              }),
+              429);
+        }
+        return http.Response(
+            json.encode({
+              'emailCodeSent': true,
+              'email': body['email'],
+              'resendIn': 60,
+            }),
+            202);
+      }
+      if (codeAsked && code != emailedCode) {
+        return http.Response(
+            json.encode(codeSpent
+                ? {
+                    'field': 'emailCode',
+                    'error': 'Too many wrong codes. Ask for a new one.',
+                    'expired': true,
+                  }
+                : {'field': 'emailCode', 'error': "That code isn't right."}),
+            400);
+      }
+      if (afterCode != null) return afterCode!;
+      return http.Response(
               json.encode({
                 'token': 'tok-new',
                 'user': {
@@ -238,7 +295,24 @@ void main() {
     await tapKey(t, 'signup_submit');
     await settle(t);
 
-    final body = sent['/signup']!.single;
+    // No account yet: every box was right, and a code went to the email.
+    expect(auth.isAuthenticated, isFalse);
+    expect(find.byType(EmailCodeScreen), findsOneWidget);
+    expect(find.text('Check your email'), findsOneWidget);
+    expect(
+      find.textContaining('maya@example.com', findRichText: true),
+      findsOneWidget,
+      reason: 'it says where the code went',
+    );
+    expect(sent['/signup']!.single.containsKey('emailCode'), isFalse);
+
+    // The six digits from the email: checked as soon as they are all in.
+    await t.enterText(find.byKey(const ValueKey('email_code')), emailedCode);
+    await settle(t);
+
+    expect(sent['/signup'], hasLength(2));
+    final body = sent['/signup']!.last;
+    expect(body['emailCode'], emailedCode);
     expect(body['username'], 'maya_k');
     expect(body['fullName'], 'Maya K');
     expect(body['email'], 'maya@example.com');
@@ -249,12 +323,188 @@ void main() {
         isFalse,
         reason: 'the calendar only offers birthdays 13 or more years ago');
 
+    // The same sign-up both times, but for the code.
+    expect({...body}..remove('emailCode'), sent['/signup']!.first);
+
     expect(auth.isAuthenticated, isTrue);
     expect(find.byType(SignupScreen), findsNothing,
         reason: 'the sign-up page closes once you are in');
+    expect(find.byType(EmailCodeScreen), findsNothing);
     expect(find.text('welcome steps'), findsOneWidget);
     expect(ApiService.authToken, 'tok-new');
     stopReporter();
+  });
+
+  group('the code emailed at sign-up', () {
+    /// The seconds "Resend" still waits, from what its button says; 0 when
+    /// it says "Resend code".
+    int resendWaits(WidgetTester t) {
+      final words = (t.widget<Text>(find.descendant(
+        of: find.byKey(const ValueKey('email_code_resend')),
+        matching: find.byType(Text),
+      ))).data!;
+      if (words == 'Resend code') return 0;
+      final m = RegExp(r'^Resend in (\d+):(\d\d)$').firstMatch(words)!;
+      return int.parse(m[1]!) * 60 + int.parse(m[2]!);
+    }
+
+    /// The form filled in and sent: on the code page.
+    Future<AuthProvider> toTheCode(WidgetTester t) async {
+      final auth = await openApp(t);
+      await tapKey(t, 'login_create_account');
+      await fillSignup(t);
+      await tapKey(t, 'signup_submit');
+      await settle(t);
+      expect(find.byType(EmailCodeScreen), findsOneWidget);
+      return auth;
+    }
+
+    testWidgets('a wrong code is said under the boxes; the right one then '
+        'makes the account', (t) async {
+      final auth = await toTheCode(t);
+      await t.enterText(find.byKey(const ValueKey('email_code')), '111111');
+      await settle(t);
+      expect(find.byKey(const ValueKey('email_code_error')), findsOneWidget);
+      expect(find.text("That code isn't right."), findsOneWidget);
+      expect(auth.isAuthenticated, isFalse);
+      expect(find.byType(EmailCodeScreen), findsOneWidget);
+
+      await t.enterText(find.byKey(const ValueKey('email_code')), emailedCode);
+      await settle(t);
+      expect(auth.isAuthenticated, isTrue);
+      expect(find.text('welcome steps'), findsOneWidget);
+      stopReporter();
+    });
+
+    testWidgets('a spent code says so, and a new one can be asked for at '
+        'once', (t) async {
+      codeSpent = true;
+      await toTheCode(t);
+      final resend = find.byKey(const ValueKey('email_code_resend'));
+      expect(t.widget<TextButton>(resend).onPressed, isNull,
+          reason: 'a minute must pass first, as a rule');
+      expect(resendWaits(t), inInclusiveRange(55, 60));
+
+      await t.enterText(find.byKey(const ValueKey('email_code')), '111111');
+      await settle(t);
+      expect(find.text('Too many wrong codes. Ask for a new one.'), findsOneWidget);
+      expect(t.widget<TextButton>(resend).onPressed, isNotNull,
+          reason: 'a spent code can only be replaced, so at once');
+
+      await tapKey(t, 'email_code_resend');
+      expect(sent['/signup'], hasLength(3));
+      expect(sent['/signup']!.last.containsKey('emailCode'), isFalse,
+          reason: 'asking again is the sign-up without a code');
+      expect(find.textContaining('We sent a new 6-digit code', findRichText: true),
+          findsOneWidget);
+      expect(resendWaits(t), inInclusiveRange(55, 60));
+    });
+
+    testWidgets('Resend counts down a minute, then sends again', (t) async {
+      await toTheCode(t);
+      final at = resendWaits(t);
+      expect(at, inInclusiveRange(55, 60));
+      for (var i = 0; i < 30; i++) {
+        await t.pump(const Duration(seconds: 1));
+      }
+      expect(resendWaits(t), at - 30, reason: 'a second at a time');
+      for (var i = 0; i < 31; i++) {
+        await t.pump(const Duration(seconds: 1));
+      }
+      expect(find.text('Resend code'), findsOneWidget);
+      await tapKey(t, 'email_code_resend');
+      expect(sent['/signup'], hasLength(2));
+      // Too soon by the server's clock: it says how long, and the button
+      // waits that long.
+      resendTooSoon = true;
+      for (var i = 0; i < 61; i++) {
+        await t.pump(const Duration(seconds: 1));
+      }
+      await tapKey(t, 'email_code_resend');
+      expect(find.text('A code was just sent. You can ask for another in a '
+          'minute.'), findsOneWidget);
+      expect(resendWaits(t), inInclusiveRange(40, 42),
+          reason: 'as long as the server said');
+    });
+
+    testWidgets('something wrong with the form goes back to it, under its '
+        'box', (t) async {
+      afterCode = http.Response(
+          json.encode({'field': 'username', 'error': 'That username is taken.'}),
+          409);
+      final auth = await toTheCode(t);
+      await t.enterText(find.byKey(const ValueKey('email_code')), emailedCode);
+      await settle(t);
+      expect(auth.isAuthenticated, isFalse);
+      expect(find.byType(EmailCodeScreen), findsNothing);
+      expect(find.byType(SignupScreen), findsOneWidget);
+      expect(find.text('That username is taken.'), findsOneWidget);
+    });
+
+    testWidgets('somebody young: the code, then the page that waits for a '
+        'parent', (t) async {
+      afterCode = http.Response(
+          json.encode({
+            'parentConsentPending': true,
+            'parentEmail': 'p***t@example.com',
+            'ticket': 'ticket-1',
+            'message': "We've emailed your parent or guardian.",
+          }),
+          202);
+      final auth = await toTheCode(t);
+      await t.enterText(find.byKey(const ValueKey('email_code')), emailedCode);
+      await settle(t);
+      expect(auth.isAuthenticated, isFalse);
+      expect(find.byType(EmailCodeScreen), findsNothing);
+      expect(find.byType(SignupScreen), findsNothing);
+      expect(find.byType(ParentConsentScreen), findsOneWidget);
+    });
+
+    testWidgets('"Use a different email" goes back to the form as it was',
+        (t) async {
+      await toTheCode(t);
+      await tapKey(t, 'email_code_change');
+      expect(find.byType(EmailCodeScreen), findsNothing);
+      expect(find.byType(SignupScreen), findsOneWidget);
+      expect(
+        t.widget<TextField>(find.byKey(const ValueKey('signup_email'))).controller!.text,
+        'Maya@Example.com',
+      );
+      expect(createEnabled(t), isTrue);
+    });
+
+    testWidgets("email not set up on the server: said plainly, on the form",
+        (t) async {
+      signupAnswer = http.Response(
+          json.encode({
+            'error': "We can't send email right now, so we can't check your "
+                'email address. Please try again later, or continue with '
+                'Google or Apple.',
+            'unavailable': true,
+            'reason': 'notSetUp',
+          }),
+          503);
+      await openApp(t);
+      await tapKey(t, 'login_create_account');
+      await fillSignup(t);
+      await tapKey(t, 'signup_submit');
+      expect(find.byType(EmailCodeScreen), findsNothing);
+      expect(find.byKey(const ValueKey('auth_error')), findsOneWidget);
+      expect(find.textContaining("We can't send email right now"), findsOneWidget);
+    });
+
+    testWidgets('a server from before the code makes the account at once, '
+        'and that still signs you in', (t) async {
+      codeAsked = false;
+      final auth = await openApp(t);
+      await tapKey(t, 'login_create_account');
+      await fillSignup(t);
+      await tapKey(t, 'signup_submit');
+      await settle(t);
+      expect(find.byType(EmailCodeScreen), findsNothing);
+      expect(auth.isAuthenticated, isTrue);
+      stopReporter();
+    });
   });
 
   testWidgets('the server\'s "no" lands under the box it is about',

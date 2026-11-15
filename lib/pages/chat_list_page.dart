@@ -243,7 +243,15 @@ class _ChatListPageState extends State<ChatListPage>
         userId: '${c['userId']}',
         name: '${c['username'] ?? ''}',
         onDeleted: () => _forget(c),
+        muted: c['muted'] == true,
+        onMuteChanged: (muted) => _setMuted(c, muted),
       );
+
+  /// Muted or unmuted: the row says so at once, and so does what is kept.
+  void _setMuted(Map<String, dynamic> c, bool muted) {
+    if (mounted) setState(() => c['muted'] = muted);
+    ChatCache.instance.setMuted(_myId, '${c['userId']}', muted);
+  }
 
   void _showNewChatPicker() {
     EventTracker.instance.trackTap(
@@ -487,6 +495,9 @@ class _ConversationTile extends StatelessWidget {
     final hasUnread = unread > 0;
     final mine = conversation['lastFromMe'] == true;
     final status = conversation['lastStatus'] as String? ?? '';
+    // Muted: a small bell crossed out by the name, and its unread count in
+    // grey, the way chat apps show a chat that does not notify.
+    final muted = conversation['muted'] == true;
 
     return Pressable(
       onTap: onTap,
@@ -514,15 +525,32 @@ class _ConversationTile extends StatelessWidget {
                   Row(
                     children: [
                       Expanded(
-                        child: Text(
-                          username,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 15.5,
-                            fontWeight:
-                                hasUnread ? FontWeight.w700 : FontWeight.w600,
-                          ),
+                        child: Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                username,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 15.5,
+                                  fontWeight: hasUnread
+                                      ? FontWeight.w700
+                                      : FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            if (muted)
+                              Padding(
+                                key: const ValueKey('chat_muted'),
+                                padding: const EdgeInsets.only(left: 5),
+                                child: Icon(
+                                  Icons.notifications_off_rounded,
+                                  size: 15,
+                                  color: cs.onSurface.withValues(alpha: 0.45),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                       if (time.isNotEmpty)
@@ -532,7 +560,7 @@ class _ConversationTile extends StatelessWidget {
                             fontSize: 12,
                             fontWeight:
                                 hasUnread ? FontWeight.w700 : FontWeight.w500,
-                            color: hasUnread
+                            color: hasUnread && !muted
                                 ? kAccent
                                 : cs.onSurface.withValues(alpha: 0.45),
                           ),
@@ -611,7 +639,9 @@ class _ConversationTile extends StatelessWidget {
                               horizontal: 7, vertical: 2),
                           constraints: const BoxConstraints(minWidth: 20),
                           decoration: BoxDecoration(
-                            color: kAccent,
+                            color: muted
+                                ? cs.onSurface.withValues(alpha: 0.35)
+                                : kAccent,
                             borderRadius:
                                 BorderRadius.circular(AppTheme.radiusFull),
                           ),
