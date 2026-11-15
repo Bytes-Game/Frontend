@@ -305,6 +305,26 @@ void main() {
     expect(v.projectId, isNotEmpty);
   });
 
+  // The project built in is the one the owner made for this app's id,
+  // com.flexete.app (its google-services.json, 15 November). The one
+  // before was made for the template's id, and Firebase refused its key:
+  // "API key not valid", and no phone got a push address. The test above
+  // would still pass with those values back, since they belonged together
+  // too; this one would not.
+  test("the built-in project is the one made for this app's own id", () {
+    final v = FirebasePushPlatform.debugValues;
+    expect(v.projectId, 'battle-adddb');
+    expect(v.senderId, '55498173129');
+    expect(v.appId, '1:55498173129:android:46a7303ee3e18295273b18');
+    expect(v.apiKey, 'AIzaSyAIMhynIn0pVBT43MiotfKX342tHf84Yo4');
+    // And that app id is the one registered for the app's id on Android.
+    final gradle = File('android/app/build.gradle.kts')
+        .readAsLinesSync()
+        .where((l) => !l.trimLeft().startsWith('//'))
+        .join('\n');
+    expect(gradle, contains('applicationId = "com.flexete.app"'));
+  });
+
   // An iPhone is never started with the Android app's id: Apple's side of
   // Firebase refuses it while starting, and takes the app down. Without
   // its own id an iPhone build has no notifications; with it, it does.
@@ -315,7 +335,7 @@ void main() {
         isFalse);
     expect(
       FirebasePushPlatform.configuredFor(
-          ios: true, iosAppId: '1:966321160135:ios:abc123'),
+          ios: true, iosAppId: '1:55498173129:ios:abc123'),
       isTrue,
     );
     // And the real getter follows the phone it runs on.

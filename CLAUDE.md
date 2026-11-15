@@ -114,14 +114,13 @@ the day it is added.
    To a phone, a build with the new id is a different app. It installs
    beside any older test build and starts signed out. Uninstall the old
    one.
+   Push notifications for the new id: the app's half is done. The owner
+   made a new Firebase project for `com.flexete.app` on 15 November
+   (`battle-adddb`, App ID `1:55498173129:android:46a7303ee3e18295273b18`)
+   and its values are built into the app. The project used before
+   (`battle-38226`) answered "API key not valid", so no phone got a push
+   address from it. Left: the server's half, item 6a.
    Still to do, because each is tied to the id:
-   - Push notifications: the app still carries the Firebase registration
-     made for the old id. In Firebase: Project settings → Your apps → Add
-     app → Android, with `com.flexete.app`. Firebase then shows an "App
-     ID" that starts `1:966321160135:android:`. Build with
-     `--dart-define=FIREBASE_APP_ID=<that>`, or ask for it to become the
-     built-in one. Until then notifications are not sure to arrive: this
-     was not tried on a phone. The lock on the key (item 25) needs it too.
    - Google sign-in: the Android OAuth client (item 10) is made for the id.
    - Apple sign-in: the iPhone id goes in `APPLE_CLIENT_IDS` (item 6).
 2. **Make the release signing key.** Without it, release builds are signed
@@ -171,6 +170,23 @@ the day it is added.
    Android id is `com.flexete.app` (Apple sign-in on Android comes back
    to the app through it). If it is set on Render to anything else,
    delete it. Set it only if the id is ever changed again.
+6a. **Push notifications, the server's half.** The server sends
+    notifications with the private key of a Firebase project, and that
+    must be the same project the app is built for (`battle-adddb` since
+    15 November). Firebase does not deliver to a phone through another
+    project's key: every send fails, and nothing in the app says so.
+    - Firebase console → the project `battle-adddb` → the gear → Project
+      settings → Service accounts → "Generate new private key". A file
+      ending in `.json` downloads. It is a password: never send it to
+      anybody, never put it in the code.
+    - Render → the service → Environment: replace the value of
+      `FCM_SERVICE_ACCOUNT_JSON` with the whole of that file (open it in
+      Notepad, select all, copy, paste). `NOTIFICATION_SENDER` stays `fcm`.
+      If `FCM_PROJECT` is set, delete it: the key names its project.
+    - Save. When the server has restarted: Render → Logs, the line
+      starting `notifications:`. It should end with "Firebase project
+      battle-adddb".
+    - Then delete the downloaded file from your computer.
 7. **Deploy the server first.** Before, or together with, the app build
    that needs it. This matters more than it used to: the app now sends
    its sign-in to the live connection in a new way, which only the new
@@ -214,6 +230,10 @@ the day it is added.
     ones (`player1` and the rest) and everything they posted, and there is
     no "wipe everything" button and no `TEST_SERVER` setting. If
     `TEST_SERVER` is still set on Render, delete it; it does nothing.
+    Every video there was came from those demo accounts, so since then
+    the app has no videos at all until somebody posts one. A phone log on
+    15 November showed exactly that: the feed, search and the profile all
+    came back with nothing, and nothing was wrong with playing videos.
 9c. **Optional: `PUBLIC_BASE_URL`.** The address put in the links that are
     emailed to parents. On Render nothing needs setting: Render tells the
     server its own address. Once flexete.com points at the server (item
@@ -252,8 +272,9 @@ the day it is added.
 12. **iPhone push notifications.** The project's half is done: the app
     asks for them and can be woken by one. Three steps are left, in three
     accounts:
-    - Firebase: add an iOS app to the same project, with the iPhone app
-      id from item 1. It gives two values for the build (item 13):
+    - Firebase: add an iOS app to the same project (`battle-adddb`),
+      with the iPhone app id from item 1. It gives two values for the
+      build (item 13):
       `FIREBASE_IOS_APP_ID` and `FIREBASE_IOS_API_KEY`.
     - Apple Developer: switch on Push Notifications for the app id, and
       make an APNs key (Keys → +, tick Apple Push Notifications service).
@@ -276,9 +297,11 @@ the day it is added.
 
 13. **Build with the real settings.** The release build needs these passed
     as `--dart-define`s:
-    - `FIREBASE_API_KEY`, `FIREBASE_APP_ID`, `FIREBASE_PROJECT_ID`,
-      `FIREBASE_SENDER_ID`, and on iPhone `FIREBASE_IOS_APP_ID` and
-      `FIREBASE_IOS_API_KEY` (or push notifications are off);
+    - on iPhone, `FIREBASE_IOS_APP_ID` and `FIREBASE_IOS_API_KEY` (or no
+      push notifications on iPhones). Android's Firebase values are built
+      in (item 1); `FIREBASE_API_KEY`, `FIREBASE_APP_ID`,
+      `FIREBASE_PROJECT_ID` and `FIREBASE_SENDER_ID` are only for using
+      another project;
     - `SENTRY_DSN` (or crash reports go nowhere);
     - `GOOGLE_SERVER_CLIENT_ID`, and on iPhone `GOOGLE_IOS_CLIENT_ID` (or no
       Google button);
