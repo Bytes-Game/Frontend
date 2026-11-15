@@ -184,18 +184,24 @@ abstract class PushPlatform {
 /// Google's push service (Firebase Cloud Messaging), for Android and
 /// iPhone.
 class FirebasePushPlatform implements PushPlatform {
-  // This app's Firebase project ("battle-38226"), built in so every build
-  // gets phone notifications with no extra steps. These are not secrets:
-  // every copy of the app carries them, the way every Android app carries
-  // its google-services.json. The secret half (the service-account key)
-  // lives only on the server.
+  // This app's Firebase project ("battle-adddb"), built in so every build
+  // gets phone notifications with no extra steps. The values are the ones
+  // in the project's google-services.json for com.flexete.app. They are not
+  // secrets: every copy of the app carries them, the way every Android app
+  // carries its google-services.json. The secret half (the service-account
+  // key) lives only on the server, and must be from this same project:
+  // Firebase will not deliver to a phone through another project's key.
+  //
+  // The project used before, "battle-38226", was made for the template's
+  // app id. Its key answered "API key not valid" on 15 November, so no
+  // phone got a push address from it.
   //
   // A different project can still be used for one build:
   // --dart-define-from-file=firebase_push.json (see README).
   static const _apiKey = String.fromEnvironment('FIREBASE_API_KEY',
-      defaultValue: 'AIzaSyBGU-hjM5x0rCzbsFbmVs7QmaV7wqN7R5M');
+      defaultValue: 'AIzaSyAIMhynIn0pVBT43MiotfKX342tHf84Yo4');
   static const _appId = String.fromEnvironment('FIREBASE_APP_ID',
-      defaultValue: '1:966321160135:android:3b2f0cb1df4f13957463e2');
+      defaultValue: '1:55498173129:android:46a7303ee3e18295273b18');
   static const _iosAppId = String.fromEnvironment('FIREBASE_IOS_APP_ID');
 
   /// The iPhone app's own Firebase key. Firebase makes one key per kind of
@@ -204,9 +210,9 @@ class FirebasePushPlatform implements PushPlatform {
   /// Without it the Android key is used, which works only while unlocked.
   static const _iosApiKey = String.fromEnvironment('FIREBASE_IOS_API_KEY');
   static const _senderId = String.fromEnvironment('FIREBASE_SENDER_ID',
-      defaultValue: '966321160135');
+      defaultValue: '55498173129');
   static const _projectId = String.fromEnvironment('FIREBASE_PROJECT_ID',
-      defaultValue: 'battle-38226');
+      defaultValue: 'battle-adddb');
 
   /// The values in use, for the check that they belong together.
   @visibleForTesting
