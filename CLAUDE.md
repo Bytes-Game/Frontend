@@ -646,5 +646,45 @@ dollar. Read them again before relying on them: they change.
     so: the account is suspended from the admin page and its files
     removed. Ask for the size limit to be built once the release is out.
 
+### I. Asked for, not built yet
+
+Not needed for the first release.
+
+31. **flexete.com: a website that works like the app.** The owner asked
+    for this on 16 November, in these words:
+
+    > can i do something like when someone search flexete.com on search
+    > engine it opens same thing like app in search engine and also first
+    > it open the app in mobile or if user choose to play in browser then
+    > play in browser just like app. if user don't have app then it give
+    > option to download in playstore or if user choose to play in browser
+    > then play in browser.
+
+    It needs a setup of its own, and it waits for two things: flexete.com
+    pointing at the server (item 18), and the app on Google Play, so there
+    is a store link to offer (item 8). Then it is four pieces:
+    - **The website.** The app's own code can be built as a website, but
+      some parts work only on a phone today and need a web version first:
+      how videos play (through a small server inside the app), recording
+      and editing videos, the phone's photo gallery, and notifications.
+    - **Links that open the app.** A small file on flexete.com
+      (`/.well-known/assetlinks.json`) tells Android that the app and the
+      website belong together, and the app says "open flexete.com links
+      in me". Then tapping a flexete.com link, a search result among them,
+      opens the app when it is on the phone, and the website when it is
+      not. The file needs the SHA-1 of every key the app is signed with
+      (items 2 and 10). iPhones have the same, with a file for Apple
+      (item 11).
+    - **The choice on the page.** Somebody who types flexete.com into the
+      browser stays in the browser, so the page itself offers: "Open in
+      the app" (or "Get it on Google Play" when it is not on the phone),
+      and "Watch in the browser".
+    - **Found in search.** Search engines read plain web pages well and
+      app-like screens badly. The shared pages (`/u/<name>` and
+      `/v/<number>`) are already plain pages with a title and a
+      description. Missing: a front page at flexete.com, a list of pages
+      for search engines (a sitemap), and adding the site to Google
+      Search Console.
+
 Not on this list on purpose: the admin password. The owner has said they
 will change it themselves and does not want reminding.
