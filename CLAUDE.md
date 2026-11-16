@@ -646,9 +646,11 @@ dollar. Read them again before relying on them: they change.
     so: the account is suspended from the admin page and its files
     removed. Ask for the size limit to be built once the release is out.
 
-### I. Asked for, not built yet
+### I. After launch
 
-Not needed for the first release.
+The owner's choice on 16 November: what is here is built once the app
+is out on Google Play, not before. When the owner says the app is out,
+remind them of this section.
 
 31. **flexete.com: a website that works like the app.** The owner asked
     for this on 16 November, in these words:
@@ -663,10 +665,11 @@ Not needed for the first release.
     It needs a setup of its own, and it waits for two things: flexete.com
     pointing at the server (item 18), and the app on Google Play, so there
     is a store link to offer (item 8). Then it is four pieces:
-    - **The website.** The app's own code can be built as a website, but
-      some parts work only on a phone today and need a web version first:
-      how videos play (through a small server inside the app), recording
-      and editing videos, the phone's photo gallery, and notifications.
+    - **A website version of the app.** Most of the app can be built as
+      a website from the same code. A few parts only work on a phone
+      today and need their own web version first: how videos play
+      (through a small server inside the app), recording and editing
+      videos, the phone's photo gallery, and notifications.
     - **Links that open the app.** A small file on flexete.com
       (`/.well-known/assetlinks.json`) tells Android that the app and the
       website belong together, and the app says "open flexete.com links
