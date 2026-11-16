@@ -221,8 +221,8 @@ the day it is added.
    - free: an UptimeRobot monitor (type HTTP(s), address
      `https://gobackend-9nd8.onrender.com/health`, every 5 minutes). Render's
      free hours cover one server awake all month, but only if nothing else
-     on Render is free and awake: switch the search service off first
-     (item 9e);
+     on Render is free and awake: the search service shares them until it
+     moves to a paid plan (item 9e);
    - or a paid Render plan, which never sleeps ($7 a month, about ₹660:
      item 29). Then delete `keepalive.yml` and the monitor.
    A second reason, seen on 15 November: a sleeping server does nothing
@@ -261,32 +261,27 @@ the day it is added.
     and emails to parents count per caller's address, and how the server
     learns that address differs from host to host. Set wrong, anybody can
     dodge those limits.
-9e. **The search service: switch it off for now.** Search goes through a
-    separate service on Render, Meilisearch v1.6, on the Free plan (the
-    owner said so on 16 November). On Free it falls asleep after 15
-    minutes with no searches, and the next search waits about a minute
-    while it wakes. It forgets everything each time it sleeps or
-    restarts, and the server only refills it when the server itself
-    starts, so in between a search can show only the newest posts. And
-    it shares Render's 750 free hours a month with the server (item 9):
-    keeping both awake can use them up, and Render then stops both until
-    the next month.
-    Without it nothing breaks: search uses the database, and the subject
-    suggestions use a list built into the server (checked on 16
-    November: every use of it in the server is skipped when it is not
-    set). At this size that is quick and complete. What goes: search
-    forgiving typos ("dnacing" no longer finds "dancing"), and
-    suggesting subjects people made up themselves.
-    - Render → the server → Environment: delete `MEILISEARCH_URL` and
-      `MEILI_MASTER_KEY`. Save. Its start-up log then says
-      "MEILISEARCH_URL not set — search will use PostgreSQL fallback".
-    - Render → the Meilisearch service → Settings → Suspend.
-    - To bring it back, once there are thousands of videos: a paid plan
-      with a disk, so it keeps what it has (Starter, $7, plus a 1 GB disk
-      at $0.25: about $7.25 a month, ₹680; read on Render's pricing page
-      on 16 November). Then put the two settings back. The server fills
-      it at every start, and its log says whether everything was
-      accepted (the lines starting `search:`).
+9e. **The search service: move it to a paid plan.** Search goes through a
+    separate service on Render, Meilisearch v1.6, on the Free plan. On 16
+    November the owner chose to keep it running and move it to a paid
+    plan later. Until then, on Free:
+    - it falls asleep after 15 minutes with no searches, and the next
+      search waits about a minute while it wakes;
+    - it forgets everything each time it sleeps or restarts. The server
+      only refills it when the server itself starts, so in between a
+      search can show only the newest posts;
+    - it shares Render's 750 free hours a month with the server (item 9):
+      if both are kept awake they can run out, and Render then stops both
+      until the next month.
+    Search keeps working meanwhile: when the search service has nothing
+    or does not answer, the server searches its own database instead.
+    To do: Render → the Meilisearch service → Settings → Instance Type →
+    Starter ($7), then Settings → Disks → add a 1 GB disk ($0.25) at
+    `/meili_data`, where the official Meilisearch image keeps its data.
+    It then never sleeps and keeps what it has: about $7.25 a month, ₹680
+    (Render's pricing page, read on 16 November). Keep `MEILI_MASTER_KEY`
+    set on both services. The server fills it at every start, and its log
+    says whether everything was accepted (the lines starting `search:`).
 
 ### C. Google and Apple accounts
 
@@ -626,10 +621,10 @@ dollar. Read them again before relying on them: they change.
       for the video worker while the repositories are public (item 22).
     - Together about ₹1,225 a month, plus what the bank adds for paying
       in dollars. The rest is room for videos past 10 GB.
-    - The search service (Meilisearch, item 9e): nothing while it is
-      switched off. Back on a paid plan with a disk it is about $7.25
+    - The search service (Meilisearch, item 9e): free today, but on Free
+      it sleeps and forgets. On a paid plan with a disk it is about $7.25
       (₹680), which with the two plans above makes about ₹1,905, nearly
-      the whole ₹2,000. So only once search really needs it.
+      the whole ₹2,000.
     - Render's free allowance for data sent by the server is 5 GB a
       month, then $0.15 for each GB. Videos do not count: they come from
       Cloudflare.
