@@ -120,7 +120,8 @@ the day it is added.
    the same project as the Google sign-in clients (item 10), and its
    values are built into the app. The projects before it (`battle-38226`,
    whose key answered "API key not valid", and `battle-adddb`, used for a
-   day) are no longer used. Left: the server's half, item 6a.
+   day) are no longer used. The server's half (item 6a) was done the same
+   day.
    Still to do, because each is tied to the id:
    - Google sign-in: the Android OAuth client (item 10) is made for the id.
    - Apple sign-in: the iPhone id goes in `APPLE_CLIENT_IDS` (item 6).
@@ -146,8 +147,10 @@ the day it is added.
    without it), the code for a forgotten password, and the link a parent
    gets when somebody under 18 signs up (item 26). Without email, nobody
    can sign up with an email and a password at all (Google and Apple
-   still work), and nobody under 18 can join. On 15 November the live
-   server answered as if email is set up. Render's free plan blocks the
+   still work), and nobody under 18 can join. Done: on 16 November the
+   server's start-up line said email "goes out through Resend's web API,
+   from Flexete <no-reply@flexete.com>". The rest of this item is for if
+   it ever stops working. Render's free plan blocks the
    ports ordinary email goes out on (25, 465 and 587), so on it Gmail and
    every other SMTP service simply never answer. A phone log on 7 November
    showed exactly that: Gmail set up right, and the reset code failing
@@ -168,7 +171,9 @@ the day it is added.
 6. **Google and Apple sign-in, the server's half.**
    - `GOOGLE_CLIENT_IDS`: the Web client id, which the owner made on 16
      November: `794878539677-hn1vtp7tt8uivvh5g3gg2m1t79eo2mbg.apps.googleusercontent.com`.
-     Later, when the iOS client exists (item 10), add it after a comma.
+     Set on 16 November: the live server then refused a made-up Google
+     sign-in instead of saying it isn't set up. Later, when the iOS client
+     exists (item 10), add it after a comma.
    - `APPLE_CLIENT_IDS`: the iPhone app id and the Apple Services ID from
      item 11, separated by a comma.
    Without them, those buttons say "isn't set up yet".
@@ -191,7 +196,8 @@ the day it is added.
       If `FCM_PROJECT` is set, delete it: the key names its project.
     - Save. When the server has restarted: Render → Logs, the line
       starting `notifications:`. It should say "Firebase project
-      flexete-6de88".
+      flexete-6de88". Done on 16 November: the owner's log said exactly
+      that.
     - Then delete the downloaded file from your computer.
 7. **Deploy the server first.** Before, or together with, the app build
    that needs it. This matters more than it used to: the app now sends
@@ -396,8 +402,10 @@ shared links and everything below stop working.
     - Then ask for the app's server address and shared links to switch to
       it (items 14, 16, 17), and do item 10a.
 19. **Videos from your own address.** Optional, but it speeds videos up.
-    The videos live in Cloudflare R2. Checked on 14 November: the live
-    server still hands out a `pub-….r2.dev` address. That is R2's test
+    The videos live in Cloudflare R2. Step c is done: on 16 November the
+    server's start-up line said new files are handed out at
+    `https://media.flexete.com`, and that files under the old
+    `pub-….r2.dev` address are still known. That old one is R2's test
     address: Cloudflare slows it down and keeps no copy near the viewer.
     The server says which address is in use at every start: Render → the
     service → Logs, the line starting `media:`. (If that line ever says
