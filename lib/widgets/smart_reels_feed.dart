@@ -4866,8 +4866,9 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
   }
 
   /// Flip between challenger and opponent video. No-op on non-battles or on
-  /// a repeat-toggle to the same side. Entry point for the swipe's settle,
-  /// a return from the battle page, and the offscreen reset.
+  /// a repeat-toggle to the same side. Entry point for a tap on the names
+  /// at the top, the swipe's settle, a return from the battle page, and the
+  /// offscreen reset.
   ///
   /// `animate: false` (offscreen reset path) swaps instantly; otherwise the
   /// cube turns from wherever it currently is to the requested face.
@@ -5424,11 +5425,15 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
         // On a battle, the two people at the top, under the feed's tabs:
         // who is in it, which of them is on screen, and — by being two
         // names side by side — that there is another side to swipe to.
-        // This replaces a tab with an arrow on the screen's edge, which
-        // read as clutter. A tap on either name opens that person's
-        // profile, as a name does everywhere else; a swipe left or right
-        // switches sides. (A tap used to switch sides, until the owner
-        // asked for every name to open its profile.)
+        // Tap either name to switch to that side; a swipe left or right
+        // does the same. This replaces a tab with an arrow on the screen's
+        // edge, which read as clutter.
+        //
+        // These two names switch sides, and do not open a profile: the
+        // owner asked for that. On 15 November a tap here was made to open
+        // the person's profile instead; the next day the owner asked for
+        // the switch back. The name at the bottom opens the profile of
+        // whoever is on screen.
         if (item.isBattle)
           Positioned(
             top: MediaQuery.of(context).padding.top + 50,
@@ -5443,7 +5448,8 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
                 showingOpponent: _showingOpponent,
                 answerFirst: _answerFirst,
                 winner: _BattleScores.winnerOf(item.id),
-                onOpened: _countProfileVisit,
+                onTapChallenger: () => _setShowOpponent(false),
+                onTapOpponent: () => _setShowOpponent(true),
               ),
             ),
           ),
@@ -5469,7 +5475,7 @@ class _ReelTileState extends State<_ReelTile> with TickerProviderStateMixin {
             children: [
               // Who: whoever made the video on screen, the same on a battle
               // as on a short. On a battle that is the side showing, so
-              // after a swipe it is the other person. A tap on the picture
+              // after a switch it is the other person. A tap on the picture
               // or the name opens their profile.
               //
               // A battle used to leave this out, with only the two names at
@@ -6453,8 +6459,7 @@ class _CreatorLine extends StatelessWidget {
 }
 
 /// Both people in a battle on one line — "maya vs leo" — with the one whose
-/// video is on screen lit up and the other dimmed. A tap on either opens
-/// that person's profile; a swipe switches sides.
+/// video is on screen lit up and the other dimmed. Tap either to switch.
 ///
 /// This replaced a two-box panel at the top of the screen with the words
 /// CHALLENGER and OPPONENT and a line of hint text under it. It took three
@@ -6470,9 +6475,8 @@ class _Matchup extends StatelessWidget {
   /// Who won, once the battle is decided: "creator", "answer", or "" —
   /// still running, a draw, or not known. Only a winner gets a mark.
   final String winner;
-
-  /// Told who is being opened, as their profile opens.
-  final void Function(UserModel user)? onOpened;
+  final VoidCallback onTapChallenger;
+  final VoidCallback onTapOpponent;
 
   /// The answer is the battle's first side (it is ahead), so it is named
   /// first: the names read in the order a swipe left goes.
@@ -6484,7 +6488,8 @@ class _Matchup extends StatelessWidget {
     required this.opponent,
     required this.opponentLeague,
     required this.showingOpponent,
-    this.onOpened,
+    required this.onTapChallenger,
+    required this.onTapOpponent,
     this.answerFirst = false,
     this.winner = '',
   });
@@ -6492,23 +6497,19 @@ class _Matchup extends StatelessWidget {
   Widget _challenger() => _MatchupSide(
         key: const ValueKey('matchup_challenger'),
         username: challenger,
-        profile: challenger,
         league: challengerLeague,
         active: !showingOpponent,
         won: winner == 'creator',
-        onOpened: onOpened,
+        onTap: onTapChallenger,
       );
 
-  // With no name known there is nobody to open: the word "opponent" is
-  // only a label.
   Widget _answer() => _MatchupSide(
         key: const ValueKey('matchup_opponent'),
         username: opponent.isEmpty ? 'opponent' : opponent,
-        profile: opponent,
         league: opponentLeague,
         active: showingOpponent,
         won: winner == 'answer',
-        onOpened: onOpened,
+        onTap: onTapOpponent,
       );
 
   @override
@@ -6577,39 +6578,33 @@ class _VsMedal extends StatelessWidget {
 }
 
 /// One person in the names at the top of a battle: their picture and name.
-/// A tap opens their profile.
 ///
 /// No trophy and no league shield beside the name — the owner found them
 /// cluttered. The one mark is a green bar under the name of whoever WON,
 /// once the battle is decided. While it is running, nobody has a mark.
 class _MatchupSide extends StatelessWidget {
-  /// The name shown.
   final String username;
-
-  /// The account a tap opens; empty for none.
-  final String profile;
   final String league;
   final bool active;
   final bool won;
-  final void Function(UserModel user)? onOpened;
+  final VoidCallback onTap;
 
   static const green = Color(0xFF30D158);
 
   const _MatchupSide({
     super.key,
     required this.username,
-    required this.profile,
     required this.league,
     required this.active,
-    this.onOpened,
+    required this.onTap,
     this.won = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return OpenProfileOnTap(
-      username: profile,
-      onOpened: onOpened,
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOut,

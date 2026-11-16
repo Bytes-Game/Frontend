@@ -648,8 +648,9 @@ const helpTopics = [
     HelpArticle('How do battles work?', [
       'Anyone can post a challenge: a short video and a prompt. Others '
           'accept it by posting their own answer.',
-      'Once there is an answer, viewers in the For You feed swipe between '
-          'the two videos, then tap the trophy to vote for their pick.',
+      'Once there is an answer, viewers in the For You feed switch between '
+          'the two videos with a swipe, or by tapping a name at the top, '
+          'then tap the trophy to vote for their pick.',
     ]),
     HelpArticle("What's a league?", [
       'Everybody starts on 1,000 points in Bronze. Every league is 1,000 '

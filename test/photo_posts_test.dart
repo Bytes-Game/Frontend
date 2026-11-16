@@ -497,8 +497,8 @@ void main() {
         'topResponseMusic': beta,
       };
       await openFeed(t);
-      // A swipe left turns the battle to leo's side, and right back. (A
-      // tap on a name opens that person's profile.)
+      // A swipe left turns the battle to leo's side, and right back, as a
+      // tap on a name at the top does.
       await t.dragFrom(const Offset(320, 430), const Offset(-280, 0));
       await frames(t, 8);
       expect(find.text('Beta · Other'), findsOneWidget);
