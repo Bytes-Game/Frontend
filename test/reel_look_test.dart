@@ -419,13 +419,19 @@ Future<void> closeReel(WidgetTester t) async {
 }
 
 /// Turns a battle to its other side the way a person does, with a swipe:
-/// left goes to the second side, right back to the first. (A tap on a name
-/// at the top opens that person's profile instead.)
+/// left goes to the second side, right back to the first.
 Future<void> swipeSides(WidgetTester t, {bool left = true}) async {
   await t.dragFrom(
     Offset(left ? 320 : 80, 430),
     Offset(left ? -280 : 280, 0),
   );
+  await t.pump(const Duration(milliseconds: 700));
+}
+
+/// Turns a battle to [side] ("challenger" or "opponent") the other way a
+/// person does: a tap on that name at the top.
+Future<void> tapSide(WidgetTester t, String side) async {
+  await t.tap(find.byKey(ValueKey('matchup_$side')));
   await t.pump(const Duration(milliseconds: 700));
 }
 
@@ -1011,6 +1017,40 @@ void main() {
     await closeReel(t);
   });
 
+  // The owner's choice: the two names at the top switch between the videos,
+  // and open no profile. The name at the bottom is the one that does.
+  testWidgets('a tap on a name at the top switches to that video, and opens '
+      'no profile', (t) async {
+    await openReel(t, battle());
+    EventTracker.instance.init('1');
+    expect(find.text('1.3K'), findsOneWidget, reason: "maya's likes");
+    await tapSide(t, 'opponent');
+    expect(find.text('940'), findsOneWidget, reason: "leo's likes now");
+    expect(atBottom('leo_beats'), findsOneWidget);
+    expect(t.widget<Text>(atTop('opponent', 'leo_beats')).style!.color,
+        const Color(0xFF111114), reason: "leo's is the lit chip now");
+    // A tap on the name already showing leaves it there.
+    await tapSide(t, 'opponent');
+    expect(find.text('940'), findsOneWidget);
+    await tapSide(t, 'challenger');
+    expect(find.text('1.3K'), findsOneWidget, reason: "maya's again");
+    expect(atBottom('maya'), findsOneWidget);
+    // No profile opened, and nobody was looked up to open one.
+    expect(find.byType(ProfilePage), findsNothing);
+    expect(usersAsked, isEmpty);
+    // Each switch told the feed, as a swipe does: to leo's side (1), and
+    // back to maya's (0). The repeat tap is not a switch.
+    EventTracker.instance.dispose(); // sends what is waiting
+    for (var i = 0; i < 3; i++) {
+      await t.pump(const Duration(milliseconds: 50));
+    }
+    expect([
+      for (final e in eventsSent)
+        if (e['eventType'] == 'battle_switch') (e['metadata'] as Map)['side'],
+    ], [1, 0]);
+    await closeReel(t);
+  });
+
   group("a tap on a person opens their profile, the same as in Search", () {
     /// Taps [target], waits for the page, and says whose profile opened.
     Future<String?> open(WidgetTester t, Finder target) async {
@@ -1045,26 +1085,18 @@ void main() {
       ];
     }
 
-    testWidgets('a battle: either name at the top, and the name at the '
-        'bottom; the video stays where it was', (t) async {
+    testWidgets('a battle: the name at the bottom, whoever is on screen',
+        (t) async {
       await openReel(t, battle());
       EventTracker.instance.init('1');
-      expect(
-        await open(t, find.byKey(const ValueKey('matchup_opponent'))),
-        'leo_beats',
-      );
-      expect(find.text('1.3K'), findsOneWidget,
-          reason: "still maya's video: a tap on a name is not a swipe");
-      expect(
-        await open(t, find.byKey(const ValueKey('matchup_challenger'))),
-        'maya',
-      );
       expect(
         await open(t, find.byKey(const ValueKey('reel_creator_open'))),
         'maya',
       );
+      expect(find.text('1.3K'), findsOneWidget,
+          reason: "back on maya's video, where it was");
       // On leo's side, the name at the bottom is his.
-      await swipeSides(t);
+      await tapSide(t, 'opponent');
       expect(
         await open(t, find.byKey(const ValueKey('reel_creator_open'))),
         'leo_beats',
@@ -1072,8 +1104,6 @@ void main() {
       // Each one counted as a visit from this battle, for who was opened:
       // the feed shows more of the people you go and look at.
       expect(await visits(t), [
-        ('8', 'challenge:1'),
-        ('9', 'challenge:1'),
         ('9', 'challenge:1'),
         ('8', 'challenge:1'),
       ]);
@@ -1108,8 +1138,10 @@ void main() {
         (t) async {
       await openReel(t, {...battle(), 'topResponseUsername': 'gone_one'});
       EventTracker.instance.init('1');
+      await tapSide(t, 'opponent');
+      expect(atBottom('gone_one'), findsOneWidget);
       expect(
-        await open(t, find.byKey(const ValueKey('matchup_opponent'))),
+        await open(t, find.byKey(const ValueKey('reel_creator_open'))),
         isNull,
       );
       expect(find.text("gone_one's account isn't available."), findsOneWidget);
