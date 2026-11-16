@@ -4,11 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/providers/data_provider.dart';
+import 'package:myapp/services/chat_badge.dart';
 import 'package:myapp/services/chat_cache.dart';
 import 'package:myapp/services/event_tracker.dart';
 import 'package:myapp/services/explore_grid_cache.dart';
 import 'package:myapp/services/profile_cache.dart';
 import 'package:myapp/services/video_player_service.dart';
+import 'package:myapp/services/websocket_service.dart';
 import 'package:myapp/pages/home_page.dart';
 import 'package:myapp/pages/chat_list_page.dart';
 import 'package:myapp/pages/search_page.dart';
@@ -61,6 +63,12 @@ class _MainShellState extends State<MainShell> {
   /// they have had the connection to themselves.
   static const prefetchDelay = Duration(seconds: 3);
 
+  /// Messages arriving live, for the number on the Messages button.
+  StreamSubscription<Map<String, dynamic>>? _liveSub;
+
+  /// The app coming back to the front, for the same number.
+  AppLifecycleListener? _lifecycle;
+
   @override
   void initState() {
     super.initState();
@@ -69,6 +77,16 @@ class _MainShellState extends State<MainShell> {
     EventTracker.instance.trackPageView(
       pageName: 'home_tab',
       params: {'tabIndex': 0, 'tabLabel': _tabLabels[0]},
+    );
+    // The number on the Messages button: now, a moment after a message
+    // arrives live, and whenever the app comes back to the front.
+    unawaited(ChatBadge.instance.refresh());
+    final me = Provider.of<DataProvider>(context, listen: false).user?.id ?? '';
+    _liveSub = Provider.of<WebSocketService?>(context, listen: false)
+        ?.events
+        .listen((ev) => ChatBadge.instance.onLive(ev, me));
+    _lifecycle = AppLifecycleListener(
+      onResume: () => unawaited(ChatBadge.instance.refresh()),
     );
     // Get Search's grid ready before anyone opens it, so the first visit
     // opens on videos instead of waiting for the server.
@@ -87,6 +105,8 @@ class _MainShellState extends State<MainShell> {
 
   @override
   void dispose() {
+    _liveSub?.cancel();
+    _lifecycle?.dispose();
     _searchPrefetch?.cancel();
     _homeTappedAgain.dispose();
     _searchTappedAgain.dispose();
@@ -225,9 +245,10 @@ class _MainShellState extends State<MainShell> {
               selectedIcon: Icon(Icons.home_rounded),
               label: 'Home',
             ),
+            // With how many people have messages waiting for you.
             const NavigationDestination(
-              icon: Icon(Icons.chat_bubble_outline_rounded),
-              selectedIcon: Icon(Icons.chat_bubble_rounded),
+              icon: _MessagesIcon(selected: false),
+              selectedIcon: _MessagesIcon(selected: true),
               label: 'Messages',
             ),
             // Center create action. Custom pill so it reads as a primary
@@ -251,6 +272,37 @@ class _MainShellState extends State<MainShell> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The Messages button's icon, with a red number on its corner: how many
+/// PEOPLE have sent you messages you have not read, not how many messages
+/// (ChatBadge). Muted chats are not counted. Nothing on it at none.
+class _MessagesIcon extends StatelessWidget {
+  const _MessagesIcon({required this.selected});
+
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: ChatBadge.instance.people,
+      builder: (context, n, icon) => Badge(
+        isLabelVisible: n > 0,
+        backgroundColor: AppTheme.error,
+        textColor: Colors.white,
+        label: Text(
+          n > 99 ? '99+' : '$n',
+          key: const ValueKey('messages_badge'),
+        ),
+        child: icon,
+      ),
+      child: Icon(
+        selected
+            ? Icons.chat_bubble_rounded
+            : Icons.chat_bubble_outline_rounded,
       ),
     );
   }

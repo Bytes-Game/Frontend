@@ -15,6 +15,7 @@ import 'package:provider/provider.dart';
 
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/models/user_model.dart';
+import 'package:myapp/pages/profile_page.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
@@ -122,6 +123,20 @@ List<String> aboutAsked = [];
 /// The owner's "Open to battles" switch: what each flip asked for.
 List<bool> battlesSent = [];
 
+/// Accounts looked up by name: a profile being opened.
+List<String> usersAsked = [];
+
+/// Activity events the app sent, one map each.
+List<Map<String, dynamic>> eventsSent = [];
+
+/// The people in the battle, as the server would answer for each.
+const accounts = {
+  'sam': {'id': '12', 'username': 'sam'},
+  'maya': {'id': '9', 'username': 'maya', 'league': 'Gold'},
+  'leo_beats': {'id': '8', 'username': 'leo_beats', 'league': 'Silver'},
+  'zara': {'id': '8', 'username': 'zara', 'league': 'Silver'},
+};
+
 
 void fakeServer(Map<String, dynamic> first) {
   lastVote = null;
@@ -133,12 +148,30 @@ void fakeServer(Map<String, dynamic> first) {
   harmSent = [];
   aboutAsked = [];
   battlesSent = [];
+  usersAsked = [];
+  eventsSent = [];
   standingsAsked = 0;
   refuseComments = false;
   posted = [];
   feedAsked = 0;
   ApiService.useClient(
     MockClient((req) async {
+      if (req.method == 'GET' && req.url.path.startsWith('/api/v1/users/') &&
+          req.url.pathSegments.length == 4) {
+        final name = req.url.pathSegments.last;
+        usersAsked.add(name);
+        final account = accounts[name];
+        if (account == null) return http.Response('{"error":"no"}', 404);
+        return http.Response(json.encode(account), 200);
+      }
+      if (req.url.path.endsWith('/api/v1/events/batch')) {
+        final body = json.decode(req.body);
+        final list = body is Map ? body['events'] : body;
+        for (final e in (list as List)) {
+          eventsSent.add((e as Map).cast<String, dynamic>());
+        }
+        return http.Response('{"ok":true}', 200);
+      }
       if (req.url.path.endsWith('/challenges/${first['id']}')) {
         return http.Response.bytes(
           utf8.encode(
@@ -384,6 +417,29 @@ Future<void> closeReel(WidgetTester t) async {
   ReelDiagnostics.instance.debugReset();
   EventTracker.instance.dispose();
 }
+
+/// Turns a battle to its other side the way a person does, with a swipe:
+/// left goes to the second side, right back to the first. (A tap on a name
+/// at the top opens that person's profile instead.)
+Future<void> swipeSides(WidgetTester t, {bool left = true}) async {
+  await t.dragFrom(
+    Offset(left ? 320 : 80, 430),
+    Offset(left ? -280 : 280, 0),
+  );
+  await t.pump(const Duration(milliseconds: 700));
+}
+
+/// A name inside one of the two chips at the top of a battle.
+Finder atTop(String side, String name) => find.descendant(
+  of: find.byKey(ValueKey('matchup_$side')),
+  matching: find.text(name),
+);
+
+/// The name at the bottom: whoever made the video on screen.
+Finder atBottom(String name) => find.descendant(
+  of: find.byKey(const ValueKey('reel_creator')),
+  matching: find.text(name),
+);
 
 /// Opens a reel's "more" menu and waits until it has finished opening.
 ///
@@ -637,8 +693,7 @@ void main() {
     testWidgets('sharing the answer sends the video and that side, never a '
         'link', (t) async {
       await openReel(t, battle());
-      await t.tap(find.byKey(const ValueKey('matchup_opponent')));
-      await t.pump(const Duration(milliseconds: 600));
+      await swipeSides(t);
       await t.tap(find.byTooltip('Share'));
       // Several frames: the sheet slides up over a few of them.
       for (var i = 0; i < 8; i++) {
@@ -680,8 +735,7 @@ void main() {
       await t.tapAt(const Offset(20, 40));
       await settleSheet(t);
 
-      await t.tap(find.byKey(const ValueKey('matchup_opponent')));
-      await t.pump(const Duration(milliseconds: 600));
+      await swipeSides(t);
       await askAbout();
       expect(find.text("What's leo_beats's answer about?"), findsOneWidget);
       expect(aboutAsked, ['', '77'], reason: "leo's answer");
@@ -746,8 +800,8 @@ void main() {
   testWidgets('a battle names both people at the top, under the tabs, with '
       'the question at the bottom', (t) async {
     await openReel(t, battle());
-    expect(find.text('maya'), findsOneWidget);
-    expect(find.text('leo_beats'), findsOneWidget);
+    expect(atTop('challenger', 'maya'), findsOneWidget);
+    expect(atTop('opponent', 'leo_beats'), findsOneWidget);
     expect(find.text('VS'), findsOneWidget);
     expect(find.text('Who can dance on a moving bus?'), findsOneWidget);
     expect(find.text('18.4K views'), findsOneWidget);
@@ -755,15 +809,21 @@ void main() {
     expect(find.textContaining('Swipe'), findsNothing);
     expect(find.byKey(const ValueKey('battle_side_tab')), findsNothing);
     // Names high on the screen, below Home's tabs; the question low.
-    final names = t.getCenter(find.text('maya')).dy;
+    final names = t.getCenter(atTop('challenger', 'maya')).dy;
     expect(names, greaterThan(40), reason: 'under the tabs, not on them');
     expect(names, lessThan(160));
-    expect(
-      t.getCenter(find.text('Who can dance on a moving bus?')).dy,
-      greaterThan(600),
-    );
+    final question =
+        t.getCenter(find.text('Who can dance on a moving bus?')).dy;
+    expect(question, greaterThan(600));
     // Side by side on one line.
-    expect(t.getCenter(find.text('leo_beats')).dy, names);
+    expect(t.getCenter(atTop('opponent', 'leo_beats')).dy, names);
+    // And at the bottom, the same as on a short: whose video is on screen,
+    // just above the question. Only maya's: leo's video is not showing.
+    expect(atBottom('maya'), findsOneWidget);
+    expect(atBottom('leo_beats'), findsNothing);
+    final bottom = t.getCenter(atBottom('maya')).dy;
+    expect(bottom, greaterThan(560));
+    expect(bottom, lessThan(question));
     await closeReel(t);
   });
 
@@ -783,8 +843,8 @@ void main() {
     await openReel(t, battle());
     await t.pump(const Duration(milliseconds: 300));
     // The names are there, and maya is ahead 12 to 9...
-    expect(find.text('maya'), findsOneWidget);
-    expect(find.text('leo_beats'), findsOneWidget);
+    expect(atTop('challenger', 'maya'), findsOneWidget);
+    expect(atTop('opponent', 'leo_beats'), findsOneWidget);
     expect(find.text('12'), findsOneWidget);
     // ...and nothing beside either name says so.
     for (final side in ['matchup_challenger', 'matchup_opponent']) {
@@ -872,9 +932,8 @@ void main() {
       expect(view['responseId'], '77');
       expect(view['opponentMs'], 1500);
       expect(view['creatorMs'], 0);
-      // And the other side is one tap away, as ever.
-      await t.tap(find.byKey(const ValueKey('matchup_challenger')));
-      await t.pump(const Duration(milliseconds: 700));
+      // And the other side, the challenger, is a swipe left away.
+      await swipeSides(t);
       expect(find.text('1.3K'), findsOneWidget);
       await closeReel(t);
     });
@@ -937,17 +996,141 @@ void main() {
     });
   });
 
-  testWidgets('tapping the other name switches to their side', (t) async {
+  testWidgets('a swipe switches sides, and the name at the bottom follows '
+      'the video on screen', (t) async {
     await openReel(t, battle());
     expect(find.text('1.3K'), findsOneWidget, reason: "maya's likes");
-    await t.tap(find.byKey(const ValueKey('matchup_opponent')));
-    await t.pump(const Duration(milliseconds: 700));
+    expect(atBottom('maya'), findsOneWidget);
+    await swipeSides(t);
     expect(find.text('940'), findsOneWidget, reason: "leo's likes now");
-
-    await t.tap(find.byKey(const ValueKey('matchup_challenger')));
-    await t.pump(const Duration(milliseconds: 700));
+    expect(atBottom('leo_beats'), findsOneWidget);
+    expect(atBottom('maya'), findsNothing);
+    await swipeSides(t, left: false);
     expect(find.text('1.3K'), findsOneWidget);
+    expect(atBottom('maya'), findsOneWidget);
     await closeReel(t);
+  });
+
+  group("a tap on a person opens their profile, the same as in Search", () {
+    /// Taps [target], waits for the page, and says whose profile opened.
+    Future<String?> open(WidgetTester t, Finder target) async {
+      await t.tap(target);
+      for (var i = 0; i < 8; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+      final page = find.byType(ProfilePage);
+      if (page.evaluate().isEmpty) return null;
+      final whose = t.widget<ProfilePage>(page).user.username;
+      // Back to the video.
+      t.state<NavigatorState>(find.byType(Navigator).first).pop();
+      for (var i = 0; i < 6; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+      return whose;
+    }
+
+    /// The profile visits the app told the server about: whose, from what.
+    Future<List<(String, String)>> visits(WidgetTester t) async {
+      EventTracker.instance.dispose(); // sends what is waiting
+      for (var i = 0; i < 3; i++) {
+        await t.pump(const Duration(milliseconds: 50));
+      }
+      return [
+        for (final e in eventsSent)
+          if (e['eventType'] == 'profile_visit')
+            (
+              '${(e['metadata'] as Map)['creatorId']}',
+              '${e['contentType']}:${e['contentId']}',
+            ),
+      ];
+    }
+
+    testWidgets('a battle: either name at the top, and the name at the '
+        'bottom; the video stays where it was', (t) async {
+      await openReel(t, battle());
+      EventTracker.instance.init('1');
+      expect(
+        await open(t, find.byKey(const ValueKey('matchup_opponent'))),
+        'leo_beats',
+      );
+      expect(find.text('1.3K'), findsOneWidget,
+          reason: "still maya's video: a tap on a name is not a swipe");
+      expect(
+        await open(t, find.byKey(const ValueKey('matchup_challenger'))),
+        'maya',
+      );
+      expect(
+        await open(t, find.byKey(const ValueKey('reel_creator_open'))),
+        'maya',
+      );
+      // On leo's side, the name at the bottom is his.
+      await swipeSides(t);
+      expect(
+        await open(t, find.byKey(const ValueKey('reel_creator_open'))),
+        'leo_beats',
+      );
+      // Each one counted as a visit from this battle, for who was opened:
+      // the feed shows more of the people you go and look at.
+      expect(await visits(t), [
+        ('8', 'challenge:1'),
+        ('9', 'challenge:1'),
+        ('9', 'challenge:1'),
+        ('8', 'challenge:1'),
+      ]);
+      await closeReel(t);
+    });
+
+    testWidgets('a short: the name at the bottom', (t) async {
+      await openReel(t, short());
+      EventTracker.instance.init('1');
+      expect(atBottom('zara'), findsOneWidget);
+      expect(
+        await open(t, find.byKey(const ValueKey('reel_creator_open'))),
+        'zara',
+      );
+      expect(await visits(t), [('8', 'challenge:2')]);
+      await closeReel(t);
+    });
+
+    testWidgets('your own name opens your profile, and is no visit',
+        (t) async {
+      await openReel(t, battle(), meId: '9', meName: 'maya');
+      EventTracker.instance.init('9');
+      expect(
+        await open(t, find.byKey(const ValueKey('reel_creator_open'))),
+        'maya',
+      );
+      expect(await visits(t), isEmpty);
+      await closeReel(t);
+    });
+
+    testWidgets('an account that is gone says so, and nothing opens',
+        (t) async {
+      await openReel(t, {...battle(), 'topResponseUsername': 'gone_one'});
+      EventTracker.instance.init('1');
+      expect(
+        await open(t, find.byKey(const ValueKey('matchup_opponent'))),
+        isNull,
+      );
+      expect(find.text("gone_one's account isn't available."), findsOneWidget);
+      expect(await visits(t), isEmpty);
+      await closeReel(t);
+    });
+
+    testWidgets('a comment: the picture and the name', (t) async {
+      await openReel(t, battle());
+      await t.tap(find.byTooltip('Comments'));
+      await settleSheet(t);
+      expect(
+        await open(t, find.byKey(const ValueKey('comment_author'))),
+        'sam',
+      );
+      expect(
+        await open(t, find.byKey(const ValueKey('comment_author_photo'))),
+        'sam',
+      );
+      await closeReel(t);
+    });
   });
 
   testWidgets('the buttons: vote on a battle, like, comment, share, save — '
@@ -1028,9 +1211,10 @@ void main() {
       expect(find.byIcon(Icons.favorite_rounded), findsOneWidget);
       expect(find.byTooltip('Saved'), findsOneWidget);
       expect(find.byTooltip('You voted'), findsOneWidget);
-      // And the answer's heart, on the answer's side.
-      await t.tap(find.byKey(const ValueKey('matchup_opponent')));
-      await t.pump(const Duration(milliseconds: 700));
+      // And the answer's heart, on the answer's side: its own count, so
+      // the side really did change.
+      await swipeSides(t);
+      expect(find.text('940'), findsOneWidget, reason: "leo's side");
       expect(find.byTooltip('Unlike'), findsOneWidget);
       await closeReel(t);
     });
@@ -1083,14 +1267,13 @@ void main() {
   testWidgets('both names stay readable; the one on screen is the lit '
       'chip', (t) async {
     await openReel(t, battle());
-    final other = t.widget<Text>(find.text('leo_beats'));
+    final other = t.widget<Text>(atTop('opponent', 'leo_beats'));
     expect(other.style!.color!.a, greaterThan(0.85));
-    final onScreen = t.widget<Text>(find.text('maya'));
+    final onScreen = t.widget<Text>(atTop('challenger', 'maya'));
     expect(onScreen.style!.color, const Color(0xFF111114),
         reason: 'dark words on the white chip');
-    await t.tap(find.byKey(const ValueKey('matchup_opponent')));
-    await t.pump(const Duration(milliseconds: 700));
-    expect(t.widget<Text>(find.text('leo_beats')).style!.color,
+    await swipeSides(t);
+    expect(t.widget<Text>(atTop('opponent', 'leo_beats')).style!.color,
         const Color(0xFF111114));
     await closeReel(t);
   });

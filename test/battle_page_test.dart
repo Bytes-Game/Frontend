@@ -21,6 +21,8 @@ import 'package:provider/provider.dart';
 
 import 'package:myapp/models/user_model.dart';
 import 'package:myapp/pages/challenge_detail_page.dart';
+import 'package:myapp/pages/profile_page.dart';
+import 'package:myapp/widgets/battle_scoreboard.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
@@ -36,6 +38,10 @@ late List<bool> battlesSent;
 /// When set, the server says the viewer may not answer the open challenge,
 /// and this is why.
 String? refusal;
+
+/// When set, the battle has a second answer, from kai, listed under "More
+/// answers".
+bool secondAnswer = false;
 
 Map<String, dynamic> challengeJson({required bool open, bool liked = false}) =>
     {
@@ -108,6 +114,17 @@ void fakeServer({required bool open, bool liked = false}) {
       }
       Object body = {};
       var status = 200;
+      // A profile being opened: the account, by name.
+      if (req.method == 'GET' &&
+          p.startsWith('/api/v1/users/') &&
+          req.url.pathSegments.length == 4) {
+        final name = req.url.pathSegments.last;
+        return http.Response(
+          json.encode({'id': 'u_$name', 'username': name}),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }
       if (p.endsWith('/challenges/1') || p.endsWith('/challenges/2')) {
         detailCalls++;
         body = {
@@ -125,6 +142,16 @@ void fakeServer({required bool open, bool liked = false}) {
                     'likes': 940,
                     'views': 12100,
                   },
+                  if (secondAnswer)
+                    {
+                      'id': '78',
+                      'challengeId': '1',
+                      'responderId': '14',
+                      'responderUsername': 'kai',
+                      'videoUrl': 'https://x/r78.mp4',
+                      'likes': 3,
+                      'views': 50,
+                    },
                 ],
           'votes': [],
           'canAccept': refusal == null,
@@ -269,6 +296,7 @@ Future<void> settle(WidgetTester t) async {
 
 void main() {
   tearDown(() => ApiService.useClient(http.Client()));
+  setUp(() => secondAnswer = false);
 
   testWidgets('a battle: both videos side by side, the leader crowned, the '
       'question, and it is live', (t) async {
@@ -606,5 +634,66 @@ void main() {
     await t.pumpWidget(const MaterialApp(home: SizedBox()));
     await t.pump(const Duration(seconds: 5));
     ReelDiagnostics.instance.debugReset();
+  });
+
+  group("a tap on a person opens their profile, the same as in Search", () {
+    /// Taps [target], waits for the page, and says whose profile opened.
+    Future<String?> open(WidgetTester t, Finder target) async {
+      expect(target, findsOneWidget);
+      await t.ensureVisible(target);
+      await t.pump();
+      await t.tap(target);
+      await settle(t);
+      final page = find.byType(ProfilePage);
+      if (page.evaluate().isEmpty) return null;
+      final whose = t.widget<ProfilePage>(page).user.username;
+      t.state<NavigatorState>(find.byType(Navigator).first).pop();
+      await settle(t);
+      return whose;
+    }
+
+    testWidgets('the name on each video; the rest of the card still plays '
+        'it', (t) async {
+      await openPage(t, open: false);
+      expect(
+        await open(t, find.byKey(const ValueKey('card_person_Challenger'))),
+        'maya',
+      );
+      expect(
+        await open(t, find.byKey(const ValueKey('card_person_Answer'))),
+        'leo_beats',
+      );
+      // The middle of the card is the video, as before.
+      await t.tap(find.byKey(const ValueKey('card_answer')));
+      await settle(t);
+      expect(find.byType(SmartReelsFeed), findsOneWidget);
+      expect(find.byType(ProfilePage), findsNothing);
+      await t.pumpWidget(const MaterialApp(home: SizedBox()));
+      await t.pump(const Duration(seconds: 5));
+      ReelDiagnostics.instance.debugReset();
+    });
+
+    testWidgets("the score: each side's picture and name", (t) async {
+      await openPage(t, open: false);
+      Finder inScore(Finder f) =>
+          find.descendant(of: find.byType(BattleScoreboard), matching: f);
+      expect(await open(t, inScore(find.text('leo_beats'))), 'leo_beats');
+      expect(await open(t, inScore(find.text('maya'))), 'maya');
+    });
+
+    testWidgets('a name under "More answers"', (t) async {
+      secondAnswer = true;
+      await openPage(t, open: false);
+      expect(find.text('More answers'), findsOneWidget);
+      expect(await open(t, find.text('kai')), 'kai');
+    });
+
+    testWidgets("a comment's picture and name", (t) async {
+      await openPage(t, open: false);
+      // The first comment: sam's name, then his picture beside it.
+      final name = find.text('sam  ');
+      expect(name, findsWidgets);
+      expect(await open(t, name.first), 'sam');
+    });
   });
 }

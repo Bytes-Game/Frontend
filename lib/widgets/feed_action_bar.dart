@@ -6,6 +6,7 @@ import 'package:myapp/config/app_theme.dart';
 import 'package:myapp/models/challenge_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/open_profile.dart';
 import 'package:myapp/widgets/chat_share_widgets.dart';
 import 'package:myapp/widgets/mentions.dart';
 import 'package:myapp/widgets/report_sheet.dart';
@@ -1054,7 +1055,8 @@ class _CommentRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final name = comment['authorUsername'] as String? ?? '?';
+    final author = comment['authorUsername'] as String? ?? '';
+    final name = author.isEmpty ? '?' : author;
     final text = comment['text'] as String? ?? '';
     final time =
         _ChallengeCommentSheetState.timeAgo(comment['createdAt'] as String?);
@@ -1063,33 +1065,47 @@ class _CommentRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _CommentAvatar(name: name),
+          // Who wrote it: a tap on the picture or the name opens their
+          // profile. A hold anywhere on the comment still reports it.
+          OpenProfileOnTap(
+            key: const ValueKey('comment_author_photo'),
+            username: author,
+            child: _CommentAvatar(name: name),
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text.rich(
-                  TextSpan(
-                    children: [
-                      TextSpan(
-                        text: name,
-                        style: const TextStyle(
-                          color: _Sheet.muted,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      if (time.isNotEmpty)
-                        TextSpan(
-                          text: '  $time',
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Flexible(
+                      child: OpenProfileOnTap(
+                        key: const ValueKey('comment_author'),
+                        username: author,
+                        child: Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                            color: Color(0xFF636366),
-                            fontSize: 12,
+                            color: _Sheet.muted,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                    ],
-                  ),
+                      ),
+                    ),
+                    if (time.isNotEmpty)
+                      Text(
+                        '  $time',
+                        style: const TextStyle(
+                          color: Color(0xFF636366),
+                          fontSize: 12,
+                        ),
+                      ),
+                  ],
                 ),
                 const SizedBox(height: 3),
                 // @names in colour, and a tap opens their profile.
@@ -1152,18 +1168,27 @@ class CommentSheetCaption extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _CommentAvatar(name: username, size: 36),
+          // Who posted it: a tap on the picture or the name opens their
+          // profile.
+          OpenProfileOnTap(
+            username: username,
+            child: _CommentAvatar(name: username, size: 36),
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  username,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
+                OpenProfileOnTap(
+                  key: const ValueKey('caption_author'),
+                  username: username,
+                  child: Text(
+                    username,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 4),

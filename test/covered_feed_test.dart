@@ -444,7 +444,9 @@ void main() {
       'answer, not the challenger', (t) async {
     _feed = [_battle()];
     await openHome(t);
-    await t.tap(find.byKey(const ValueKey('matchup_opponent')));
+    // A swipe left turns the battle to the answer. (A tap on a name opens
+    // that person's profile.)
+    await t.dragFrom(const Offset(320, 430), const Offset(-280, 0));
     await frames(t, 8);
     expect(platform.sounding, {
       'https://x/r8.mp4',

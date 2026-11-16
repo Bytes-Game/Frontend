@@ -497,12 +497,14 @@ void main() {
         'topResponseMusic': beta,
       };
       await openFeed(t);
-      await t.tap(find.text('leo').first);
-      await frames(t, 6);
+      // A swipe left turns the battle to leo's side, and right back. (A
+      // tap on a name opens that person's profile.)
+      await t.dragFrom(const Offset(320, 430), const Offset(-280, 0));
+      await frames(t, 8);
       expect(find.text('Beta · Other'), findsOneWidget);
       expect(find.text('Alpha · Some Artist'), findsNothing);
-      await t.tap(find.text('zara').first);
-      await frames(t, 6);
+      await t.dragFrom(const Offset(80, 430), const Offset(280, 0));
+      await frames(t, 8);
       expect(find.text('Alpha · Some Artist'), findsOneWidget);
       expect(find.text('Beta · Other'), findsNothing);
       await close(t);

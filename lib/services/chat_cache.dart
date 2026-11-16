@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'package:myapp/services/api_service.dart';
+import 'package:myapp/services/chat_badge.dart';
 
 /// Your chats, kept between visits, so Messages opens on them at once.
 ///
@@ -73,6 +74,34 @@ class ChatCache {
         if ('${c['userId']}' != otherId) c,
     ]);
     _messages.remove(otherId);
+    ChatBadge.instance.fromChats(_chats!);
+  }
+
+  /// The chat with [otherId] was read: nothing in it is unread now, and
+  /// the Messages button says so at once.
+  void markRead(String userId, String otherId) {
+    final chats = chatsFor(userId);
+    if (chats != null) {
+      final i = chats.indexWhere((c) => '${c['userId']}' == otherId);
+      if (i >= 0 && ((chats[i]['unreadCount'] as num?)?.toInt() ?? 0) > 0) {
+        keepChats(userId, [
+          for (final c in chats)
+            '${c['userId']}' == otherId ? {...c, 'unreadCount': 0} : c,
+        ]);
+        ChatBadge.instance.fromChats(_chats!);
+      }
+    }
+  }
+
+  /// The chat with [otherId] was muted or unmuted on this phone.
+  void setMuted(String userId, String otherId, bool muted) {
+    final chats = chatsFor(userId);
+    if (chats == null) return;
+    keepChats(userId, [
+      for (final c in chats)
+        '${c['userId']}' == otherId ? {...c, 'muted': muted} : c,
+    ]);
+    ChatBadge.instance.fromChats(_chats!);
   }
 
   /// The messages kept for the chat with [otherId], oldest first, or null.
@@ -105,6 +134,8 @@ class ChatCache {
     // Signed out while it was on its way: not theirs to keep.
     if (generation != _generation) return chats;
     keepChats(userId, chats);
+    // The list says chat by chat what the Messages button counts.
+    ChatBadge.instance.fromChats(chats);
     return chats;
   }
 

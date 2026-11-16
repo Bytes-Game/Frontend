@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:myapp/models/user_model.dart';
+import 'package:myapp/services/chat_badge.dart';
 import 'package:myapp/services/chat_cache.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/session_store.dart';
@@ -356,6 +357,7 @@ class AuthProvider with ChangeNotifier {
     ProfileCache.instance.clear();
     // And their chats, on the phone too.
     ChatCache.instance.clear();
+    ChatBadge.instance.clear();
     // And the copies of their own posts.
     unawaited(OwnUploads.instance.clear());
     _isAuthenticated = false;

@@ -16,6 +16,7 @@ import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/widgets/battle_scoreboard.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/open_profile.dart';
 import 'package:myapp/services/page_tracker.dart';
 import 'package:myapp/services/upload_job_manager.dart';
 import 'package:myapp/models/battle_model.dart'
@@ -1254,50 +1255,62 @@ class _VideoCard extends StatelessWidget {
                     dark: true,
                   ),
                 ),
+              // Who: a tap on the picture or the name opens their profile.
+              // Anywhere else on the card plays the video.
               Positioned(
                 left: 10,
                 right: 10,
                 bottom: 10,
-                child: Row(
-                  children: [
-                    Container(
-                      width: 26,
-                      height: 26,
-                      padding: const EdgeInsets.all(1.5),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: ring,
-                      ),
-                      child: Container(
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: _raised,
-                        ),
-                        alignment: Alignment.center,
-                        child: Text(
-                          username.isEmpty ? '?' : username[0].toUpperCase(),
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: OpenProfileOnTap(
+                    key: ValueKey('card_person_$role'),
+                    username: username,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 26,
+                          height: 26,
+                          padding: const EdgeInsets.all(1.5),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: ring,
+                          ),
+                          child: Container(
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: _raised,
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              username.isEmpty
+                                  ? '?'
+                                  : username[0].toUpperCase(),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(
-                        username,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13.5,
-                          fontWeight: FontWeight.w700,
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            username,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         ),
-                      ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ],
@@ -1822,24 +1835,29 @@ class _CommentsPreview extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SizedBox(
-                  width: 30,
-                  height: 30,
-                  child: PersonPhoto(
-                    name: (c['authorUsername'] as String?) ?? '',
-                    size: 30,
-                    fallback: CircleAvatar(
-                      radius: 15,
-                      backgroundColor: _raised,
-                      child: Text(
-                        ((c['authorUsername'] as String?) ?? '?')
-                            .characters
-                            .first
-                            .toUpperCase(),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
+                // Who wrote it: a tap on the picture or the name opens
+                // their profile.
+                OpenProfileOnTap(
+                  username: (c['authorUsername'] as String?) ?? '',
+                  child: SizedBox(
+                    width: 30,
+                    height: 30,
+                    child: PersonPhoto(
+                      name: (c['authorUsername'] as String?) ?? '',
+                      size: 30,
+                      fallback: CircleAvatar(
+                        radius: 15,
+                        backgroundColor: _raised,
+                        child: Text(
+                          ((c['authorUsername'] as String?) ?? '?')
+                              .characters
+                              .first
+                              .toUpperCase(),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     ),
@@ -1850,11 +1868,20 @@ class _CommentsPreview extends StatelessWidget {
                   child: Text.rich(
                     TextSpan(
                       children: [
-                        TextSpan(
-                          text: '${c['authorUsername'] ?? '?'}  ',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w600,
+                        WidgetSpan(
+                          alignment: PlaceholderAlignment.baseline,
+                          baseline: TextBaseline.alphabetic,
+                          child: OpenProfileOnTap(
+                            username: (c['authorUsername'] as String?) ?? '',
+                            child: Text(
+                              '${c['authorUsername'] ?? '?'}  ',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                height: 1.3,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ),
                         ),
                         TextSpan(
@@ -1959,15 +1986,19 @@ class _ResponseCard extends StatelessWidget {
                   children: [
                     Row(
                       children: [
+                        // A tap on the name opens their profile.
                         Flexible(
-                          child: Text(
-                            response.responderUsername,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
+                          child: OpenProfileOnTap(
+                            username: response.responderUsername,
+                            child: Text(
+                              response.responderUsername,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                         ),

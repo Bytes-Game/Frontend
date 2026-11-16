@@ -10,6 +10,7 @@ import 'package:myapp/models/user_model.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/call_service.dart';
+import 'package:myapp/services/chat_badge.dart';
 import 'package:myapp/services/chat_cache.dart';
 import 'package:myapp/services/chat_media.dart';
 import 'package:myapp/services/chat_notifications.dart';
@@ -133,6 +134,9 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     _loadMessages();
     _listenForRealTime();
     _checkOnlineStatus();
+    // On screen: its messages are read as they come, so the number on the
+    // Messages button leaves it out.
+    ChatBadge.instance.chatOpened(widget.otherUserId);
     // The chat is open: its notifications on the phone have done their job.
     // ignore: discarded_futures
     ChatNotifications.instance.forget(widget.otherUserId);
@@ -143,6 +147,7 @@ class _ChatConversationPageState extends State<ChatConversationPage>
     // Kept as it is now, with anything sent or received while it was open,
     // for the next time it opens.
     ChatCache.instance.keepMessages(widget.otherUserId, _messages);
+    ChatBadge.instance.chatClosed(widget.otherUserId);
     if (_saidTypingAt != null) _sayTyping(false);
     _msgCtrl.dispose();
     _scrollCtrl.dispose();
@@ -159,6 +164,14 @@ class _ChatConversationPageState extends State<ChatConversationPage>
 
   String get _myId =>
       Provider.of<DataProvider>(context, listen: false).user!.id;
+
+  /// Whether this chat is muted, as the chat list last said.
+  bool get _muted =>
+      ChatCache.instance
+          .chatsFor(_myId)
+          ?.any((c) =>
+              '${c['userId']}' == widget.otherUserId && c['muted'] == true) ??
+      false;
 
   Future<void> _checkOnlineStatus() async {
     final status =
@@ -195,7 +208,11 @@ class _ChatConversationPageState extends State<ChatConversationPage>
         messageCount: unreadInbound,
       );
     }
-    ApiService.markChatRead(widget.otherUserId, _myId);
+    // Read now: off the Messages button at once, and the server asked for
+    // the number once it has marked them read.
+    ChatCache.instance.markRead(_myId, widget.otherUserId);
+    unawaited(ApiService.markChatRead(widget.otherUserId, _myId)
+        .then((_) => ChatBadge.instance.refresh()));
   }
 
   void _listenForRealTime() {
@@ -958,6 +975,9 @@ class _ChatConversationPageState extends State<ChatConversationPage>
             name: widget.otherUsername,
             // Deleted: nothing left to show here, back to the chat list.
             onDeleted: () => Navigator.of(context).maybePop(),
+            muted: _muted,
+            onMuteChanged: (muted) => ChatCache.instance
+                .setMuted(_myId, widget.otherUserId, muted),
           ),
           child: Row(
           children: [
@@ -1334,14 +1354,43 @@ Future<bool> deleteChatWith(
   return ok;
 }
 
-/// What can be done with a chat: for now, delete it. Shown when you hold a
-/// chat in the list, or tap the person at the top of the chat. Calls
-/// [onDeleted] once the server has deleted it.
+/// Mutes or unmutes the chat with [name]: no notifications for their
+/// messages while muted. Says how it went; [onChanged] hears the new state
+/// once the server has it. True when it worked.
+Future<bool> setChatMuted(
+  BuildContext context, {
+  required String userId,
+  required String name,
+  required bool muted,
+  ValueChanged<bool>? onChanged,
+}) async {
+  final ok = await ApiService.muteChat(userId, muted: muted);
+  if (!context.mounted) return ok;
+  if (ok) onChanged?.call(muted);
+  ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
+    behavior: SnackBarBehavior.floating,
+    content: Text(!ok
+        ? (muted
+            ? "Couldn't mute the chat. Try again."
+            : "Couldn't unmute the chat. Try again.")
+        : (muted
+            ? "Muted. You won't be notified of $name's messages."
+            : "Unmuted. You'll be notified of $name's messages again.")),
+  ));
+  return ok;
+}
+
+/// What can be done with a chat: mute it, or delete it. Shown when you hold
+/// a chat in the list, or tap the person at the top of the chat. Calls
+/// [onDeleted] once the server has deleted it, and [onMuteChanged] once it
+/// has muted or unmuted it. [muted] is whether it is muted now.
 void showChatOptions(
   BuildContext context, {
   required String userId,
   required String name,
   required VoidCallback onDeleted,
+  bool muted = false,
+  ValueChanged<bool>? onMuteChanged,
 }) {
   HapticFeedback.mediumImpact();
   showModalBottomSheet<void>(
@@ -1351,6 +1400,26 @@ void showChatOptions(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Their messages still arrive and show here; only the
+          // notifications stop.
+          ListTile(
+            key: const ValueKey('mute_chat'),
+            leading: Icon(muted
+                ? Icons.notifications_active_outlined
+                : Icons.notifications_off_outlined),
+            title: Text(muted ? 'Unmute messages' : 'Mute messages'),
+            subtitle: Text(muted
+                ? "Get notified of $name's messages again"
+                : "No notifications for $name's messages"),
+            onTap: () {
+              Navigator.of(ctx).pop();
+              setChatMuted(context,
+                  userId: userId,
+                  name: name,
+                  muted: !muted,
+                  onChanged: onMuteChanged);
+            },
+          ),
           ListTile(
             key: const ValueKey('delete_chat'),
             leading:
