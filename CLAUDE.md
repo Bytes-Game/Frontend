@@ -114,12 +114,13 @@ the day it is added.
    To a phone, a build with the new id is a different app. It installs
    beside any older test build and starts signed out. Uninstall the old
    one.
-   Push notifications for the new id: the app's half is done. The owner
-   made a new Firebase project for `com.flexete.app` on 15 November
-   (`battle-adddb`, App ID `1:55498173129:android:46a7303ee3e18295273b18`)
-   and its values are built into the app. The project used before
-   (`battle-38226`) answered "API key not valid", so no phone got a push
-   address from it. Left: the server's half, item 6a.
+   Push notifications for the new id: the app's half is done. On 16
+   November the owner moved the app to the Firebase project
+   `flexete-6de88` (App ID `1:794878539677:android:c8daf94716c24c2fd1e174`),
+   the same project as the Google sign-in clients (item 10), and its
+   values are built into the app. The projects before it (`battle-38226`,
+   whose key answered "API key not valid", and `battle-adddb`, used for a
+   day) are no longer used. Left: the server's half, item 6a.
    Still to do, because each is tied to the id:
    - Google sign-in: the Android OAuth client (item 10) is made for the id.
    - Apple sign-in: the iPhone id goes in `APPLE_CLIENT_IDS` (item 6).
@@ -165,8 +166,9 @@ the day it is added.
    start the server says how email is set up and whether it can get out:
    Render → the service → Logs, the line starting `email:`.
 6. **Google and Apple sign-in, the server's half.**
-   - `GOOGLE_CLIENT_IDS`: the Web and iOS OAuth client ids from item 10,
-     separated by a comma.
+   - `GOOGLE_CLIENT_IDS`: the Web client id, which the owner made on 16
+     November: `794878539677-hn1vtp7tt8uivvh5g3gg2m1t79eo2mbg.apps.googleusercontent.com`.
+     Later, when the iOS client exists (item 10), add it after a comma.
    - `APPLE_CLIENT_IDS`: the iPhone app id and the Apple Services ID from
      item 11, separated by a comma.
    Without them, those buttons say "isn't set up yet".
@@ -176,10 +178,10 @@ the day it is added.
    delete it. Set it only if the id is ever changed again.
 6a. **Push notifications, the server's half.** The server sends
     notifications with the private key of a Firebase project, and that
-    must be the same project the app is built for (`battle-adddb` since
-    15 November). Firebase does not deliver to a phone through another
+    must be the same project the app is built for (`flexete-6de88` since
+    16 November). Firebase does not deliver to a phone through another
     project's key: every send fails, and nothing in the app says so.
-    - Firebase console → the project `battle-adddb` → the gear → Project
+    - Firebase console → the project `flexete-6de88` → the gear → Project
       settings → Service accounts → "Generate new private key". A file
       ending in `.json` downloads. It is a password: never send it to
       anybody, never put it in the code.
@@ -188,8 +190,8 @@ the day it is added.
       Notepad, select all, copy, paste). `NOTIFICATION_SENDER` stays `fcm`.
       If `FCM_PROJECT` is set, delete it: the key names its project.
     - Save. When the server has restarted: Render → Logs, the line
-      starting `notifications:`. It should end with "Firebase project
-      battle-adddb".
+      starting `notifications:`. It should say "Firebase project
+      flexete-6de88".
     - Then delete the downloaded file from your computer.
 7. **Deploy the server first.** Before, or together with, the app build
    that needs it. This matters more than it used to: the app now sends
@@ -254,18 +256,43 @@ the day it is added.
 
 ### C. Google and Apple accounts
 
-10. **Google Cloud** (the same project as Firebase) → APIs & Services:
-    - the OAuth consent screen: app name Flexete, the support email, the
-      logo, and flexete.com as the app's home page;
-    - three OAuth client ids: **Web** (goes to `GOOGLE_SERVER_CLIENT_ID` in
-      the build and `GOOGLE_CLIENT_IDS` on Render), **Android** (the new app
-      id, and the SHA-1 of the release key from item 2, plus Google Play's
-      app-signing key SHA-1 once Play signs the app), and **iOS** (the new
-      iPhone id; goes to `GOOGLE_IOS_CLIENT_ID` and `GOOGLE_CLIENT_IDS`).
-    - Put the iOS client id, reversed (`com.googleusercontent.apps.<the
-      part before .apps.googleusercontent.com>`), in
+10. **Google Cloud, for Google sign-in.** Everything goes in the project
+    `flexete-6de88`, the same as Firebase: Google Cloud → Google Auth
+    Platform.
+    - Done on 16 November: the first setup (app name Flexete, the support
+      email, audience External) and the **Web** client,
+      `794878539677-hn1vtp7tt8uivvh5g3gg2m1t79eo2mbg.apps.googleusercontent.com`.
+      It is built into the app (`googleServerClientId` in
+      `lib/config/constants.dart`), so every Android build shows the
+      Google button. On Render it goes in `GOOGLE_CLIENT_IDS` (item 6).
+    - **Android** clients: Clients → Create client → Android, package name
+      `com.flexete.app` and the SHA-1 of the key the app is signed with.
+      One client per key: the key test builds are signed with today (in
+      the project folder: `cd android`, then `.\gradlew signingReport`,
+      the SHA1 under "Variant: release"), the release key from item 2, and
+      Google Play's app-signing key once Play signs the app (Play Console
+      → the app → App integrity). Without the right one, Google refuses
+      the sign-in on the phone.
+    - **iOS** client, with the iPhone build: the iPhone app id. It goes to
+      `GOOGLE_IOS_CLIENT_ID` in the build and, after a comma, in
+      `GOOGLE_CLIENT_IDS`. Put it reversed (`com.googleusercontent.apps.<the
+      part before .apps.googleusercontent.com>`) in
       `GOOGLE_REVERSED_CLIENT_ID` in `ios/Flutter/Release.xcconfig` and
       `Debug.xcconfig`.
+    - While testing: Audience → Test users → add the Gmail of everybody
+      who tries the app. While it is in "Testing", only they (up to 100)
+      can sign in with Google.
+10a. **Before launch: publish Google sign-in.** Google Auth Platform →
+     Audience → Publish app. Until then only the test users from item 10
+     can sign in with Google. Flexete only asks Google for name, email and
+     photo, so there is no long review. Google does still check the app's
+     name and logo ("brand verification"). It wants every link on the
+     Branding page on an address you own, so do item 18 first, pointing
+     flexete.com at the server. Then, on Branding: the logo, home page
+     `https://flexete.com`, privacy policy `https://flexete.com/privacy`,
+     terms `https://flexete.com/terms`, and `flexete.com` under authorized
+     domains. Google may ask you to prove flexete.com is yours, through
+     Google Search Console. Then press Publish app.
 11. **Apple Developer** (needs the paid account):
     - turn on "Sign in with Apple" for the iPhone app id. The app already
       asks for it (`ios/Runner/Runner.entitlements`), so an iPhone build
@@ -279,7 +306,7 @@ the day it is added.
 12. **iPhone push notifications.** The project's half is done: the app
     asks for them and can be woken by one. Three steps are left, in three
     accounts:
-    - Firebase: add an iOS app to the same project (`battle-adddb`),
+    - Firebase: add an iOS app to the same project (`flexete-6de88`),
       with the iPhone app id from item 1. It gives two values for the
       build (item 13):
       `FIREBASE_IOS_APP_ID` and `FIREBASE_IOS_API_KEY`.
@@ -310,8 +337,9 @@ the day it is added.
       `FIREBASE_PROJECT_ID` and `FIREBASE_SENDER_ID` are only for using
       another project;
     - `SENTRY_DSN` (or crash reports go nowhere);
-    - `GOOGLE_SERVER_CLIENT_ID`, and on iPhone `GOOGLE_IOS_CLIENT_ID` (or no
-      Google button);
+    - on iPhone, `GOOGLE_IOS_CLIENT_ID` (or no Google button there).
+      `GOOGLE_SERVER_CLIENT_ID` is built in (item 10); it is only for
+      using another Web client;
     - `APPLE_SIGN_IN=true` on iPhone, and `APPLE_SERVICE_ID` on Android (or
       no Apple button).
     `API_BASE_URL` and `WS_BASE_URL` default to the Render server.
@@ -354,9 +382,11 @@ the day it is added.
 Leave auto-renew on for the domain: if it lapses, the help inboxes, the
 shared links and everything below stop working.
 
-18. **Point flexete.com at the server.** Optional, but worth doing before
-    launch: the app then stops depending on Render's own address, so moving
-    hosts later needs no app update, and shared links look like yours.
+18. **Point flexete.com at the server.** Needed before launch for Google
+    sign-in (item 10a: Google wants the privacy and terms links on your own
+    address), and worth doing anyway: the app then stops depending on
+    Render's own address, so moving hosts later needs no app update, and
+    shared links look like yours.
     - In Render: the service → Settings → Custom Domains → add
       `flexete.com` (and `api.flexete.com` if you want a separate address
       for the app). Render shows the target to point each one at.
@@ -364,7 +394,7 @@ shared links and everything below stop working.
       name, pointing at that target, with the proxy switched off ("DNS
       only", the grey cloud) so Render can make its security certificate.
     - Then ask for the app's server address and shared links to switch to
-      it (items 14, 16, 17).
+      it (items 14, 16, 17), and do item 10a.
 19. **Videos from your own address.** Optional, but it speeds videos up.
     The videos live in Cloudflare R2. Checked on 14 November: the live
     server still hands out a `pub-….r2.dev` address. That is R2's test
@@ -505,11 +535,14 @@ shared links and everything below stop working.
     (`lib/services/push_service.dart`) for push notifications. Every app's
     is readable inside the app, so it is not a secret, but without limits
     anyone can use it against your Firebase project's allowance. Google
-    Cloud → APIs & Services → Credentials → that key → Application
-    restrictions: Android apps, the app id from item 1 and the release
-    key's SHA-1 (item 2); API restrictions: only the Firebase APIs the app
-    uses (Firebase Cloud Messaging and Firebase Installations). Do the
-    same for the iPhone key with the iPhone id.
+    Cloud (the project `flexete-6de88`) → APIs & Services → Credentials →
+    that key (it starts `AIzaSyA3JH`) → Application restrictions: Android
+    apps, the app id from item 1 and the SHA-1 of every key the app is
+    signed with (the same ones as the Android clients in item 10: a build
+    signed with a key not listed gets no notifications); API restrictions:
+    only the Firebase APIs the app uses (Firebase Cloud Messaging and
+    Firebase Installations). Do the same for the iPhone key with the
+    iPhone id.
 
 26. **Parents' permission: what is built, and what is not.** Somebody
     under 18 gets no account until a parent or guardian opens an emailed
