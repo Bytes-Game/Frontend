@@ -184,7 +184,7 @@ abstract class PushPlatform {
 /// Google's push service (Firebase Cloud Messaging), for Android and
 /// iPhone.
 class FirebasePushPlatform implements PushPlatform {
-  // This app's Firebase project ("battle-adddb"), built in so every build
+  // This app's Firebase project ("flexete-6de88"), built in so every build
   // gets phone notifications with no extra steps. The values are the ones
   // in the project's google-services.json for com.flexete.app. They are not
   // secrets: every copy of the app carries them, the way every Android app
@@ -192,16 +192,18 @@ class FirebasePushPlatform implements PushPlatform {
   // key) lives only on the server, and must be from this same project:
   // Firebase will not deliver to a phone through another project's key.
   //
-  // The project used before, "battle-38226", was made for the template's
-  // app id. Its key answered "API key not valid" on 15 November, so no
-  // phone got a push address from it.
+  // The projects before it: "battle-38226", made for the template's app id,
+  // whose key answered "API key not valid" on 15 November; then
+  // "battle-adddb", made that day for com.flexete.app. On 16 November the
+  // owner moved the app to flexete-6de88, the project that also holds the
+  // Google sign-in clients.
   //
   // A different project can still be used for one build:
   // --dart-define-from-file=firebase_push.json (see README).
   static const _apiKey = String.fromEnvironment('FIREBASE_API_KEY',
-      defaultValue: 'AIzaSyAIMhynIn0pVBT43MiotfKX342tHf84Yo4');
+      defaultValue: 'AIzaSyA3JHIQJJnxXSPM0hiPNJumrlBaOgmlW_s');
   static const _appId = String.fromEnvironment('FIREBASE_APP_ID',
-      defaultValue: '1:55498173129:android:46a7303ee3e18295273b18');
+      defaultValue: '1:794878539677:android:c8daf94716c24c2fd1e174');
   static const _iosAppId = String.fromEnvironment('FIREBASE_IOS_APP_ID');
 
   /// The iPhone app's own Firebase key. Firebase makes one key per kind of
@@ -210,9 +212,9 @@ class FirebasePushPlatform implements PushPlatform {
   /// Without it the Android key is used, which works only while unlocked.
   static const _iosApiKey = String.fromEnvironment('FIREBASE_IOS_API_KEY');
   static const _senderId = String.fromEnvironment('FIREBASE_SENDER_ID',
-      defaultValue: '55498173129');
+      defaultValue: '794878539677');
   static const _projectId = String.fromEnvironment('FIREBASE_PROJECT_ID',
-      defaultValue: 'battle-adddb');
+      defaultValue: 'flexete-6de88');
 
   /// The values in use, for the check that they belong together.
   @visibleForTesting

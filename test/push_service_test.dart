@@ -305,18 +305,19 @@ void main() {
     expect(v.projectId, isNotEmpty);
   });
 
-  // The project built in is the one the owner made for this app's id,
-  // com.flexete.app (its google-services.json, 15 November). The one
-  // before was made for the template's id, and Firebase refused its key:
-  // "API key not valid", and no phone got a push address. The test above
-  // would still pass with those values back, since they belonged together
-  // too; this one would not.
-  test("the built-in project is the one made for this app's own id", () {
+  // The project built in is the one the owner chose for this app's id,
+  // com.flexete.app: flexete-6de88 (its google-services.json, 16 November),
+  // which also holds the Google sign-in clients. The first project was made
+  // for the template's id, and Firebase refused its key: "API key not
+  // valid", and no phone got a push address. The test above would still
+  // pass with an older project's values back, since they belonged together
+  // too; this one would not. The server's key must be from this project.
+  test("the built-in project is the one chosen for this app's own id", () {
     final v = FirebasePushPlatform.debugValues;
-    expect(v.projectId, 'battle-adddb');
-    expect(v.senderId, '55498173129');
-    expect(v.appId, '1:55498173129:android:46a7303ee3e18295273b18');
-    expect(v.apiKey, 'AIzaSyAIMhynIn0pVBT43MiotfKX342tHf84Yo4');
+    expect(v.projectId, 'flexete-6de88');
+    expect(v.senderId, '794878539677');
+    expect(v.appId, '1:794878539677:android:c8daf94716c24c2fd1e174');
+    expect(v.apiKey, 'AIzaSyA3JHIQJJnxXSPM0hiPNJumrlBaOgmlW_s');
     // And that app id is the one registered for the app's id on Android.
     final gradle = File('android/app/build.gradle.kts')
         .readAsLinesSync()
@@ -335,7 +336,7 @@ void main() {
         isFalse);
     expect(
       FirebasePushPlatform.configuredFor(
-          ios: true, iosAppId: '1:55498173129:ios:abc123'),
+          ios: true, iosAppId: '1:794878539677:ios:abc123'),
       isTrue,
     );
     // And the real getter follows the phone it runs on.

@@ -105,16 +105,24 @@ class AppConstants {
 
   // —— Signing in with Google or Apple ——————————————————————————————————
   //
-  // Each is passed to the build with --dart-define. A button only shows
+  // Each can be passed to the build with --dart-define. A button only shows
   // when its settings are there, so a build without them simply has no
   // Google or Apple button. The server needs its own half (GOOGLE_CLIENT_IDS
   // and APPLE_CLIENT_IDS on Render). Where each comes from is in the
   // before-release list in CLAUDE.md.
 
   /// Google Cloud's OAuth client id of the "Web" kind. The phone asks Google
-  /// for tokens made for it, and the server accepts tokens made for it.
-  static const String googleServerClientId =
-      String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID');
+  /// for tokens made for it, and the server accepts tokens made for it
+  /// (GOOGLE_CLIENT_IDS on Render).
+  ///
+  /// Built in: the Web client the owner made on 16 November, in the same
+  /// Google Cloud project as Firebase (flexete-6de88). It is not a secret:
+  /// it only says which app the tokens are for. So every Android build has
+  /// the Google button. An iPhone also needs [googleIosClientId].
+  static const String googleServerClientId = String.fromEnvironment(
+      'GOOGLE_SERVER_CLIENT_ID',
+      defaultValue:
+          '794878539677-hn1vtp7tt8uivvh5g3gg2m1t79eo2mbg.apps.googleusercontent.com');
 
   /// Google Cloud's OAuth client id of the "iOS" kind (the iPhone only).
   static const String googleIosClientId =

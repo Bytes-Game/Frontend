@@ -9,6 +9,7 @@
 
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -16,12 +17,14 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:provider/provider.dart';
 
+import 'package:myapp/config/constants.dart';
 import 'package:myapp/providers/auth_provider.dart';
 import 'package:myapp/providers/data_provider.dart';
 import 'package:myapp/providers/theme_provider.dart';
 import 'package:myapp/screens/login_screen.dart';
 import 'package:myapp/services/api_service.dart';
 import 'package:myapp/services/event_tracker.dart';
+import 'package:myapp/services/push_service.dart';
 import 'package:myapp/services/social_auth.dart';
 
 /// What the stand-in server was sent, by address.
@@ -254,14 +257,34 @@ void main() {
     const android = TargetPlatform.android, iPhone = TargetPlatform.iOS;
     const google = SocialProvider.google, apple = SocialProvider.apple;
 
-    test('without the settings, none: what every build has today', () {
+    test('without the settings, none', () {
       for (final phone in [android, iPhone]) {
         expect(offers(phone, google), isFalse);
         expect(offers(phone, apple), isFalse);
       }
-      // This test run is such a build.
-      expect(PlatformSocialAuth().offers(google), isFalse);
+    });
+
+    // The Web client is built in (16 November), so every Android build has
+    // the Google button; Apple still needs its settings. This test run is
+    // such a build, on Android.
+    test('every Android build has Google: its Web client is built in', () {
+      expect(PlatformSocialAuth().offers(google), isTrue);
       expect(PlatformSocialAuth().offers(apple), isFalse);
+      // The iPhone still needs its own client id, which no build has yet.
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      expect(PlatformSocialAuth().offers(google), isFalse);
+      debugDefaultTargetPlatformOverride = null;
+      // And it is a Web client from the same Google Cloud project as the
+      // app's Firebase: an id starts with its project's number. The Android
+      // client is made in that project too (the before-release list), and
+      // Google refuses a sign-in whose two clients are in different
+      // projects.
+      expect(
+        AppConstants.googleServerClientId,
+        '${FirebasePushPlatform.debugValues.senderId}-'
+        'hn1vtp7tt8uivvh5g3gg2m1t79eo2mbg.apps.googleusercontent.com',
+      );
     });
 
     test('Google: the server id on Android; the iPhone needs its own too', () {

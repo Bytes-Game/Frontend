@@ -116,9 +116,9 @@ lock screen, outside the app — and a tap opens the chat. They never go to
 the app's notifications page. They come through Google's push service,
 Firebase.
 
-It is set up: the app has the Firebase project `battle-adddb` built in
-(`lib/services/push_service.dart`), made for the app's id `com.flexete.app`,
-so every build gets notifications with no extra steps. The server needs
+It is set up: the app has the Firebase project `flexete-6de88` built in
+(`lib/services/push_service.dart`), with an Android app for the app's id
+`com.flexete.app`, so every build gets notifications with no extra steps. The server needs
 `NOTIFICATION_SENDER=fcm` and the private key of that same project in
 `FCM_SERVICE_ACCOUNT_JSON` on Render: Firebase does not deliver to a phone
 through another project's key. The server's log names the project it sends
